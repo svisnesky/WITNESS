@@ -1,0 +1,18 @@
+# Core
+PyYAML>=6.0
+rapidfuzz>=3.0        # fast fuzzy string matching for name detection
+
+# Screen capture + image preprocessing
+mss>=9.0
+numpy>=1.24
+opencv-python>=4.8
+
+# OCR — pick ONE engine (see config.yaml: ocr_engine)
+#   easyocr uses your NVIDIA GPU via torch (heavier install, more robust)
+easyocr>=1.7
+#   tesseract is lighter but needs the Tesseract binary installed separately
+#   (Windows: https://github.com/UB-Mannheim/tesseract/wiki)
+pytesseract>=0.3.10
+
+# OBS control (obs-websocket v5)
+obsws-python>=1.6

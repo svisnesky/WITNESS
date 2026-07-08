@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+env/
+
+# Runtime output
+session_log.csv
+*.log
+
+# Local overrides (keep secrets like OBS password out of git)
+config.local.yaml
+
+# OS
+.DS_Store
+Thumbs.db

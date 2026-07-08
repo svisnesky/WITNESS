@@ -1,0 +1,54 @@
+# Marathon Auto Kill Recorder — configuration
+# Edit these values; no code changes needed.
+
+# --- Who counts as "you" ---
+# Your exact in-game display name as it appears in the kill feed.
+player_name: "YOUR_NAME_HERE"
+# OCR mis-reads names sometimes. Add common misreads of your name here so they
+# still count (e.g. lowercase L vs capital I, 0 vs O). Case-insensitive.
+name_aliases:
+  - "YOUR_NAME_HERE"
+
+# self_or_assist -> trigger when your name appears ANYWHERE in a downed line.
+# self_only      -> trigger only when YOU are the killer (name before the verb).
+match_mode: "self_or_assist"
+
+# --- What a "kill" line looks like ---
+# The verb(s) that indicate a kill. Case-insensitive. Marathon uses "downed";
+# add "eliminated" / "killed" here if you see the game use them too.
+trigger_keywords:
+  - "downed"
+
+# Minimum fuzzy-match score (0-100) for a name to count as you. Lower = more
+# lenient (catches more OCR errors but risks false positives). 82 is a good start.
+name_match_threshold: 82
+
+# --- Where on screen the kill feed is (set by calibrate.py) ---
+# Pixel rectangle of the kill-feed region on your PRIMARY monitor.
+feed_region:
+  x: 0
+  y: 0
+  w: 700
+  h: 300
+
+# --- Timing ---
+poll_fps: 5                 # how many times/sec to screenshot + OCR the region
+dedup_ttl_seconds: 8.0      # remember a matched line this long so it counts once
+min_save_interval_seconds: 2.0  # floor between OBS replay saves (avoid clip spam)
+
+# --- OCR ---
+# engine: "easyocr" (GPU, robust, heavier) or "tesseract" (light, needs install)
+ocr_engine: "easyocr"
+ocr_upscale: 3             # upscale the cropped region Nx before OCR (helps small fonts)
+
+# --- OBS (obs-websocket v5, built into OBS 28+) ---
+obs:
+  host: "localhost"
+  port: 4455
+  password: "CHANGE_ME"       # from OBS: Tools -> WebSocket Server Settings
+  counter_source: "KillCounter"  # name of the Text source in your OBS scene
+  counter_format: "Kills: {count}"  # {count} is replaced with the running total
+  auto_start_replay_buffer: true    # start the Replay Buffer on launch if not running
+
+# --- Logging ---
+session_log: "session_log.csv"
