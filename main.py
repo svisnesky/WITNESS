@@ -89,7 +89,7 @@ def run_test_image(cfg: dict, image_path: str):
 # --- live loop ---------------------------------------------------------------
 
 def run_live(cfg: dict, dry_run: bool):
-    from capture import RegionCapture
+    from capture import make_capture
     from ocr import OCREngine
     from obs_client import OBSClient, DryRunOBS
 
@@ -118,10 +118,11 @@ def run_live(cfg: dict, dry_run: bool):
     min_save = cfg.get("min_save_interval_seconds", 2.0)
     last_save = 0.0
 
-    print(f"Watching kill feed at {poll_fps} fps. Region={cfg['feed_region']}. "
+    print(f"Watching kill feed at {poll_fps} fps via {cfg.get('capture_source')}. "
+          f"Region={cfg['feed_region']}. "
           f"{'DRY-RUN' if dry_run else 'LIVE'}. Ctrl-C to stop.\n")
 
-    with RegionCapture(cfg["feed_region"]) as cap:
+    with make_capture(cfg) as cap:
         try:
             while True:
                 loop_start = time.monotonic()

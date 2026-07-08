@@ -3,14 +3,29 @@
 Automatically saves a video clip and bumps an on-screen counter every time you
 get a kill (or assist) in **Marathon**.
 
-Marathon has no public kill API, so this tool *watches the kill feed on your
-screen*: it screenshots the feed region, OCRs the text, and when a `downed` line
-contains your name it (1) tells **OBS** to save its **Replay Buffer** as a clip
-and (2) updates a **Text source** counter in OBS.
+Marathon has no public kill API, so this tool *watches the kill feed*: it reads
+the feed region, OCRs the text, and when a `downed` line contains your name it
+(1) tells **OBS** to save its **Replay Buffer** as a clip and (2) updates a
+**Text source** counter in OBS.
 
 ```
-screen region  ->  OCR  ->  detector (your name? + dedup)  ->  OBS save replay + counter
+feed frame  ->  OCR  ->  detector (your name? + dedup)  ->  OBS save replay + counter
 ```
+
+## Anti-cheat note
+
+This tool never touches the game: it does **not** read game memory, inject code,
+hook APIs, or send any input. It only reads the *picture* (your screen or OBS's
+output) and controls OBS — the same category as OBS, ShadowPlay, or Medal.tv,
+which give no gameplay advantage. That is not what anti-cheat targets.
+
+To minimize even theoretical exposure, the default `capture_source` is
+**`obs_virtualcam`**: OBS captures the game (universally tolerated) and this tool
+only reads OBS's **Virtual Camera** (a webcam device). Set `capture_source: screen`
+if you'd rather grab the monitor directly. For provably zero risk, run everything
+on a **second PC** fed by a capture card so nothing runs on the game machine.
+
+No guarantees are made about Bungie's policies — use at your own discretion.
 
 ## Requirements
 
@@ -27,6 +42,9 @@ screen region  ->  OCR  ->  detector (your name? + dedup)  ->  OBS save replay +
    Make sure a *Recording Path* is set so clips have somewhere to land.
 3. **Counter text source:** in your Scene, add *Source → Text (GDI+)*, name it
    exactly **`KillCounter`**. Position/size/font it however you like.
+4. **Virtual Camera** (if using the default `capture_source: obs_virtualcam`):
+   click **Start Virtual Camera** in OBS's Controls dock. Skip if you set
+   `capture_source: screen`.
 
 ## 2. Install
 

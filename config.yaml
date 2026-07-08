@@ -23,8 +23,19 @@ trigger_keywords:
 # lenient (catches more OCR errors but risks false positives). 82 is a good start.
 name_match_threshold: 82
 
-# --- Where on screen the kill feed is (set by calibrate.py) ---
-# Pixel rectangle of the kill-feed region on your PRIMARY monitor.
+# --- Capture source ---
+# obs_virtualcam -> read OBS's Virtual Camera (recommended: OBS captures the game,
+#                   we only read a webcam device -> lower anti-cheat exposure).
+#                   Requires clicking "Start Virtual Camera" in OBS.
+# screen         -> screenshot the monitor directly with mss (simpler, no Virtual
+#                   Camera needed, but our process does the screen grab).
+capture_source: "obs_virtualcam"
+obs_virtualcam_index: 0     # which webcam device is the OBS Virtual Camera (try 0,1,2)
+monitor_index: 1            # only used when capture_source: screen (1 = primary)
+
+# --- Where the kill feed is in the captured frame (set by calibrate.py) ---
+# Pixel rectangle within the captured frame. Calibrate against the SAME source
+# you'll run with (run: python calibrate.py — it uses capture_source).
 feed_region:
   x: 0
   y: 0

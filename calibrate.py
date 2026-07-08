@@ -11,19 +11,29 @@ printed and written into config.yaml under `feed_region`.
 
 from __future__ import annotations
 
+import re
 import sys
 
 import cv2
 import yaml
 
-from capture import grab_full_screenshot
+from capture import grab_full_screenshot, grab_full_virtualcam
 
 CONFIG_PATH = "config.yaml"
 
 
 def main():
-    print("Grabbing a screenshot of your primary monitor...")
-    shot = grab_full_screenshot(monitor_index=1)
+    with open(CONFIG_PATH) as f:
+        cfg = yaml.safe_load(f)
+    source = cfg.get("capture_source", "obs_virtualcam")
+
+    if source == "screen":
+        print("Grabbing a screenshot of your primary monitor...")
+        shot = grab_full_screenshot(monitor_index=cfg.get("monitor_index", 1))
+    else:
+        print("Grabbing a frame from the OBS Virtual Camera "
+              "(make sure it's started in OBS)...")
+        shot = grab_full_virtualcam(cam_index=cfg.get("obs_virtualcam_index", 0))
     h, w = shot.shape[:2]
     print(f"Screenshot is {w}x{h}. Drag a box around the kill feed, then press ENTER.")
 
@@ -39,11 +49,23 @@ def main():
     region = {"x": int(x), "y": int(y), "w": int(bw), "h": int(bh)}
     print(f"Selected feed_region: {region}")
 
+    # Replace just the feed_region block in-place so config comments are preserved.
     with open(CONFIG_PATH) as f:
-        cfg = yaml.safe_load(f)
-    cfg["feed_region"] = region
+        text = f.read()
+    new_block = (
+        "feed_region:\n"
+        f"  x: {region['x']}\n"
+        f"  y: {region['y']}\n"
+        f"  w: {region['w']}\n"
+        f"  h: {region['h']}\n"
+    )
+    pattern = re.compile(r"feed_region:\n(?:[ \t]+\w+:.*\n?)+")
+    if pattern.search(text):
+        text = pattern.sub(new_block, text, count=1)
+    else:
+        text = text.rstrip() + "\n\n" + new_block
     with open(CONFIG_PATH, "w") as f:
-        yaml.safe_dump(cfg, f, sort_keys=False)
+        f.write(text)
     print(f"Wrote feed_region into {CONFIG_PATH}. You're calibrated.")
 
 
