@@ -68,11 +68,11 @@ class ControlPanel:
         head = tk.Frame(r, bg=BG)
         head.pack(fill="x", padx=20, pady=(18, 8))
         try:
-            emb = tk.PhotoImage(file=os.path.join(BASE, "marathon_emblem.png"))
-            self._emblem_full = emb  # keep a ref for the window icon
-            self._emblem = emb.subsample(max(1, emb.height() // 44))
-            tk.Label(head, image=self._emblem, bg=BG).pack(side="left", padx=(0, 14))
-            r.iconphoto(True, emb)
+            skull = tk.PhotoImage(file=os.path.join(BASE, "marathon_skull.png"))
+            self._icon_full = skull  # keep a ref for the window/taskbar icon
+            self._icon = skull.subsample(max(1, skull.height() // 46))
+            tk.Label(head, image=self._icon, bg=BG).pack(side="left", padx=(0, 14))
+            r.iconphoto(True, skull)
         except Exception:
             pass
         title = tk.Frame(head, bg=BG)

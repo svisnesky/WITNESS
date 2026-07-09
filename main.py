@@ -429,12 +429,12 @@ def _end_session(cfg, tags, start_monotonic, start_wall, dry_run):
 
 
 def _tray_icon_image(base: str, cfg: dict):
-    """Build a square tray icon from the Marathon O emblem (transparent, centered)."""
+    """Build a square tray icon from the skull PNG (transparent, centered)."""
     from PIL import Image
     size = 64
     canvas = Image.new("RGBA", (size, size), (0, 0, 0, 0))
     try:
-        p = os.path.join(base, cfg.get("app_icon", "marathon_emblem.png"))
+        p = os.path.join(base, cfg.get("app_icon", "marathon_skull.png"))
         im = Image.open(p).convert("RGBA")
         scale = min(size / im.width, size / im.height)
         nw, nh = max(1, round(im.width * scale)), max(1, round(im.height * scale))
