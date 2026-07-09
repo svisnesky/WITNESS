@@ -14,6 +14,7 @@ from __future__ import annotations
 import argparse
 import csv
 import os
+import threading
 import time
 
 import yaml
@@ -58,6 +59,37 @@ def detect_events(det, mode: str, lines, now: float) -> list:
         ev = det.process_frame(lines, now)
         return [ev] if ev else []
     return det.process_lines(lines, now)
+
+
+def play_kill_sound(cfg: dict) -> None:
+    """Non-blocking audio cue on each detected kill (Windows).
+
+    Defaults ON so no config change is needed. Set play_sound: false to mute,
+    or sound_file: "path\\to\\clip.wav" for a custom sound.
+    """
+    if not cfg.get("play_sound", True):
+        return
+    try:
+        import winsound  # Windows-only; silently no-ops elsewhere
+    except Exception:
+        return
+
+    path = (cfg.get("sound_file") or "").strip()
+    if path and os.path.exists(path):
+        try:
+            winsound.PlaySound(path, winsound.SND_FILENAME | winsound.SND_ASYNC)
+        except Exception:
+            pass
+        return
+
+    # No custom file: play a short distinct tone off-thread so the capture
+    # loop never stalls waiting on the beep.
+    def _beep():
+        try:
+            winsound.Beep(1245, 140)
+        except Exception:
+            pass
+    threading.Thread(target=_beep, daemon=True).start()
 
 
 def log_kill(cfg: dict, event, count: int) -> None:
@@ -173,6 +205,7 @@ def run_live(cfg: dict, dry_run: bool):
                     now = time.monotonic()
                     count += 1
                     print(f"KILL #{count}: {ev.raw_line!r}")
+                    play_kill_sound(cfg)
                     obs.set_counter(count)
                     log_kill(cfg, ev, count)
                     if now - last_save >= min_save:

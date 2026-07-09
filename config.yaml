@@ -18,6 +18,9 @@ detection_mode: "popup"
 # wording for kills/assists (e.g. "ELIMINATED", "ASSIST").
 popup_trigger_phrases:
   - "RUNNER DOWN"
+  - "PRECISION DOWN"
+  - "FINISHER"
+  - "RUNNER ELIM"
 popup_match_threshold: 80    # 0-100 fuzzy score to accept a phrase
 popup_absence_frames: 2      # popup must vanish this many frames before it can re-fire
 # require_xp_reward: only fire if a "+NN XP" reward is also visible in the region.
@@ -73,6 +76,11 @@ obs:
   counter_source: "KillCounter"  # name of the Text source in your OBS scene
   counter_format: "Kills: {count}"  # {count} is replaced with the running total
   auto_start_replay_buffer: true    # start the Replay Buffer on launch if not running
+
+# --- Kill signal (single-monitor friendly) ---
+play_sound: true    # play a short beep each time a kill is detected
+sound_file: ""      # optional path to a .wav to play instead of the beep, e.g.
+                    # "C:\\Users\\you\\Downloads\\ding.wav"; empty = built-in beep
 
 # --- Logging ---
 session_log: "session_log.csv"
