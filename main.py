@@ -125,7 +125,7 @@ def show_overlay(cfg: dict) -> None:
         pyw = os.path.join(os.path.dirname(sys.executable), "pythonw.exe")
         runner = pyw if os.path.exists(pyw) else sys.executable
         dur = str(cfg.get("overlay_duration_ms", 1400))
-        alpha = str(cfg.get("overlay_alpha", 0.94))
+        alpha = str(cfg.get("overlay_alpha", 1.0))
         subprocess.Popen(
             [runner, script, image, dur, alpha],
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),

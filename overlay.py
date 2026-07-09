@@ -1,15 +1,20 @@
-"""Transient on-screen image callout (e.g. the Marathon skull) over the game.
+"""Transient floating image callout (the Marathon skull) over the game.
 
 Launched as its own process by main.py so it never blocks the capture loop:
     pythonw overlay.py "C:\\path\\marathon_skull.png" 1400
 
-On Windows it makes itself click-through and non-activating (WS_EX_TRANSPARENT |
-WS_EX_NOACTIVATE) so it can NEVER steal focus or eat a click mid-fight. Needs
-the game in borderless windowed (same as the screen-capture method).
+The image floats with a transparent background (no visible box). On Windows it
+is also click-through and non-activating (WS_EX_TRANSPARENT | WS_EX_NOACTIVATE)
+so it can NEVER steal focus or eat a click mid-fight. Needs the game in
+borderless windowed (same as the screen-capture method).
 """
 
 import sys
 import tkinter as tk
+
+# A color that does NOT appear in the skull art (it's yellow + white). Areas of
+# this color are made fully see-through, so the skull floats.
+MAGIC = "#010101"
 
 
 def main():
@@ -17,14 +22,18 @@ def main():
         return
     image_path = sys.argv[1]
     duration = int(sys.argv[2]) if len(sys.argv) > 2 else 1400
-    alpha = float(sys.argv[3]) if len(sys.argv) > 3 else 0.94
+    alpha = float(sys.argv[3]) if len(sys.argv) > 3 else 1.0
 
     root = tk.Tk()
-    root.overrideredirect(True)          # no title bar / borders
+    root.overrideredirect(True)
     root.attributes("-topmost", True)
-    root.configure(bg="#0d1216")
+    root.configure(bg=MAGIC)
     try:
-        root.attributes("-alpha", alpha)  # slight translucency, HUD feel
+        root.attributes("-transparentcolor", MAGIC)  # transparent background
+    except tk.TclError:
+        pass
+    try:
+        root.attributes("-alpha", alpha)
     except tk.TclError:
         pass
 
@@ -36,10 +45,10 @@ def main():
     w, h = img.width(), img.height()
     sw, sh = root.winfo_screenwidth(), root.winfo_screenheight()
     x = (sw - w) // 2
-    y = int(sh * 0.14)                    # upper-center, clear of the crosshair
+    y = int(sh * 0.12)                    # upper-center, clear of the crosshair
     root.geometry(f"{w}x{h}+{x}+{y}")
 
-    lbl = tk.Label(root, image=img, borderwidth=0, highlightthickness=0, bg="#0d1216")
+    lbl = tk.Label(root, image=img, borderwidth=0, highlightthickness=0, bg=MAGIC)
     lbl.image = img                       # keep a reference so it isn't GC'd
     lbl.pack()
 

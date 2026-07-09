@@ -86,7 +86,7 @@ sound_file: ""      # optional path to a .wav to play instead of the beep, e.g.
 show_overlays: true                 # flash an image for special events
 overlay_image: "marathon_skull.png" # the image to flash (in this folder)
 overlay_duration_ms: 1400           # how long it stays on screen
-overlay_alpha: 0.94                 # 0-1 window opacity (lower = more see-through)
+overlay_alpha: 1.0                  # 0-1 opacity of the floating skull (lower = fainter)
 overlay_events:                     # kill texts that trigger the image
   - "PRECISION DOWN"
 
