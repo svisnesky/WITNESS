@@ -109,5 +109,9 @@ make_montage: true     # at session end, stitch the session's clips into one
                        # highlight reel (needs ffmpeg)
 ffmpeg_path: ""        # leave empty to auto-find ffmpeg.exe in this folder / PATH
 
+# --- Live web dashboard (view on a phone/iPad browser over the LAN) ---
+web_dashboard: true    # serve a live kill feed page
+web_port: 8000         # open http://<your-PC-IP>:8000 on the device
+
 # --- Logging ---
 session_log: "session_log.csv"

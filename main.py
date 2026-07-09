@@ -342,6 +342,21 @@ def run_live(cfg: dict, dry_run: bool = False, stop_event=None, on_count=None):
     session_start = time.monotonic()
     session_tags = []
 
+    # live web dashboard (view on a phone/iPad browser over the LAN)
+    web = None
+    if cfg.get("web_dashboard", True):
+        try:
+            import webserver
+            base = os.path.dirname(os.path.abspath(__file__))
+            web = webserver.LiveState()
+            port = cfg.get("web_port", 8000)
+            webserver.start_web(web, port, base)
+            web.set_running(True)
+            print(f"Live view: http://{webserver.local_ip()}:{port}  "
+                  f"(open in your iPad/phone browser on the same Wi-Fi)")
+        except Exception as e:
+            print(f"(web dashboard off: {e})")
+
     region = cfg.get("detect_region") or cfg.get("feed_region")
     print(f"Detecting [{mode}] at {poll_fps} fps via {cfg.get('capture_source')}. "
           f"Region={region}. "
@@ -366,6 +381,8 @@ def run_live(cfg: dict, dry_run: bool = False, stop_event=None, on_count=None):
                     obs.set_counter(count)
                     if on_count is not None:
                         on_count(count)
+                    if web is not None:
+                        web.record(count, tag, ev.raw_line)
                     log_kill(cfg, ev, count)
                     if now - last_save >= min_save:
                         if obs.save_replay():
@@ -389,6 +406,8 @@ def run_live(cfg: dict, dry_run: bool = False, stop_event=None, on_count=None):
         except KeyboardInterrupt:
             pass
 
+    if web is not None:
+        web.set_running(False)
     _end_session(cfg, session_tags, session_start, session_start_wall, dry_run,
                  obs, session_id)
 
