@@ -75,6 +75,12 @@ def play_kill_sound(cfg: dict) -> None:
         return
 
     path = (cfg.get("sound_file") or "").strip()
+    if not path:
+        # default to the bundled soft blip if present
+        base = os.path.dirname(os.path.abspath(__file__))
+        default = os.path.join(base, "kill_blip.wav")
+        if os.path.exists(default):
+            path = default
     if path and os.path.exists(path):
         try:
             winsound.PlaySound(path, winsound.SND_FILENAME | winsound.SND_ASYNC)
@@ -126,8 +132,11 @@ def show_overlay(cfg: dict) -> None:
         runner = pyw if os.path.exists(pyw) else sys.executable
         dur = str(cfg.get("overlay_duration_ms", 1400))
         alpha = str(cfg.get("overlay_alpha", 1.0))
+        size = str(cfg.get("overlay_size", 120))
+        position = str(cfg.get("overlay_position", "top-right"))
+        margin = str(cfg.get("overlay_margin", 40))
         subprocess.Popen(
-            [runner, script, image, dur, alpha],
+            [runner, script, image, dur, alpha, size, position, margin],
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
     except Exception:

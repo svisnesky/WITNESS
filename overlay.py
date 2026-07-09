@@ -1,7 +1,8 @@
 """Transient floating image callout (the Marathon skull) over the game.
 
 Launched as its own process by main.py so it never blocks the capture loop:
-    pythonw overlay.py "C:\\path\\marathon_skull.png" 1400
+    pythonw overlay.py "C:\\path\\marathon_skull.png" 1400 1.0 120 top-right 40
+    args: image  duration_ms  alpha  size_px(height)  position  margin_px
 
 The image floats with a transparent background (no visible box). On Windows it
 is also click-through and non-activating (WS_EX_TRANSPARENT | WS_EX_NOACTIVATE)
@@ -9,6 +10,7 @@ so it can NEVER steal focus or eat a click mid-fight. Needs the game in
 borderless windowed (same as the screen-capture method).
 """
 
+import os
 import sys
 import tkinter as tk
 
@@ -17,12 +19,53 @@ import tkinter as tk
 MAGIC = "#010101"
 
 
+def scaled_image_path(image_path, size):
+    """Return a path to a version of the image resized to `size` px tall.
+    Uses Pillow (present via easyocr); caches per size next to the original.
+    Falls back to the original if Pillow isn't available."""
+    if size <= 0:
+        return image_path
+    cache = f"{image_path}.{size}.png"
+    if os.path.exists(cache):
+        return cache
+    try:
+        from PIL import Image
+        im = Image.open(image_path).convert("RGBA")
+        w = max(1, round(im.width * size / im.height))
+        im.resize((w, size), Image.LANCZOS).save(cache)
+        return cache
+    except Exception:
+        return image_path
+
+
+def place(position, sw, sh, w, h, m):
+    position = (position or "top-right").lower()
+    xmid, ymid = (sw - w) // 2, (sh - h) // 2
+    coords = {
+        "top-left": (m, m),
+        "top-right": (sw - w - m, m),
+        "top-center": (xmid, m),
+        "bottom-left": (m, sh - h - m),
+        "bottom-right": (sw - w - m, sh - h - m),
+        "bottom-center": (xmid, sh - h - m),
+        "center": (xmid, ymid),
+        "left": (m, ymid),
+        "right": (sw - w - m, ymid),
+    }
+    return coords.get(position, (sw - w - m, m))
+
+
 def main():
     if len(sys.argv) < 2:
         return
     image_path = sys.argv[1]
     duration = int(sys.argv[2]) if len(sys.argv) > 2 else 1400
     alpha = float(sys.argv[3]) if len(sys.argv) > 3 else 1.0
+    size = int(sys.argv[4]) if len(sys.argv) > 4 else 120
+    position = sys.argv[5] if len(sys.argv) > 5 else "top-right"
+    margin = int(sys.argv[6]) if len(sys.argv) > 6 else 40
+
+    path = scaled_image_path(image_path, size)
 
     root = tk.Tk()
     root.overrideredirect(True)
@@ -38,14 +81,13 @@ def main():
         pass
 
     try:
-        img = tk.PhotoImage(file=image_path)   # Tk 8.6+ reads PNG
+        img = tk.PhotoImage(file=path)     # Tk 8.6+ reads PNG
     except Exception:
         return
 
     w, h = img.width(), img.height()
     sw, sh = root.winfo_screenwidth(), root.winfo_screenheight()
-    x = (sw - w) // 2
-    y = int(sh * 0.12)                    # upper-center, clear of the crosshair
+    x, y = place(position, sw, sh, w, h, margin)
     root.geometry(f"{w}x{h}+{x}+{y}")
 
     lbl = tk.Label(root, image=img, borderwidth=0, highlightthickness=0, bg=MAGIC)
