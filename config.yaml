@@ -105,6 +105,9 @@ overlay_events:                     # kill texts that trigger the image
 # --- Clips + recap ---
 organize_clips: true   # rename each saved clip by event+time and sort into a
                        # per-session folder ("Marathon Sessions/<date_time>/")
+make_montage: true     # at session end, stitch the session's clips into one
+                       # highlight reel (needs ffmpeg)
+ffmpeg_path: ""        # leave empty to auto-find ffmpeg.exe in this folder / PATH
 
 # --- Logging ---
 session_log: "session_log.csv"

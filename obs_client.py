@@ -69,6 +69,14 @@ class OBSClient:
         except Exception:
             return ""
 
+    def get_record_directory(self) -> str:
+        """OBS's recording output folder (where replay clips are saved)."""
+        try:
+            r = self._client.get_record_directory()
+            return getattr(r, "record_directory", "") or ""
+        except Exception:
+            return ""
+
     def set_counter(self, count: int) -> None:
         text = self.counter_format.format(count=count)
         try:
@@ -93,6 +101,9 @@ class DryRunOBS:
         return True
 
     def get_last_replay_path(self) -> str:
+        return ""
+
+    def get_record_directory(self) -> str:
         return ""
 
     def set_counter(self, count: int) -> None:

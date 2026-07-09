@@ -389,10 +389,11 @@ def run_live(cfg: dict, dry_run: bool = False, stop_event=None, on_count=None):
         except KeyboardInterrupt:
             pass
 
-    _end_session(cfg, session_tags, session_start, session_start_wall, dry_run)
+    _end_session(cfg, session_tags, session_start, session_start_wall, dry_run,
+                 obs, session_id)
 
 
-def _end_session(cfg, tags, start_monotonic, start_wall, dry_run):
+def _end_session(cfg, tags, start_monotonic, start_wall, dry_run, obs=None, session_id=None):
     total = len(tags)
     dur_min = max(0.01, (time.monotonic() - start_monotonic) / 60.0)
     c = Counter(tags)
@@ -426,6 +427,17 @@ def _end_session(cfg, tags, start_monotonic, start_wall, dry_run):
             pass
     except Exception as e:
         print(f"(could not write recap: {e})")
+
+    # Highlight montage of this session's clips (needs ffmpeg + organized clips).
+    if cfg.get("make_montage", True) and obs is not None and session_id:
+        try:
+            import montage
+            base = os.path.dirname(os.path.abspath(__file__))
+            rec = obs.get_record_directory()
+            session_dir = os.path.join(rec, "Marathon Sessions", session_id) if rec else ""
+            montage.build_montage(session_dir, montage.find_ffmpeg(base, cfg))
+        except Exception as e:
+            print(f"(montage error: {e})")
 
 
 def _tray_icon_image(base: str, cfg: dict):
