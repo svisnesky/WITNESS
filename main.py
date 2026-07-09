@@ -92,25 +92,25 @@ def play_kill_sound(cfg: dict) -> None:
     threading.Thread(target=_beep, daemon=True).start()
 
 
-def overlay_label_for(cfg: dict, raw_line: str):
-    """If this kill's text matches a configured overlay phrase, return its label
-    (e.g. 'HEADSHOT' for a precision down), else None."""
+def should_overlay(cfg: dict, raw_line: str) -> bool:
+    """True if this kill's text matches an event configured to flash the overlay
+    image (default: a precision down -> the Marathon skull)."""
     from rapidfuzz import fuzz
     from detector import _normalize
 
-    labels = cfg.get("overlay_labels") or {"PRECISION DOWN": "HEADSHOT"}
+    events = cfg.get("overlay_events") or ["PRECISION DOWN"]
     blob = _normalize(raw_line)
     if not blob:
-        return None
-    for phrase, label in labels.items():
+        return False
+    for phrase in events:
         p = _normalize(phrase)
         if p and (p in blob or fuzz.partial_ratio(p, blob) >= 80):
-            return label
-    return None
+            return True
+    return False
 
 
-def show_overlay(cfg: dict, label: str) -> None:
-    """Launch overlay.py as its own process (non-blocking) to flash `label`."""
+def show_overlay(cfg: dict) -> None:
+    """Launch overlay.py as its own process (non-blocking) to flash the image."""
     if not cfg.get("show_overlays", True):
         return
     try:
@@ -118,15 +118,16 @@ def show_overlay(cfg: dict, label: str) -> None:
         import sys
         base = os.path.dirname(os.path.abspath(__file__))
         script = os.path.join(base, "overlay.py")
-        if not os.path.exists(script):
+        image = os.path.join(base, cfg.get("overlay_image", "marathon_skull.png"))
+        if not (os.path.exists(script) and os.path.exists(image)):
             return
         # Prefer pythonw.exe so no extra console window flashes.
         pyw = os.path.join(os.path.dirname(sys.executable), "pythonw.exe")
         runner = pyw if os.path.exists(pyw) else sys.executable
         dur = str(cfg.get("overlay_duration_ms", 1400))
-        color = cfg.get("overlay_color", "#ff2b25")
+        alpha = str(cfg.get("overlay_alpha", 0.94))
         subprocess.Popen(
-            [runner, script, label, dur, color],
+            [runner, script, image, dur, alpha],
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
     except Exception:
@@ -247,10 +248,9 @@ def run_live(cfg: dict, dry_run: bool):
                     count += 1
                     print(f"KILL #{count}: {ev.raw_line!r}")
                     play_kill_sound(cfg)
-                    label = overlay_label_for(cfg, ev.raw_line)
-                    if label:
-                        print(f"  -> {label}!")
-                        show_overlay(cfg, label)
+                    if should_overlay(cfg, ev.raw_line):
+                        print("  -> HEADSHOT (skull popup)")
+                        show_overlay(cfg)
                     obs.set_counter(count)
                     log_kill(cfg, ev, count)
                     if now - last_save >= min_save:

@@ -82,13 +82,13 @@ play_sound: true    # play a short beep each time a kill is detected
 sound_file: ""      # optional path to a .wav to play instead of the beep, e.g.
                     # "C:\\Users\\you\\Downloads\\ding.wav"; empty = built-in beep
 
-# --- On-screen event popups (needs the game in borderless windowed) ---
-show_overlays: true          # flash a callout for special events
-overlay_duration_ms: 1400    # how long the callout stays on screen
-overlay_color: "#ff2b25"     # callout text color
-# When a detected kill's text contains the phrase (left), flash the label (right).
-overlay_labels:
-  "PRECISION DOWN": "HEADSHOT"
+# --- On-screen event popup (needs the game in borderless windowed) ---
+show_overlays: true                 # flash an image for special events
+overlay_image: "marathon_skull.png" # the image to flash (in this folder)
+overlay_duration_ms: 1400           # how long it stays on screen
+overlay_alpha: 0.94                 # 0-1 window opacity (lower = more see-through)
+overlay_events:                     # kill texts that trigger the image
+  - "PRECISION DOWN"
 
 # --- Logging ---
 session_log: "session_log.csv"

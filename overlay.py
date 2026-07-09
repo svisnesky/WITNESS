@@ -1,7 +1,7 @@
-"""Transient on-screen callout (e.g. "HEADSHOT") that flashes over the game.
+"""Transient on-screen image callout (e.g. the Marathon skull) over the game.
 
 Launched as its own process by main.py so it never blocks the capture loop:
-    pythonw overlay.py "HEADSHOT" 1400 "#ff2b25"
+    pythonw overlay.py "C:\\path\\marathon_skull.png" 1400
 
 On Windows it makes itself click-through and non-activating (WS_EX_TRANSPARENT |
 WS_EX_NOACTIVATE) so it can NEVER steal focus or eat a click mid-fight. Needs
@@ -11,46 +11,39 @@ the game in borderless windowed (same as the screen-capture method).
 import sys
 import tkinter as tk
 
-TRANSPARENT = "#010203"  # a color unlikely to appear in the text; made see-through
-
 
 def main():
-    label = sys.argv[1] if len(sys.argv) > 1 else "HEADSHOT"
+    if len(sys.argv) < 2:
+        return
+    image_path = sys.argv[1]
     duration = int(sys.argv[2]) if len(sys.argv) > 2 else 1400
-    color = sys.argv[3] if len(sys.argv) > 3 else "#ff2b25"
+    alpha = float(sys.argv[3]) if len(sys.argv) > 3 else 0.94
 
     root = tk.Tk()
     root.overrideredirect(True)          # no title bar / borders
     root.attributes("-topmost", True)
-    root.config(bg=TRANSPARENT)
+    root.configure(bg="#0d1216")
     try:
-        root.attributes("-transparentcolor", TRANSPARENT)  # background becomes invisible
+        root.attributes("-alpha", alpha)  # slight translucency, HUD feel
     except tk.TclError:
         pass
 
+    try:
+        img = tk.PhotoImage(file=image_path)   # Tk 8.6+ reads PNG
+    except Exception:
+        return
+
+    w, h = img.width(), img.height()
     sw, sh = root.winfo_screenwidth(), root.winfo_screenheight()
-    w, h = 900, 220
     x = (sw - w) // 2
-    y = int(sh * 0.20)                    # upper-center, above the kill-feed popups
+    y = int(sh * 0.14)                    # upper-center, clear of the crosshair
     root.geometry(f"{w}x{h}+{x}+{y}")
 
-    canvas = tk.Canvas(root, width=w, height=h, bg=TRANSPARENT, highlightthickness=0)
-    canvas.pack()
+    lbl = tk.Label(root, image=img, borderwidth=0, highlightthickness=0, bg="#0d1216")
+    lbl.image = img                       # keep a reference so it isn't GC'd
+    lbl.pack()
 
-    cx, cy = w // 2, h // 2
-    # "Impact" ships with Windows and gives a bold, punchy look.
-    font = ("Impact", 84)
-
-    # black outline: draw the text offset in every direction, then red on top
-    for dx in (-3, -2, 0, 2, 3):
-        for dy in (-3, -2, 0, 2, 3):
-            if dx or dy:
-                canvas.create_text(cx + dx, cy + dy, text=label, fill="black", font=font)
-    canvas.create_text(cx, cy, text=label, fill=color, font=font)
-    # a thin accent underline
-    canvas.create_rectangle(cx - 150, cy + 62, cx + 150, cy + 68, fill=color, outline="")
-
-    # Make the window click-through + non-activating on Windows.
+    # Click-through + non-activating on Windows.
     root.update_idletasks()
     try:
         import ctypes
