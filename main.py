@@ -101,6 +101,23 @@ def play_kill_sound(cfg: dict) -> None:
     threading.Thread(target=_beep, daemon=True).start()
 
 
+def is_suppressed(cfg: dict, lines) -> bool:
+    """True if the frame shows a state where kills can't happen (you're downed /
+    on the self-revive or give-up screen). Prevents false kills from the death
+    UI + lingering kill-feed text."""
+    from detector import _normalize
+    from rapidfuzz import fuzz
+    phrases = cfg.get("suppress_phrases", ["SELF REVIVE", "GIVE UP"])
+    blob = _normalize(" ".join(lines))
+    if not blob:
+        return False
+    for p in phrases:
+        n = _normalize(p)
+        if n and (n in blob or fuzz.partial_ratio(n, blob) >= 80):
+            return True
+    return False
+
+
 def classify_event(raw_line: str) -> str:
     """Tag a kill by type from its popup text (for clip names + the recap).
     Fuzzy so OCR slips like 'Runner Dorm' still read as a down."""
@@ -312,7 +329,8 @@ def run_live(cfg: dict, dry_run: bool = False, stop_event=None, on_count=None):
                 loop_start = time.monotonic()
                 img = cap.grab()
                 lines = engine.read_lines(img)
-                events = detect_events(det, mode, lines, now=loop_start)
+                blocked = is_suppressed(cfg, lines)  # downed / give-up screen
+                events = [] if blocked else detect_events(det, mode, lines, now=loop_start)
 
                 for ev in events:
                     now = time.monotonic()
@@ -334,7 +352,7 @@ def run_live(cfg: dict, dry_run: bool = False, stop_event=None, on_count=None):
                         print("  (skipped replay save — within min_save_interval)")
 
                 # skull overlay: independent per-frame check for precision downs
-                if overlay_det is not None:
+                if overlay_det is not None and not blocked:
                     oev = overlay_det.process_frame(lines, now=loop_start)
                     if oev:
                         print("  -> HEADSHOT (skull popup)")

@@ -23,6 +23,11 @@ popup_trigger_phrases:
   - "RUNNER ELIM"
 popup_match_threshold: 80    # 0-100 fuzzy score to accept a phrase
 popup_absence_frames: 2      # popup must vanish this many frames before it can re-fire
+# If any of these appear on screen, skip detection (you're downed / can't get
+# kills) so the death UI + lingering feed text don't count as a false kill.
+suppress_phrases:
+  - "SELF REVIVE"
+  - "GIVE UP"
 # require_xp_reward: only fire if a "+NN XP" reward is also visible in the region.
 # Guards against non-combat popups, but set false if it causes missed kills.
 require_xp_reward: false
