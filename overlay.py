@@ -39,7 +39,14 @@ def scaled_image_path(image_path, size):
 
 
 def place(position, sw, sh, w, h, m):
-    position = (position or "top-right").lower()
+    position = (position or "top-right").lower().strip()
+    # custom:fx,fy -> fx,fy are fractions (0-1) of the screen for the image CENTER
+    if position.startswith("custom:"):
+        try:
+            fx, fy = (float(v) for v in position.split(":", 1)[1].split(","))
+            return int(sw * fx - w / 2), int(sh * fy - h / 2)
+        except Exception:
+            pass
     xmid, ymid = (sw - w) // 2, (sh - h) // 2
     coords = {
         "top-left": (m, m),

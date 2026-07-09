@@ -132,8 +132,8 @@ def show_overlay(cfg: dict) -> None:
         runner = pyw if os.path.exists(pyw) else sys.executable
         dur = str(cfg.get("overlay_duration_ms", 1400))
         alpha = str(cfg.get("overlay_alpha", 1.0))
-        size = str(cfg.get("overlay_size", 120))
-        position = str(cfg.get("overlay_position", "top-right"))
+        size = str(cfg.get("overlay_size", 140))
+        position = str(cfg.get("overlay_position", "custom:0.542,0.696"))
         margin = str(cfg.get("overlay_margin", 40))
         subprocess.Popen(
             [runner, script, image, dur, alpha, size, position, margin],

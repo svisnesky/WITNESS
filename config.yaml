@@ -85,10 +85,13 @@ sound_file: ""      # optional path to a .wav to play instead of the beep, e.g.
 # --- On-screen event popup (needs the game in borderless windowed) ---
 show_overlays: true                 # flash an image for special events
 overlay_image: "marathon_skull.png" # the image to flash (in this folder)
-overlay_size: 120                   # skull height in pixels (~1 inch). Try 90-160.
-overlay_position: "top-right"       # top-left | top-right | top-center |
-                                    # bottom-left | bottom-right | bottom-center | center
-overlay_margin: 40                  # gap from the screen edge, in pixels
+overlay_size: 140                   # skull height in pixels. Try 90-200.
+# Position: a named spot, OR "custom:fx,fy" where fx,fy are fractions (0-1) of
+# the screen for the skull's CENTER. Default places it where you photoshopped it.
+#   named: top-left | top-right | top-center | bottom-left | bottom-right |
+#          bottom-center | center
+overlay_position: "custom:0.542,0.696"
+overlay_margin: 40                  # gap from screen edge (named positions only)
 overlay_duration_ms: 1400           # how long it stays on screen
 overlay_alpha: 1.0                  # 0-1 opacity of the floating skull (lower = fainter)
 overlay_events:                     # kill texts that trigger the image
