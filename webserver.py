@@ -22,12 +22,14 @@ class LiveState:
         self.started = ""
         self._mono = None
         self.events = deque(maxlen=30)
+        self._clip_requested = False
 
     def reset(self):
         """Clear counts/feed for a fresh session (server stays up)."""
         with self._lock:
             self.count = 0
             self.events.clear()
+            self._clip_requested = False
 
     def set_running(self, running):
         with self._lock:
@@ -42,11 +44,21 @@ class LiveState:
             self.events.appendleft(
                 {"time": time.strftime("%H:%M:%S"), "tag": tag, "text": (text or "")[:60]})
 
+    def request_clip(self):
+        with self._lock:
+            self._clip_requested = True
+
+    def pop_clip_request(self) -> bool:
+        with self._lock:
+            if self._clip_requested:
+                self._clip_requested = False
+                return True
+            return False
+
     def snapshot(self):
         with self._lock:
-            dur = int(time.monotonic() - self._mono) if self._mono else 0
             return {"running": self.running, "count": self.count,
-                    "started": self.started, "duration_s": dur,
+                    "started": self.started,
                     "events": list(self.events)}
 
 
@@ -96,6 +108,17 @@ def start_web(state, port, base_dir):
             except (BrokenPipeError, ConnectionResetError):
                 pass
 
+        def do_POST(self):
+            path = self.path.split("?")[0]
+            try:
+                if path == "/clip":
+                    state.request_clip()
+                    self._send(b'{"ok":true}', "application/json", cache=False)
+                else:
+                    self.send_error(404)
+            except (BrokenPipeError, ConnectionResetError):
+                pass
+
     srv = ThreadingHTTPServer(("0.0.0.0", int(port)), Handler)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     return srv
@@ -125,14 +148,20 @@ PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
   .dot { display:inline-block; width:9px; height:9px; border-radius:50%; margin-right:7px;
     vertical-align:middle; background:var(--muted); }
   .live .dot { background:#5bd66b; box-shadow:0 0 10px #5bd66b; }
-  .stats { display:flex; justify-content:center; gap:9vw; margin:4px 0 8px; }
-  .big { font-size:19vw; line-height:.9; font-weight:800; font-variant-numeric:tabular-nums; }
-  @media(min-width:520px){ .big{ font-size:104px; } }
+  .big { font-size:28vw; line-height:.9; font-weight:800; font-variant-numeric:tabular-nums; }
+  @media(min-width:520px){ .big{ font-size:140px; } }
   .accent { color:var(--accent); }
   .lab { color:var(--muted); font-size:.68rem; letter-spacing:.14em; text-transform:uppercase; margin-top:8px; }
-  .sub { color:var(--muted); font-size:.82rem; margin:4px 0 20px; }
+  .sub { color:var(--muted); font-size:.82rem; margin:4px 0 16px; }
+  .clipbtn { background:var(--accent); color:#0b0f12; border:none; border-radius:10px;
+    padding:14px 28px; font:inherit; font-size:.9rem; font-weight:700; letter-spacing:.08em;
+    text-transform:uppercase; cursor:pointer; margin-bottom:16px;
+    transition: opacity .15s, transform .1s; }
+  .clipbtn:active { transform:scale(.95); opacity:.85; }
+  .clipbtn.fired { background:#5bd66b; }
+  .btnrow { display:flex; gap:10px; justify-content:center; margin-bottom:16px; }
   .fsbtn { background:var(--panel); color:var(--muted); border:1px solid var(--line);
-    border-radius:8px; padding:7px 14px; font:inherit; font-size:.75rem; margin-bottom:16px;
+    border-radius:8px; padding:7px 14px; font:inherit; font-size:.75rem;
     cursor:pointer; }
   .hint { color:var(--muted); font-size:.72rem; margin-top:22px; opacity:.8; }
   .feed { text-align:left; display:flex; flex-direction:column; gap:8px; }
@@ -150,35 +179,23 @@ PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
 </style></head><body><div class="wrap">
   <header><img src="/wordmark.png" alt="MARATHON"></header>
   <div class="status" id="status"><span class="dot"></span><span id="statustext">CONNECTING</span></div>
-  <div class="stats">
-    <div><div class="big accent" id="count">0</div><div class="lab">Kills</div></div>
-    <div><div class="big" id="timer">0:00</div><div class="lab">Session</div></div>
-  </div>
+  <div><div class="big accent" id="count">0</div><div class="lab">Kills</div></div>
   <div class="sub" id="sub">&nbsp;</div>
-  <button class="fsbtn" id="fs" onclick="goFull()">Full screen</button>
+  <div class="btnrow">
+    <button class="clipbtn" id="clip" onclick="saveClip()">SAVE CLIP</button>
+  </div>
+  <div class="btnrow">
+    <button class="fsbtn" id="fs" onclick="goFull()">Full screen</button>
+  </div>
   <div class="feed" id="feed"><div class="empty">Waiting for kills...</div></div>
-  <div class="hint" id="hint">iPad: tap Share &rarr; Add to Home Screen, then open it from the icon for full screen.</div>
+  <div class="hint" id="hint">iPad: tap Share &rarr; Add to Home Screen for full screen.</div>
 </div>
 <script>
-  var serverDur = 0, lastSync = 0, running = false;
-
-  function fmt(s){ s=Math.max(0,Math.floor(s));
-    var h=Math.floor(s/3600), m=Math.floor(s%3600/60), x=s%60;
-    var mm=(h>0&&m<10?'0':'')+m;
-    return (h>0?h+':':'')+mm+':'+(x<10?'0':'')+x; }
-
-  // local 1s clock so the timer ticks smoothly between polls
-  setInterval(function(){
-    var shown = serverDur + (running ? (Date.now()-lastSync)/1000 : 0);
-    document.getElementById('timer').textContent = fmt(shown);
-  }, 1000);
-
   async function tick(){
     try{
       var r = await fetch('/status',{cache:'no-store'});
       var d = await r.json();
       document.getElementById('count').textContent = d.count;
-      serverDur = d.duration_s; lastSync = Date.now(); running = d.running;
       var st = document.querySelector('.status');
       st.className = 'status' + (d.running ? ' live' : '');
       document.getElementById('statustext').textContent = d.running ? 'RUNNING' : 'STOPPED';
@@ -198,7 +215,14 @@ PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
   }
   tick();
 
-  // keep the screen awake while this page is open
+  async function saveClip(){
+    var btn = document.getElementById('clip');
+    btn.textContent = 'SAVING...';
+    btn.classList.add('fired');
+    try { await fetch('/clip', {method:'POST'}); } catch(e){}
+    setTimeout(function(){ btn.textContent='SAVE CLIP'; btn.classList.remove('fired'); }, 1500);
+  }
+
   var wl = null;
   async function keepAwake(){
     try { if ('wakeLock' in navigator) { wl = await navigator.wakeLock.request('screen'); } } catch(e){}
@@ -208,13 +232,11 @@ PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
   });
   keepAwake();
 
-  // full screen (desktop / second monitor); on iPad use Add to Home Screen
   function goFull(){
     var el = document.documentElement;
     if (el.requestFullscreen) el.requestFullscreen();
     else if (el.webkitRequestFullscreen) el.webkitRequestFullscreen();
   }
-  // hide the fullscreen button + hint when already launched from the home screen
   if (window.navigator.standalone || window.matchMedia('(display-mode: standalone)').matches){
     document.getElementById('fs').style.display='none';
     document.getElementById('hint').style.display='none';

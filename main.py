@@ -404,6 +404,24 @@ def _handle_kill(cfg, ev, s, on_count=None):
         show_overlay(cfg)
 
 
+def _check_manual_clip(s):
+    """If the iPad 'SAVE CLIP' button was tapped, save a replay now."""
+    web = s["web"]
+    if web is not None and web.pop_clip_request():
+        now = time.monotonic()
+        if now - s["last_save"] >= s["min_save"]:
+            if s["obs"].save_replay():
+                s["last_save"] = now
+                print("  [manual clip saved from iPad]")
+                if s["organize"]:
+                    rename_clip_async(s["obs"], s["session_id"], "manual",
+                                      s["count"])
+            else:
+                print("  [manual clip: replay save failed]")
+        else:
+            print("  [manual clip: too soon after last save]")
+
+
 def _classify_audio_event(tag: str) -> str:
     """Map an audio reference tag to the standard event classification."""
     tag = tag.lower()
@@ -468,6 +486,8 @@ def run_live(cfg: dict, dry_run: bool = False, stop_event=None, on_count=None):
                         print("  -> HEADSHOT (skull popup)")
                         show_overlay(cfg)
 
+                _check_manual_clip(s)
+
                 elapsed = time.monotonic() - loop_start
                 if elapsed < interval:
                     time.sleep(interval - elapsed)
@@ -523,15 +543,14 @@ def _run_live_audio(cfg: dict, dry_run: bool, stop_event, on_count):
         while not (stop_event is not None and stop_event.is_set()):
             events = detector.poll()
             for ev in events:
-                # override classify_event for audio: use the tag from the reference name
                 tag = ev.raw_line.split(":")[1].split()[0] if ":" in ev.raw_line else "kill"
                 ev_tag = _classify_audio_event(tag)
-                # temporarily patch raw_line so classify_event returns the right tag
                 original_raw = ev.raw_line
                 ev.raw_line = {"kill": "RUNNER DOWN", "precision": "PRECISION DOWN",
                                "finisher": "FINISHER", "assist": "RUNNER ELIM"
                                }.get(ev_tag, "RUNNER DOWN") + f"  ({original_raw})"
                 _handle_kill(cfg, ev, s, on_count)
+            _check_manual_clip(s)
             time.sleep(0.1)
     except KeyboardInterrupt:
         pass
