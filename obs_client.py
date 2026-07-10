@@ -29,16 +29,36 @@ class OBSClient:
         self._client = None
 
     def connect(self):
-        import obsws_python as obs
+        self._connect_client()
+        version = self._client.get_version()
+        print(f"Connected to OBS {version.obs_version} (websocket {version.obs_web_socket_version}).")
+        if self.auto_start_replay_buffer:
+            self._ensure_replay_buffer()
 
+    def _connect_client(self):
+        import obsws_python as obs
         self._client = obs.ReqClient(
             host=self.host, port=self.port, password=self.password, timeout=5
         )
-        version = self._client.get_version()
-        print(f"Connected to OBS {version.obs_version} (websocket {version.obs_web_socket_version}).")
 
-        if self.auto_start_replay_buffer:
-            self._ensure_replay_buffer()
+    def _reconnect(self):
+        """Silently try to re-establish the connection after a drop."""
+        try:
+            self._connect_client()
+            return True
+        except Exception:
+            return False
+
+    def _call(self, fn, default=None, label="request"):
+        """Run an OBS request; on a dropped connection, reconnect once and retry."""
+        for attempt in range(2):
+            try:
+                return fn()
+            except Exception as e:
+                if attempt == 0 and self._reconnect():
+                    continue
+                print(f"OBS {label} failed: {e}")
+                return default
 
     def _ensure_replay_buffer(self):
         try:
@@ -54,40 +74,28 @@ class OBSClient:
 
     def save_replay(self) -> bool:
         """Write the current Replay Buffer to a clip. Returns True on success."""
-        try:
-            self._client.save_replay_buffer()
-            return True
-        except Exception as e:
-            print(f"ERROR saving replay buffer: {e}")
-            return False
+        return self._call(lambda: (self._client.save_replay_buffer(), True)[1],
+                          default=False, label="save replay") or False
 
     def get_last_replay_path(self) -> str:
         """Path of the most recently saved Replay Buffer clip, or '' if unknown."""
-        try:
-            r = self._client.get_last_replay_buffer_replay()
-            return getattr(r, "saved_replay_path", "") or ""
-        except Exception:
-            return ""
+        return self._call(
+            lambda: getattr(self._client.get_last_replay_buffer_replay(),
+                            "saved_replay_path", "") or "",
+            default="", label="get last replay") or ""
 
     def get_record_directory(self) -> str:
         """OBS's recording output folder (where replay clips are saved)."""
-        try:
-            r = self._client.get_record_directory()
-            return getattr(r, "record_directory", "") or ""
-        except Exception:
-            return ""
+        return self._call(
+            lambda: getattr(self._client.get_record_directory(),
+                            "record_directory", "") or "",
+            default="", label="get record dir") or ""
 
     def set_counter(self, count: int) -> None:
         text = self.counter_format.format(count=count)
-        try:
-            self._client.set_input_settings(
-                name=self.counter_source,
-                settings={"text": text},
-                overlay=True,
-            )
-        except Exception as e:
-            print(f"WARNING: could not update counter source "
-                  f"'{self.counter_source}': {e}")
+        self._call(lambda: self._client.set_input_settings(
+            name=self.counter_source, settings={"text": text}, overlay=True),
+            label="set counter")
 
 
 class DryRunOBS:
