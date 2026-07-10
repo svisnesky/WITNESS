@@ -59,9 +59,11 @@ def build_detector(cfg: dict):
         )
     elif mode == "audio":
         return None, "audio"  # AudioDetector is built separately in run_live
+    elif mode == "template":
+        return None, "template"  # ImageDetector is built separately in run_live
     else:
         raise ValueError(f"Unknown detection_mode: {mode!r} "
-                         "(use 'popup', 'killfeed', or 'audio')")
+                         "(use 'popup', 'killfeed', 'audio', or 'template')")
     return det, mode
 
 
@@ -439,6 +441,8 @@ def run_live(cfg: dict, dry_run: bool = False, stop_event=None, on_count=None):
 
     if mode == "audio":
         return _run_live_audio(cfg, dry_run, stop_event, on_count)
+    if mode == "template":
+        return _run_live_template(cfg, dry_run, stop_event, on_count)
 
     from capture import make_capture
     from ocr import OCREngine
@@ -556,6 +560,68 @@ def _run_live_audio(cfg: dict, dry_run: bool, stop_event, on_count):
         pass
     finally:
         detector.stop()
+
+    if s["web"] is not None:
+        s["web"].set_running(False)
+    _end_session(cfg, s["session_tags"], s["session_start"],
+                 s["session_start_wall"], dry_run, s["obs"], s["session_id"])
+
+
+def _run_live_template(cfg: dict, dry_run: bool, stop_event, on_count):
+    """Image-template detection loop. Captures the screen region like OCR mode
+    but matches template images instead of reading text. Much more robust to
+    OBS Virtual Camera compression."""
+    from capture import make_capture
+    from image_detector import ImageDetector, load_templates
+
+    _tune_performance(cfg)
+    s = _setup_session(cfg, dry_run)
+
+    base = os.path.dirname(os.path.abspath(__file__))
+    tmpl_dir = os.path.join(base, "templates")
+    tmpl_cfg = cfg.get("template", {})
+
+    scales_raw = tmpl_cfg.get("scales", [0.6, 0.75, 0.85, 1.0, 1.15, 1.3])
+    templates = load_templates(tmpl_dir, scales=tuple(float(x) for x in scales_raw))
+    if not templates:
+        print("ERROR: No template images found in templates/ folder.")
+        print("Add cropped PNG screenshots of the kill popups (e.g. runner_down.png, finisher.png).")
+        return
+
+    detector = ImageDetector(
+        templates=templates,
+        threshold=float(tmpl_cfg.get("threshold", 0.55)),
+        cooldown=float(tmpl_cfg.get("cooldown", 3.0)),
+        absence_frames=int(tmpl_cfg.get("absence_frames", 3)),
+        confirm_frames=int(tmpl_cfg.get("confirm_frames", 2)),
+        debug=cfg.get("debug_template", False),
+    )
+
+    poll_fps = max(1, cfg.get("poll_fps", 3))
+    interval = 1.0 / poll_fps
+
+    region = cfg.get("detect_region_frac") or cfg.get("detect_region")
+    print(f"Detecting [template] at {poll_fps} fps via {cfg.get('capture_source')}. "
+          f"Region={region}. Templates: {[t.tag for t in templates]}. "
+          f"{'DRY-RUN' if dry_run else 'LIVE'}. Ctrl-C to stop.\n")
+
+    with make_capture(cfg) as cap:
+        try:
+            while not (stop_event is not None and stop_event.is_set()):
+                loop_start = time.monotonic()
+                img = cap.grab()
+                events = detector.process_frame(img, now=loop_start)
+
+                for ev in events:
+                    _handle_kill(cfg, ev, s, on_count)
+
+                _check_manual_clip(s)
+
+                elapsed = time.monotonic() - loop_start
+                if elapsed < interval:
+                    time.sleep(interval - elapsed)
+        except KeyboardInterrupt:
+            pass
 
     if s["web"] is not None:
         s["web"].set_running(False)

@@ -10,7 +10,7 @@
 #               your name. Only useful if the feed uses a real word (Marathon's
 #               feed uses icons, so popup mode is preferred).
 # =========================================================================
-detection_mode: "popup"
+detection_mode: "template"
 
 # --- POPUP MODE settings ---
 # Phrases that mean "you got a down/kill/assist". Case-insensitive, fuzzy-matched
@@ -139,6 +139,28 @@ audio:
   check_interval: 0.15  # seconds between match checks (lower = more responsive, more CPU)
   sample_rate: 44100
   device_name: ""       # leave empty for default speakers; set to match a specific device name
+
+# =========================================================================
+# TEMPLATE MODE settings (only used when detection_mode: template)
+#   Matches cropped PNG screenshots of kill popups against the captured
+#   frame using image template matching (NCC). No OCR needed.
+#   Place template PNGs in the templates/ folder.
+# =========================================================================
+template:
+  threshold: 0.55       # 0-1 NCC score to count as a match (lower = more sensitive)
+  cooldown: 3.0         # seconds between detections (global)
+  absence_frames: 3     # popup must vanish this many frames before it can re-fire
+  confirm_frames: 2     # popup must appear this many frames in a row to count
+  scales:               # multi-scale matching (handles resolution differences)
+    - 0.5
+    - 0.65
+    - 0.8
+    - 1.0
+    - 1.2
+    - 1.4
+
+# Set true to print template match scores every frame (like debug_ocr but for templates)
+debug_template: false
 
 # Set true to print audio match scores every check (like debug_ocr but for audio)
 debug_audio: false
