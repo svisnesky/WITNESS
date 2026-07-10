@@ -40,6 +40,21 @@ def _normalize(s: str) -> str:
     return s
 
 
+def phrase_matches(phrase_norm: str, blob_norm: str, threshold: int = 80) -> bool:
+    """Guarded fuzzy match: does the (normalized) phrase appear in the blob?
+
+    Requires the blob to be long enough to plausibly CONTAIN the phrase, so a
+    short OCR scrap like 'fi' can't fuzzily match a long word like 'finisher'
+    (partial matching otherwise rewards a bare prefix at full confidence)."""
+    if not phrase_norm or not blob_norm:
+        return False
+    if phrase_norm in blob_norm:
+        return True
+    if len(blob_norm) < 0.6 * len(phrase_norm):
+        return False
+    return fuzz.partial_ratio(phrase_norm, blob_norm) >= threshold
+
+
 class KillDetector:
     def __init__(
         self,
@@ -192,7 +207,7 @@ class PopupDetector:
         if self.require_xp_reward and not self._xp_reward_present(blob):
             return None
         for ph in self.phrases:
-            if ph and (ph in blob or fuzz.partial_ratio(ph, blob) >= self.threshold):
+            if phrase_matches(ph, blob, self.threshold):
                 return ph
         return None
 

@@ -110,15 +110,13 @@ def is_suppressed(cfg: dict, lines) -> bool:
     """True if the frame shows a state where kills can't happen (you're downed /
     on the self-revive or give-up screen). Prevents false kills from the death
     UI + lingering kill-feed text."""
-    from detector import _normalize
-    from rapidfuzz import fuzz
+    from detector import _normalize, phrase_matches
     phrases = cfg.get("suppress_phrases", ["SELF REVIVE", "GIVE UP"])
     blob = _normalize(" ".join(lines))
     if not blob:
         return False
     for p in phrases:
-        n = _normalize(p)
-        if n and (n in blob or fuzz.partial_ratio(n, blob) >= 80):
+        if phrase_matches(_normalize(p), blob, 80):
             return True
     return False
 
@@ -126,12 +124,11 @@ def is_suppressed(cfg: dict, lines) -> bool:
 def classify_event(raw_line: str) -> str:
     """Tag a kill by type from its popup text (for clip names + the recap).
     Fuzzy so OCR slips like 'Runner Dorm' still read as a down."""
-    from detector import _normalize
-    from rapidfuzz import fuzz
+    from detector import _normalize, phrase_matches
     b = _normalize(raw_line)
 
     def has(p):
-        return p in b or fuzz.partial_ratio(p, b) >= 78
+        return phrase_matches(p, b, 78)
 
     if has("precision"):
         return "precision"
@@ -192,16 +189,14 @@ def rename_clip_async(obs, session_id: str, tag: str, count: int) -> None:
 def should_overlay(cfg: dict, raw_line: str) -> bool:
     """True if this kill's text matches an event configured to flash the overlay
     image (default: a precision down -> the Marathon skull)."""
-    from rapidfuzz import fuzz
-    from detector import _normalize
+    from detector import _normalize, phrase_matches
 
     events = cfg.get("overlay_events") or ["PRECISION DOWN"]
     blob = _normalize(raw_line)
     if not blob:
         return False
     for phrase in events:
-        p = _normalize(phrase)
-        if p and (p in blob or fuzz.partial_ratio(p, blob) >= 80):
+        if phrase_matches(_normalize(phrase), blob, 80):
             return True
     return False
 

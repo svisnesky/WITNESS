@@ -8,7 +8,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from detector import KillDetector, PopupDetector  # noqa: E402
+from detector import KillDetector, PopupDetector, _normalize, phrase_matches  # noqa: E402
 
 
 def make(mode="self_or_assist", **kw):
@@ -181,6 +181,24 @@ def test_popup_require_xp_reward():
     assert p.process_frame([], now=1.2) is None
     assert p.process_frame([], now=1.4) is None
     assert p.process_frame(["RUNNER DOWN +15 XP"], now=2.0) is not None
+
+
+def test_short_scrap_does_not_match_long_phrase():
+    # menu/vault false positive: 'fi' must NOT match 'finisher'
+    assert phrase_matches("finisher", _normalize("# fi"), 80) is False
+    assert phrase_matches("finisher", _normalize("fi"), 80) is False
+    assert phrase_matches("precision down", _normalize("pr"), 80) is False
+
+
+def test_real_phrase_still_matches():
+    assert phrase_matches("finisher", _normalize("FINISHER +50"), 80) is True
+    assert phrase_matches("runner down", _normalize("RUNNER DOWN +15 XP"), 80) is True
+    assert phrase_matches("precision down", _normalize("PRECISI0N DQWN"), 80) is True
+
+
+def test_menu_scrap_not_a_kill():
+    d = PopupDetector(trigger_phrases=["FINISHER", "RUNNER DOWN"], absence_frames=2)
+    assert d.process_frame(["# fi", "FI"], now=1.0) is None
 
 
 if __name__ == "__main__":
