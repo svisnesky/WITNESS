@@ -618,6 +618,8 @@ def _run_live_template(cfg: dict, dry_run: bool, stop_event, on_count):
             print(f"ERROR: Could not open OBS Virtual Camera (index {cam_idx}).")
             print("Is 'Start Virtual Camera' running in OBS?")
             return
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1920)
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080)
 
         def grab_full():
             ok, frame = cap.read()

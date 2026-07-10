@@ -94,6 +94,8 @@ class VirtualCamCapture:
                 "Is 'Start Virtual Camera' running in OBS? Try a different "
                 "obs_virtualcam_index in config.yaml."
             )
+        self._cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1920)
+        self._cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080)
         return self
 
     def __exit__(self, *exc):
