@@ -159,7 +159,7 @@ class AudioDetector:
         self._chunks: deque[np.ndarray] = deque(maxlen=max_chunks)
         self._events: queue.Queue[KillEvent] = queue.Queue()
         self._stop = threading.Event()
-        self._last_fire: dict[str, float] = {}
+        self._last_fire: float = 0.0  # global cooldown (all types)
         self._capture_thread: threading.Thread | None = None
         self._match_thread: threading.Thread | None = None
 
@@ -227,14 +227,16 @@ class AudioDetector:
             if rms < 1e-5:
                 continue
 
+            # global cooldown: skip all matching if we fired recently
+            if now - self._last_fire < self.cooldown:
+                continue
+
             buf = _bandpass(raw_buf, self.sr)
 
             best_tag: str | None = None
             best_score: float = 0.0
 
             for tag, tmpl in self.templates.items():
-                if now - self._last_fire.get(tag, 0) < self.cooldown:
-                    continue
                 if len(buf) <= len(tmpl):
                     continue
                 scores = _ncc(buf, tmpl)
@@ -246,13 +248,13 @@ class AudioDetector:
                     best_tag = tag
 
             if best_tag is not None and best_score >= self.threshold:
-                if now - self._last_fire.get(best_tag, 0) >= self.cooldown:
-                    self._last_fire[best_tag] = now
-                    ev = KillEvent(
-                        timestamp=now,
-                        raw_line=f"[audio:{best_tag} score={best_score:.2f}]",
-                        killer="",
-                        victim="",
-                        is_self_kill=True,
-                    )
-                    self._events.put(ev)
+                self._last_fire = now
+                self._chunks.clear()  # flush buffer so the same sound can't re-trigger
+                ev = KillEvent(
+                    timestamp=now,
+                    raw_line=f"[audio:{best_tag} score={best_score:.2f}]",
+                    killer="",
+                    victim="",
+                    is_self_kill=True,
+                )
+                self._events.put(ev)
