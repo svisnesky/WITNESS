@@ -605,23 +605,72 @@ def _run_live_template(cfg: dict, dry_run: bool, stop_event, on_count):
           f"Region={region}. Templates: {[t.tag for t in templates]}. "
           f"{'DRY-RUN' if dry_run else 'LIVE'}. Ctrl-C to stop.\n")
 
-    with make_capture(cfg) as cap:
-        try:
-            while not (stop_event is not None and stop_event.is_set()):
-                loop_start = time.monotonic()
-                img = cap.grab()
-                events = detector.process_frame(img, now=loop_start)
+    # Template mode uses the FULL frame (not the cropped OCR region) because
+    # the template itself is the search pattern — matchTemplate finds it
+    # wherever it appears. Build a full-frame capture instead.
+    src = cfg.get("capture_source", "obs_virtualcam")
+    if src == "obs_virtualcam":
+        import cv2
+        cam_idx = cfg.get("obs_virtualcam_index", 0)
+        backend = getattr(cv2, "CAP_DSHOW", 0)
+        cap = cv2.VideoCapture(cam_idx, backend)
+        if not cap.isOpened():
+            print(f"ERROR: Could not open OBS Virtual Camera (index {cam_idx}).")
+            print("Is 'Start Virtual Camera' running in OBS?")
+            return
 
-                for ev in events:
-                    _handle_kill(cfg, ev, s, on_count)
+        def grab_full():
+            ok, frame = cap.read()
+            if not ok or frame is None:
+                return None
+            return frame
 
-                _check_manual_clip(s)
+        def release():
+            cap.release()
+    else:
+        import mss
+        sct = mss.mss()
+        mons = sct.monitors
+        mi = cfg.get("monitor_index", 1)
+        mon = mons[mi] if mi < len(mons) else mons[0]
 
-                elapsed = time.monotonic() - loop_start
-                if elapsed < interval:
-                    time.sleep(interval - elapsed)
-        except KeyboardInterrupt:
-            pass
+        def grab_full():
+            raw = sct.grab(mon)
+            return np.asarray(raw)[:, :, :3]
+
+        def release():
+            sct.close()
+
+    logged_size = False
+    try:
+        while not (stop_event is not None and stop_event.is_set()):
+            loop_start = time.monotonic()
+            img = grab_full()
+            if img is None:
+                time.sleep(0.1)
+                continue
+
+            if not logged_size:
+                h, w = img.shape[:2]
+                print(f"  [template] frame size: {w}x{h}")
+                for t in templates:
+                    print(f"  [template] {t.tag} template: {t.image.shape[1]}x{t.image.shape[0]}")
+                logged_size = True
+
+            events = detector.process_frame(img, now=loop_start)
+
+            for ev in events:
+                _handle_kill(cfg, ev, s, on_count)
+
+            _check_manual_clip(s)
+
+            elapsed = time.monotonic() - loop_start
+            if elapsed < interval:
+                time.sleep(interval - elapsed)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        release()
 
     if s["web"] is not None:
         s["web"].set_running(False)
