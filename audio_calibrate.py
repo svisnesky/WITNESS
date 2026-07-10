@@ -77,6 +77,11 @@ def record_sound(tag: str = "kill") -> str | None:
     def capture():
         nonlocal error_msg
         try:
+            import comtypes
+            comtypes.CoInitialize()
+        except Exception:
+            pass
+        try:
             with loopback.recorder(samplerate=SAMPLE_RATE, channels=1,
                                    blocksize=chunk_frames) as rec:
                 while recording:
@@ -85,6 +90,11 @@ def record_sound(tag: str = "kill") -> str | None:
                     chunks.append(mono.astype(np.float32))
         except Exception as e:
             error_msg = str(e)
+        finally:
+            try:
+                comtypes.CoUninitialize()
+            except Exception:
+                pass
 
     t = threading.Thread(target=capture, daemon=True)
     t.start()

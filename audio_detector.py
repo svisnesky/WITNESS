@@ -178,6 +178,14 @@ class AudioDetector:
     # --- threads --------------------------------------------------------------
 
     def _capture_loop(self) -> None:
+        import comtypes
+        comtypes.CoInitialize()
+        try:
+            self._capture_loop_inner()
+        finally:
+            comtypes.CoUninitialize()
+
+    def _capture_loop_inner(self) -> None:
         speaker, loopback = _get_loopback(self.device_name)
         print(f"Audio capture: listening to {speaker.name!r} (loopback)")
         chunk_frames = int(self.sr * 0.05)  # 50 ms
