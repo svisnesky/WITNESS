@@ -147,7 +147,7 @@ audio:
 #   Place template PNGs in the templates/ folder.
 # =========================================================================
 template:
-  threshold: 0.55       # 0-1 NCC score to count as a match (lower = more sensitive)
+  threshold: 0.60       # 0-1 NCC score to count as a match (lower = more sensitive)
   cooldown: 3.0         # seconds between detections (global)
   absence_frames: 3     # popup must vanish this many frames before it can re-fire
   confirm_frames: 2     # popup must appear this many frames in a row to count
