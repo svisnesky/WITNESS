@@ -52,7 +52,7 @@ name_match_threshold: 82
 #   screen         -> screenshot the monitor directly with mss (simpler, but our
 #                     process does the screen grab).
 # =========================================================================
-capture_source: "obs_virtualcam"
+capture_source: "screen"
 obs_virtualcam_index: 0     # which webcam device is the OBS Virtual Camera (try 0,1,2)
 monitor_index: 1            # only used when capture_source: screen (1 = primary)
 
@@ -152,14 +152,14 @@ template:
   absence_frames: 3     # popup must vanish this many frames before it can re-fire
   confirm_frames: 2     # popup must appear this many frames in a row to count
   scales:               # multi-scale matching (handles resolution differences)
-    - 0.25
-    - 0.3
-    - 0.35
-    - 0.4
     - 0.5
-    - 0.65
-    - 0.8
+    - 0.75
     - 1.0
+    - 1.25
+    - 1.5
+    - 1.75
+    - 2.0
+    - 2.5
 
 # Set true to print template match scores every frame (like debug_ocr but for templates)
 debug_template: false
