@@ -378,6 +378,31 @@ def _setup_session(cfg, dry_run):
     }
 
 
+def _flush_coalesce(s):
+    """Save one replay clip for all kills accumulated in the coalesce window."""
+    pending = s.get("_coalesce_pending")
+    if not pending:
+        return
+    tags = [p["tag"] for p in pending]
+    counts = [p["count"] for p in pending]
+    combo_tag = "+".join(dict.fromkeys(tags))  # e.g. "down+finisher", deduped, order-preserving
+    label = ",".join(str(c) for c in counts)
+    print(f"  [coalesce] saving clip for kill(s) #{label} [{combo_tag}]")
+    if s["obs"].save_replay():
+        s["last_save"] = time.monotonic()
+        if s["organize"]:
+            rename_clip_async(s["obs"], s["session_id"], combo_tag, counts[0])
+    s["_coalesce_pending"] = []
+    s["_coalesce_deadline"] = 0.0
+
+
+def _check_coalesce(s):
+    """Called each loop iteration; flushes the coalesce buffer when the window expires."""
+    deadline = s.get("_coalesce_deadline", 0.0)
+    if deadline and time.monotonic() >= deadline and s.get("_coalesce_pending"):
+        _flush_coalesce(s)
+
+
 def _handle_kill(cfg, ev, s, on_count=None):
     """Process a single detected kill event. Mutates the session dict `s`."""
     now = time.monotonic()
@@ -393,13 +418,13 @@ def _handle_kill(cfg, ev, s, on_count=None):
     if s["web"] is not None:
         s["web"].record(count, tag, ev.raw_line)
     log_kill(cfg, ev, count)
-    if now - s["last_save"] >= s["min_save"]:
-        if s["obs"].save_replay():
-            s["last_save"] = now
-            if s["organize"]:
-                rename_clip_async(s["obs"], s["session_id"], tag, count)
-    else:
-        print("  (skipped replay save — within min_save_interval)")
+
+    coalesce_secs = cfg.get("kill_coalesce_seconds", 8.0)
+    if "_coalesce_pending" not in s:
+        s["_coalesce_pending"] = []
+        s["_coalesce_deadline"] = 0.0
+    s["_coalesce_pending"].append({"tag": tag, "count": count})
+    s["_coalesce_deadline"] = now + coalesce_secs
 
     if should_overlay(cfg, ev.raw_line):
         print("  -> HEADSHOT (skull popup)")
@@ -484,6 +509,8 @@ def run_live(cfg: dict, dry_run: bool = False, stop_event=None, on_count=None):
                 for ev in events:
                     _handle_kill(cfg, ev, s, on_count)
 
+                _check_coalesce(s)
+
                 if overlay_det is not None and not blocked:
                     oev = overlay_det.process_frame(lines, now=loop_start)
                     if oev:
@@ -498,6 +525,7 @@ def run_live(cfg: dict, dry_run: bool = False, stop_event=None, on_count=None):
         except KeyboardInterrupt:
             pass
 
+    _flush_coalesce(s)
     if s["web"] is not None:
         s["web"].set_running(False)
     _end_session(cfg, s["session_tags"], s["session_start"],
@@ -554,6 +582,7 @@ def _run_live_audio(cfg: dict, dry_run: bool, stop_event, on_count):
                                "finisher": "FINISHER", "assist": "RUNNER ELIM"
                                }.get(ev_tag, "RUNNER DOWN") + f"  ({original_raw})"
                 _handle_kill(cfg, ev, s, on_count)
+            _check_coalesce(s)
             _check_manual_clip(s)
             time.sleep(0.1)
     except KeyboardInterrupt:
@@ -561,6 +590,7 @@ def _run_live_audio(cfg: dict, dry_run: bool, stop_event, on_count):
     finally:
         detector.stop()
 
+    _flush_coalesce(s)
     if s["web"] is not None:
         s["web"].set_running(False)
     _end_session(cfg, s["session_tags"], s["session_start"],
@@ -677,6 +707,7 @@ def _run_live_template(cfg: dict, dry_run: bool, stop_event, on_count):
             for ev in events:
                 _handle_kill(cfg, ev, s, on_count)
 
+            _check_coalesce(s)
             _check_manual_clip(s)
 
             elapsed = time.monotonic() - loop_start
@@ -687,6 +718,7 @@ def _run_live_template(cfg: dict, dry_run: bool, stop_event, on_count):
     finally:
         release()
 
+    _flush_coalesce(s)
     if s["web"] is not None:
         s["web"].set_running(False)
     _end_session(cfg, s["session_tags"], s["session_start"],

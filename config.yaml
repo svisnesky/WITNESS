@@ -79,6 +79,8 @@ poll_fps: 3                 # frames/sec to capture + OCR. Lower = less CPU / be
 ocr_threads: 2              # max CPU threads OCR may use (leaves cores for the game)
 dedup_ttl_seconds: 8.0      # killfeed mode: remember a matched line this long
 min_save_interval_seconds: 2.0  # floor between OBS replay saves (avoid clip spam)
+kill_coalesce_seconds: 8.0  # after a kill, wait this long for more kills before
+                            # saving one clip (groups down+finisher into one clip)
 
 # --- OCR ---
 # engine: "easyocr" (GPU, robust, heavier) or "tesseract" (light, needs install)
