@@ -178,14 +178,14 @@ def rename_clip_async(obs, session_id: str, tag: str, count: int) -> None:
             os.makedirs(sdir, exist_ok=True)
             dest = os.path.join(sdir, f"{count:03d}_{tag}_{time.strftime('%H-%M-%S')}{ext}")
 
-            for attempt in range(4):  # retry if the file is briefly locked
+            for attempt in range(8):  # retry if the file is briefly locked
                 try:
                     shutil.move(path, dest)
                     print(f"  [organize] clip -> {dest}")
                     return
                 except Exception as e:
                     last = e
-                    time.sleep(0.7)
+                    time.sleep(1.5)
             print(f"  [organize] could not move clip: {last}")
         except Exception as e:
             print(f"  [organize] error: {e}")

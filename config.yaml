@@ -162,6 +162,9 @@ template:
     - 2.5
 
 # Set true to print template match scores every frame (like debug_ocr but for templates)
+# Set true to print every OCR read each frame (helps diagnose missed kills)
+debug_ocr: true
+
 debug_template: false
 
 # Set true to print audio match scores every check (like debug_ocr but for audio)
