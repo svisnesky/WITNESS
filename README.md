@@ -1,63 +1,65 @@
 # Marathon Auto Kill Recorder
 
-Automatically saves a video clip and bumps an on-screen counter every time you
-get a kill (or assist) in **Marathon**.
+Automatically clips every kill you get in **Marathon** — and turns each match
+into a highlight reel.
 
-Marathon has no public kill API, so this tool *watches your screen*. By default
-it watches the center-screen personal confirmation popup that appears only when
-you get a down — **"RUNNER DOWN  +XX XP"** — OCRs that region, and when the
-popup appears it (1) tells **OBS** to save its **Replay Buffer** as a clip and
-(2) updates a **Text source** counter in OBS.
+Marathon has no public kill API, so this tool *watches your screen*: it OCRs
+the center-screen reward popup that appears only on your downs
+(**"RUNNER DOWN +15 XP"**, **"FINISHER +50"**, **"PRECISION DOWN +25"**). On
+each kill it saves OBS's **Replay Buffer** as a clip, bumps a counter, and
+feeds a live dashboard you open on an iPad/phone.
 
 ```
-popup region  ->  OCR  ->  detector (phrase seen? edge-trigger)  ->  OBS save replay + counter
+screen -> OCR -> detector -> OBS replay save -> clips, reels, shorts, dashboard
 ```
 
-Watching *your own* "RUNNER DOWN +XP" popup is more reliable than reading the
-kill feed: it fires only for your downs, so there's no name-matching to get
-wrong. (A `killfeed` fallback mode that parses `<killer> <verb> <victim>` and
-matches your name is still available — see `detection_mode` in config.)
+## What you get
+
+- **Auto clips** — every kill saved by OBS; back-to-back down+finisher get
+  grouped into one clip (`kill_coalesce_seconds`).
+- **Live iPad dashboard** — kill counter, feed, kill ding, manual SAVE CLIP
+  button, instant replays (tap any kill to rewatch it seconds later), and a
+  settings panel. Open `http://<PC-IP>:8000` on the same Wi-Fi.
+- **Match highlight reels** — when the EXFILTRATED screen appears, the match's
+  clips become an ESPN-style reel: stat title card, **Play of the Game**
+  (your biggest clip leads), optional music bed, and an optional second
+  version with an announcer voiceover. It pops up on the iPad automatically.
+- **Exfil stat capture** — the summary screen is OCR'd and logged to
+  `stats/match_stats.csv`, with an audit line comparing the game's kill count
+  to what was detected. The screen itself is saved as a PNG.
+- **Vertical Shorts** — each clip also renders as a 1080x1920 short (blurred
+  background, centered gameplay, "KILL #3 - FINISHER" label), upload-ready.
+- **Session recap** — montage, shareable match-card PNG, and an HTML recap at
+  session end.
 
 ## Anti-cheat note
 
-This tool never touches the game: it does **not** read game memory, inject code,
-hook APIs, or send any input. It only reads the *picture* (your screen or OBS's
-output) and controls OBS — the same category as OBS, ShadowPlay, or Medal.tv,
-which give no gameplay advantage. That is not what anti-cheat targets.
-
-To minimize even theoretical exposure, the default `capture_source` is
-**`obs_virtualcam`**: OBS captures the game (universally tolerated) and this tool
-only reads OBS's **Virtual Camera** (a webcam device). Set `capture_source: screen`
-if you'd rather grab the monitor directly. For provably zero risk, run everything
-on a **second PC** fed by a capture card so nothing runs on the game machine.
-
-No guarantees are made about Bungie's policies — use at your own discretion.
+This tool never touches the game: it does **not** read game memory, inject
+code, hook APIs, or send any input. It only reads the *picture* on screen and
+controls OBS — the same category as OBS, ShadowPlay, or Medal.tv. For even
+lower theoretical exposure, set `capture_source: obs_virtualcam` so this tool
+only reads OBS's Virtual Camera; for provably zero risk, run it on a second PC
+fed by a capture card. No guarantees about Bungie's policies — use at your own
+discretion.
 
 ## Requirements
 
-- Windows PC with an **NVIDIA GPU** (the game machine — this must run there).
+- Windows PC (the game machine). NVIDIA GPU recommended for EasyOCR.
 - **OBS 28+** (ships with obs-websocket v5).
-- **Python 3.9+** on the same PC.
+- **Python 3.9+**.
+- **ffmpeg** for reels/shorts/montage: drop `ffmpeg.exe` in the app folder or
+  have it on PATH.
 
 ## 1. One-time OBS setup
 
-1. **WebSocket:** OBS → *Tools → WebSocket Server Settings* → enable it. Note the
-   **Port** (default 4455) and set/copy the **Password**.
-2. **Replay Buffer:** OBS → *Settings → Output → Replay Buffer* → enable, set
-   *Maximum Replay Time* to ~30s. (The tool will start the buffer for you on launch.)
-   Make sure a *Recording Path* is set so clips have somewhere to land.
-3. **Counter text source:** in your Scene, add *Source → Text (GDI+)*, name it
-   exactly **`KillCounter`**. Position/size/font it however you like.
-4. **Virtual Camera** (if using the default `capture_source: obs_virtualcam`):
-   click **Start Virtual Camera** in OBS's Controls dock. Skip if you set
-   `capture_source: screen`.
+1. **WebSocket:** *Tools → WebSocket Server Settings* → enable; note the port
+   (4455) and password.
+2. **Replay Buffer:** *Settings → Output → Replay Buffer* → enable, ~30s max.
+   Set a recording path. The tool starts the buffer on launch.
+3. **Counter text source (optional):** add a *Text (GDI+)* source named
+   `KillCounter` to your scene for an on-stream counter.
 
 ## 2. Install
-
-**Easiest:** after cloning, just double-click the `.bat` launchers (see
-[NEXT_STEPS.md](NEXT_STEPS.md)) — the first run installs everything for you.
-
-Manual equivalent:
 
 ```bat
 git clone <your-repo-url> marathon-kill-recorder
@@ -67,98 +69,86 @@ python -m venv .venv
 pip install -r requirements.txt
 ```
 
-> EasyOCR pulls in PyTorch (large). If you'd rather stay light, set
-> `ocr_engine: tesseract` in `config.yaml` and install the Tesseract binary
-> (https://github.com/UB-Mannheim/tesseract/wiki).
+> EasyOCR pulls in PyTorch (large). To stay light, set
+> `ocr_engine: tesseract` and install the Tesseract binary.
 
 ## 3. Configure
 
-Edit `config.yaml` (defaults are set for **popup mode**):
+Edit `config.yaml`:
 
-- `obs.password` — the OBS websocket password from step 1.
-- `popup_trigger_phrases` — leave `["RUNNER DOWN"]`; add the exact wording for
-  kills/assists once you see them (e.g. `ELIMINATED`, `ASSIST`).
-- `require_xp_reward` — set `true` if non-combat popups cause false triggers.
+- `obs.password` — from OBS setup step 1.
+- Everything else ships with working defaults for 4K popup-mode detection.
 
-(Only needed for the `killfeed` fallback mode: `player_name`, `name_aliases`,
-`trigger_keywords`, `match_mode`.)
+Feature toggles (reels, music, announcer, shorts, montage, coalesce window…)
+can be changed **live from the dashboard's Settings panel** — no restart, no
+file editing. Dashboard changes persist to `settings_override.yaml`.
 
-## 4. Calibrate the detection region
+Optional: drop mp3s into a `music/` folder — each reel picks one at random.
 
-With Marathon (or a screenshot) on screen showing the relevant area — in popup
-mode, the center **"RUNNER DOWN +XP"** popup zone:
-
-```bat
-python calibrate.py
-```
-
-Drag a box around it, press **ENTER**. This writes `detect_region` into
-`config.yaml`. Re-run if you change resolution or HUD scale.
-
-## 5. Test before going live
-
-**Detection logic only** (no OCR, no OBS) — each argument is one frame:
-
-```bat
-python main.py --test-lines "RUNNER DOWN  +15 XP" "SOUTH RELAY"
-```
-
-**OCR on a saved screenshot** (grab one at the moment the popup shows):
-
-```bat
-python main.py --test-image path\to\shot.png
-```
-
-It prints the OCR'd text from your region and whether a kill was detected. Tune
-`ocr_upscale`, `popup_match_threshold`, and `popup_trigger_phrases` until it's
-reliable.
-
-**Full pipeline, but OBS actions only logged** (safe live rehearsal):
-
-```bat
-python main.py --dry-run
-```
-
-Play a bit; watch the console print `KILL #n` on your kills.
-
-## 6. Go live
+## 4. Run
 
 ```bat
 python main.py
 ```
 
-On each detected kill it saves an OBS replay clip, updates the `KillCounter`
-source, and appends a row to `session_log.csv`.
+Open the printed dashboard URL on your iPad, tap the page once (unlocks the
+kill ding), and play. The dashboard's **How to use** button explains every
+feature in-app.
+
+Test without OBS side effects:
+
+```bat
+python main.py --dry-run                 # full pipeline, OBS actions logged only
+python main.py --test-image shot.png     # OCR a saved screenshot
+python test_popup_sim.py                 # detector vs real popup text, no game needed
+```
+
+## Where files go
+
+Everything lands in your OBS recording folder:
+
+```
+Marathon Sessions/<date_time>/
+  001_down_19-25-19.mkv          clips (auto-named by event)
+  002_down+finisher_19-27-52.mkv
+  exfil_19-31-02.png             each match's summary screen
+  reels/match_1.mp4              highlight reel (+ match_1_announced.mp4)
+  replays/*.mp4                  iPad-playable copies of each clip
+  shorts/*.mp4                   vertical renders
+  highlights_<session>.mkv       end-of-session montage
+```
+
+Plus `stats/match_stats.csv` (per-match exfil stats), `stats/cards/` (match
+cards), and `session_log.csv` in the app folder.
 
 ## Files
 
 | file | role |
 |------|------|
-| `config.yaml` | all settings (mode, phrases, region, OBS, timing) |
-| `calibrate.py` | drag-select the detection region |
-| `capture.py` | OBS Virtual Camera / mss region grab |
-| `ocr.py` | preprocess + OCR (EasyOCR / Tesseract) |
-| `detector.py` | `PopupDetector` (default) + `KillDetector` (fallback) — the core logic |
-| `obs_client.py` | obs-websocket: save replay + update counter |
-| `main.py` | wires it together; test/dry-run modes |
-| `tests/` | unit tests for the detectors (`python tests/test_detector.py`) |
+| `config.yaml` | all settings (documented defaults) |
+| `main.py` | wires everything together; test/dry-run modes |
+| `detector.py` | popup/killfeed detection logic |
+| `ocr.py` / `capture.py` | OCR engines / screen + virtual-cam capture |
+| `obs_client.py` | obs-websocket: save replay, counter, record dir |
+| `webserver.py` | iPad dashboard (feed, replays, reels, settings, help) |
+| `exfil_stats.py` | exfil screen OCR -> stats CSV + audit |
+| `match_reel.py` | highlight reels: cards, POTG, music, announcer mix |
+| `announcer.py` | offline TTS (Windows System.Speech) |
+| `shorts.py` | vertical Shorts renders |
+| `montage.py` / `matchcard.py` / `stats.py` | session montage / card / recap |
+| `test_popup_sim.py`, `tests/` | popup simulation + unit tests |
 
 ## Tuning / troubleshooting
 
-- **Missing kills:** raise `ocr_upscale`, lower `popup_match_threshold`, re-calibrate
-  a tighter `detect_region`, or add the exact popup wording to `popup_trigger_phrases`.
-- **False positives:** raise `popup_match_threshold`, set `require_xp_reward: true`,
-  or increase `popup_absence_frames`.
-- **Rapid multi-kills counted as one:** the popup didn't fully disappear between
-  them; lower `popup_absence_frames` and/or raise `poll_fps`.
-- **No clips saved:** confirm Replay Buffer is enabled and a recording path is set;
-  check the OBS websocket password/port.
-- **OCR slow:** EasyOCR's first call loads models (slow once). Ensure GPU is used;
-  or switch to `tesseract`.
-
-## Known limits
-
-- Detection depends on the popup being visible and readable in the captured frame.
-- Back-to-back downs where the popup never fully clears may count as one.
-- Exact wording for kills vs assists vs finishes may differ — add those phrases
-  to `popup_trigger_phrases` once you observe them.
+- **Missed kills:** set `debug_ocr: true` and read what OCR sees; add exact
+  popup wording to `popup_trigger_phrases`. The exfil audit tells you when a
+  match had misses.
+- **False positives:** raise `popup_match_threshold`; add screen-specific words
+  to `suppress_phrases` (NPC popups and the exfil screen are already covered).
+- **No clips saved:** Replay Buffer enabled? Recording path set? WebSocket
+  password right?
+- **No reels/shorts:** ffmpeg missing — put `ffmpeg.exe` in the app folder.
+- **No announcer version:** Windows TTS unavailable in the shell; reels still
+  build clean.
+- **Dashboard silent:** tap the page once after opening (browser autoplay
+  rule), check the SOUND toggle.
