@@ -102,7 +102,8 @@ obs:
   auto_start_replay_buffer: true    # start the Replay Buffer on launch if not running
 
 # --- Kill signal (single-monitor friendly) ---
-play_sound: true    # play a short beep each time a kill is detected
+play_sound: false   # PC-side beep on each kill (off: the iPad dashboard dings
+                    # instead — toggle with its SOUND button)
 sound_file: ""      # optional path to a .wav to play instead of the beep, e.g.
                     # "C:\\Users\\you\\Downloads\\ding.wav"; empty = built-in beep
 

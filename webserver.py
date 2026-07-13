@@ -24,6 +24,8 @@ class LiveState:
         self.events = deque(maxlen=30)
         self._clip_requested = False
         self.reels = []  # [{label, path}] — per-match highlight reels
+        self.replays = []  # [{id, label, path, time}] — per-kill instant replays
+        self._replay_seq = 0
 
     def reset(self):
         """Clear counts/feed for a fresh session (server stays up)."""
@@ -32,6 +34,22 @@ class LiveState:
             self.events.clear()
             self._clip_requested = False
             self.reels.clear()
+            self.replays.clear()
+
+    def add_replay(self, label, path):
+        with self._lock:
+            self._replay_seq += 1
+            self.replays.append({"id": self._replay_seq, "label": label,
+                                 "path": path, "time": time.strftime("%H:%M:%S")})
+            if len(self.replays) > 20:
+                self.replays.pop(0)
+
+    def get_replay_path(self, rid):
+        with self._lock:
+            for r in self.replays:
+                if r["id"] == rid:
+                    return r["path"]
+            return None
 
     def add_reel(self, label, path):
         with self._lock:
@@ -74,7 +92,9 @@ class LiveState:
                     "started": self.started,
                     "events": list(self.events),
                     "reels": [{"i": i, "label": r["label"], "time": r["time"]}
-                              for i, r in enumerate(self.reels)]}
+                              for i, r in enumerate(self.reels)],
+                    "replays": [{"i": r["id"], "label": r["label"], "time": r["time"]}
+                                for r in reversed(self.replays)]}
 
 
 def local_ip():
@@ -144,6 +164,15 @@ def start_web(state, port, base_dir):
                 elif path.startswith("/reel/"):
                     try:
                         fp = state.get_reel_path(int(path.rsplit("/", 1)[1]))
+                    except ValueError:
+                        fp = None
+                    if fp and os.path.exists(fp):
+                        self._send_video(fp)
+                    else:
+                        self.send_error(404)
+                elif path.startswith("/replay/"):
+                    try:
+                        fp = state.get_replay_path(int(path.rsplit("/", 1)[1]))
                     except ValueError:
                         fp = None
                     if fp and os.path.exists(fp):
@@ -256,9 +285,11 @@ PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
     <button class="clipbtn" id="clip" onclick="saveClip()">SAVE CLIP</button>
   </div>
   <div class="btnrow">
+    <button class="fsbtn" id="snd" onclick="toggleSound()">SOUND: ON</button>
     <button class="fsbtn" id="fs" onclick="goFull()">Full screen</button>
   </div>
   <div class="reels" id="reels" style="display:none"><h3>Match Highlights</h3><div id="reellist"></div></div>
+  <div class="reels" id="replays" style="display:none"><h3>Instant Replays</h3><div id="replaylist"></div></div>
   <div class="feed" id="feed"><div class="empty">Waiting for kills...</div></div>
   <div class="hint" id="hint">iPad: tap Share &rarr; Add to Home Screen for full screen.</div>
 </div>
@@ -272,6 +303,8 @@ PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
     try{
       var r = await fetch('/status',{cache:'no-store'});
       var d = await r.json();
+      if (d.count > lastCount && lastCount >= 0) ding();
+      lastCount = d.count;
       document.getElementById('count').textContent = d.count;
       var st = document.querySelector('.status');
       st.className = 'status' + (d.running ? ' live' : '');
@@ -304,16 +337,70 @@ PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
         lastReels = reels.length;
       } else { box.style.display='none'; lastReels = 0; }
       reelSig = sig;
+      var reps = d.replays || [];
+      var rbox = document.getElementById('replays');
+      var rsig = reps.map(function(r){ return r.i; }).join('|');
+      if (reps.length){
+        rbox.style.display = 'block';
+        if (rsig !== repSig){
+          document.getElementById('replaylist').innerHTML = reps.map(function(r){
+            return '<div class="reelrow" onclick="openReplay('+r.i+',this.dataset.label)" data-label="'+
+                   r.label.replace(/"/g,'')+'"><span class="play">&#9658;</span>'+
+                   '<span>'+r.label.replace(/</g,'&lt;')+'</span>'+
+                   '<span class="t">'+r.time+'</span></div>';
+          }).join('');
+        }
+      } else { rbox.style.display='none'; }
+      repSig = rsig;
     }catch(err){ document.getElementById('statustext').textContent='OFFLINE'; }
     setTimeout(tick, 1000);
   }
-  var lastReels = -1, reelSig = '';
+  var lastReels = -1, reelSig = '', repSig = '', lastCount = -1;
   tick();
+
+  // --- kill ding (WebAudio, unlocked by the first tap anywhere) ---
+  var audioCtx = null;
+  var soundOn = localStorage.getItem('killSound') !== 'off';
+  document.getElementById('snd').textContent = 'SOUND: ' + (soundOn ? 'ON' : 'OFF');
+  function initAudio(){
+    try {
+      if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      if (audioCtx.state === 'suspended') audioCtx.resume();
+    } catch(e){}
+  }
+  document.addEventListener('pointerdown', initAudio);
+  function ding(){
+    if (!soundOn || !audioCtx) return;
+    var t = audioCtx.currentTime;
+    [[880, 0], [1318.5, 0.09]].forEach(function(p){
+      var o = audioCtx.createOscillator(), g = audioCtx.createGain();
+      o.type = 'sine'; o.frequency.value = p[0];
+      o.connect(g); g.connect(audioCtx.destination);
+      g.gain.setValueAtTime(0.0001, t + p[1]);
+      g.gain.exponentialRampToValueAtTime(0.35, t + p[1] + 0.02);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + p[1] + 0.28);
+      o.start(t + p[1]); o.stop(t + p[1] + 0.32);
+    });
+  }
+  function toggleSound(){
+    soundOn = !soundOn;
+    localStorage.setItem('killSound', soundOn ? 'on' : 'off');
+    document.getElementById('snd').textContent = 'SOUND: ' + (soundOn ? 'ON' : 'OFF');
+    initAudio();
+    if (soundOn) ding();  // audible confirmation it's unlocked + on
+  }
 
   function openReel(i, label){
     var v = document.getElementById('reelvid');
     document.getElementById('mlabel').textContent = label || '';
     v.src = '/reel/'+i;
+    document.getElementById('modal').classList.add('open');
+    v.play().catch(function(){});
+  }
+  function openReplay(i, label){
+    var v = document.getElementById('reelvid');
+    document.getElementById('mlabel').textContent = label || '';
+    v.src = '/replay/'+i;
     document.getElementById('modal').classList.add('open');
     v.play().catch(function(){});
   }

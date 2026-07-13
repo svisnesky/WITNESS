@@ -381,7 +381,46 @@ def _setup_session(cfg, dry_run):
         "min_save": cfg.get("min_save_interval_seconds", 2.0),
         "match_clips": [],   # organized clip paths since the last exfil (this match)
         "match_num": 0,
+        "cfg": cfg,
     }
+
+
+def _clip_ready_callback(s, tag, count):
+    """Callback for rename_clip_async: collect the clip for the match reel and
+    put it on the iPad as an instant replay."""
+    def on_done(dest):
+        s["match_clips"].append(dest)
+        _register_replay_async(s, dest, tag, count)
+    return on_done
+
+
+def _register_replay_async(s, clip_path, tag, count):
+    """Remux the organized .mkv to .mp4 (stream copy, ~instant) so Safari can
+    play it, and add it to the dashboard's Instant Replays list."""
+    if s["web"] is None:
+        return
+    def work():
+        try:
+            import subprocess
+            import montage
+            base = os.path.dirname(os.path.abspath(__file__))
+            rdir = os.path.join(os.path.dirname(clip_path), "replays")
+            os.makedirs(rdir, exist_ok=True)
+            mp4 = os.path.join(rdir, os.path.splitext(os.path.basename(clip_path))[0] + ".mp4")
+            ff = montage.find_ffmpeg(base, s["cfg"])
+            r = subprocess.run(
+                [ff, "-y", "-i", clip_path, "-c", "copy", "-movflags", "+faststart", mp4],
+                capture_output=True, text=True,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+            if r.returncode == 0 and os.path.exists(mp4):
+                s["web"].add_replay(f"Kill #{count} — {tag}", mp4)
+                print(f"  [replay] kill #{count} ready on the iPad")
+            else:
+                tail = (r.stderr.strip().splitlines() or ["(no output)"])[-1]
+                print(f"  [replay] remux failed: {tail}")
+        except Exception as e:
+            print(f"  [replay] error: {e}")
+    threading.Thread(target=work, daemon=True).start()
 
 
 def _flush_coalesce(s):
@@ -398,7 +437,7 @@ def _flush_coalesce(s):
         s["last_save"] = time.monotonic()
         if s["organize"]:
             rename_clip_async(s["obs"], s["session_id"], combo_tag, counts[0],
-                              on_done=s["match_clips"].append)
+                              on_done=_clip_ready_callback(s, combo_tag, counts[0]))
     s["_coalesce_pending"] = []
     s["_coalesce_deadline"] = 0.0
 
@@ -525,7 +564,8 @@ def _check_manual_clip(s):
                 print("  [manual clip saved from iPad]")
                 if s["organize"]:
                     rename_clip_async(s["obs"], s["session_id"], "manual",
-                                      s["count"], on_done=s["match_clips"].append)
+                                      s["count"],
+                                      on_done=_clip_ready_callback(s, "manual", s["count"]))
             else:
                 print("  [manual clip: replay save failed]")
         else:
