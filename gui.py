@@ -281,11 +281,9 @@ class SettingsWindow:
             tk.Label(row, text=label, bg=BG, fg=TEXT,
                      font=("Consolas", 10)).pack(side="left")
             if typ is bool:
-                var = tk.BooleanVar(value=bool(cfg.get(key, default)))
-                tk.Checkbutton(row, variable=var, bg=BG, selectcolor=PANEL,
-                               activebackground=BG, cursor="hand2",
-                               command=lambda k=key, v=var: self._save(k, v.get())
-                               ).pack(side="right")
+                # explicit ON/OFF button — native Checkbutton indicators are
+                # invisible on a dark theme on Windows
+                self._make_toggle(row, key, bool(cfg.get(key, default)))
             else:
                 var = tk.StringVar(value=str(cfg.get(key, default)))
                 e = tk.Entry(row, textvariable=var, width=6, bg=PANEL, fg=TEXT,
@@ -294,7 +292,27 @@ class SettingsWindow:
                 e.pack(side="right")
                 e.bind("<FocusOut>", lambda _e, k=key, v=var: self._save_num(k, v))
                 e.bind("<Return>", lambda _e, k=key, v=var: self._save_num(k, v))
-            self.vars[key] = var
+                self.vars[key] = var
+
+    def _make_toggle(self, row, key, initial):
+        btn = tk.Button(row, width=5, relief="flat", borderwidth=0,
+                        font=("Consolas", 9, "bold"), cursor="hand2")
+
+        def render(val):
+            btn.config(text="ON" if val else "OFF",
+                       bg=ACCENT if val else LINE,
+                       fg=BG if val else MUTED,
+                       activebackground="#bfe038" if val else LINE,
+                       activeforeground=BG if val else TEXT)
+
+        def flip():
+            val = not bool(self.cfg.get(key, initial))
+            render(val)
+            self._save(key, val)
+
+        btn.config(command=flip)
+        render(initial)
+        btn.pack(side="right")
 
     def _save(self, key, value):
         self.cfg[key] = value
