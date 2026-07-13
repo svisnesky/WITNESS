@@ -108,13 +108,15 @@ def pick_potg(clips: list[dict]):
 
 
 def find_music(music_dir: str) -> str:
-    """First music file in the folder (drop one in music/ to score the reels)."""
+    """A random music file from the folder — drop several in music/ and each
+    reel gets a different soundtrack."""
     if not os.path.isdir(music_dir):
         return ""
-    for f in sorted(os.listdir(music_dir)):
-        if f.lower().endswith(MUSIC_EXTS):
-            return os.path.join(music_dir, f)
-    return ""
+    tracks = [f for f in os.listdir(music_dir) if f.lower().endswith(MUSIC_EXTS)]
+    if not tracks:
+        return ""
+    import random
+    return os.path.join(music_dir, random.choice(tracks))
 
 
 def build_match_reel(clips, out_path: str, ffmpeg: str,
