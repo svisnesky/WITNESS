@@ -431,6 +431,26 @@ def _handle_kill(cfg, ev, s, on_count=None):
         show_overlay(cfg)
 
 
+def _maybe_capture_exfil(cfg, engine, lines, s, now):
+    """When the EXFILTRATED summary screen is up, grab it once and log the
+    match stats + a kill-count audit. Re-arms after 3 minutes (next match)."""
+    if now - s.get("_last_exfil", -1e9) < 180:
+        return
+    try:
+        import exfil_stats
+        if not exfil_stats.looks_like_exfil(lines):
+            return
+        s["_last_exfil"] = now
+        stats_d = exfil_stats.capture_exfil_stats(cfg, engine)
+        print(exfil_stats.report(stats_d, Counter(s["session_tags"])))
+        if stats_d:
+            base = os.path.dirname(os.path.abspath(__file__))
+            exfil_stats.log_match_stats(base, s["session_id"], stats_d,
+                                        len(s["session_tags"]))
+    except Exception as e:
+        print(f"  [exfil] error: {e}")
+
+
 def _check_manual_clip(s):
     """If the iPad 'SAVE CLIP' button was tapped, save a replay now."""
     web = s["web"]
@@ -510,6 +530,9 @@ def run_live(cfg: dict, dry_run: bool = False, stop_event=None, on_count=None):
                     _handle_kill(cfg, ev, s, on_count)
 
                 _check_coalesce(s)
+
+                if blocked and cfg.get("capture_exfil_stats", True):
+                    _maybe_capture_exfil(cfg, engine, lines, s, loop_start)
 
                 if overlay_det is not None and not blocked:
                     oev = overlay_det.process_frame(lines, now=loop_start)
@@ -773,15 +796,28 @@ def _end_session(cfg, tags, start_monotonic, start_wall, dry_run, obs=None, sess
             print(f"(card error: {e})")
 
     # Highlight montage of this session's clips (needs ffmpeg + organized clips).
-    if cfg.get("make_montage", True) and obs is not None and session_id:
+    session_dir = ""
+    if obs is not None and session_id:
+        rec = obs.get_record_directory()
+        session_dir = os.path.join(rec, "Marathon Sessions", session_id) if rec else ""
+    if cfg.get("make_montage", True) and session_dir:
         try:
             import montage
             base = os.path.dirname(os.path.abspath(__file__))
-            rec = obs.get_record_directory()
-            session_dir = os.path.join(rec, "Marathon Sessions", session_id) if rec else ""
             montage.build_montage(session_dir, montage.find_ffmpeg(base, cfg))
         except Exception as e:
             print(f"(montage error: {e})")
+
+    # Vertical Shorts render of each clip (needs ffmpeg + organized clips).
+    if cfg.get("make_shorts", True) and session_dir:
+        try:
+            import montage
+            import shorts
+            base = os.path.dirname(os.path.abspath(__file__))
+            shorts.build_shorts(session_dir, montage.find_ffmpeg(base, cfg),
+                                with_labels=cfg.get("shorts_labels", True))
+        except Exception as e:
+            print(f"(shorts error: {e})")
 
 
 def _tray_icon_image(base: str, cfg: dict):

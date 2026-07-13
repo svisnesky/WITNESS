@@ -127,7 +127,16 @@ organize_clips: true   # rename each saved clip by event+time and sort into a
 make_card: true        # at session end, save a shareable match-card PNG to stats/cards/
 make_montage: true     # at session end, stitch the session's clips into one
                        # highlight reel (needs ffmpeg)
+make_shorts: true      # at session end, render each clip as a 1080x1920 vertical
+                       # (blurred background + centered gameplay) ready for
+                       # YouTube Shorts/TikTok -> session folder /shorts/
+shorts_labels: true    # bake "KILL #3 - FINISHER" text into each short
 ffmpeg_path: ""        # leave empty to auto-find ffmpeg.exe in this folder / PATH
+
+# At match end, when the EXFILTRATED summary screen appears, grab it once and
+# log the real match stats (elims/downs/damage/run time) to stats/match_stats.csv
+# — and print an audit: game's kill count vs what we detected.
+capture_exfil_stats: true
 
 # --- Live web dashboard (view on a phone/iPad browser over the LAN) ---
 web_dashboard: true    # serve a live kill feed page
