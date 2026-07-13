@@ -14,6 +14,36 @@ from collections import deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
+# Dashboard-editable settings: key -> (default, type). All of these are read
+# at use-time in the main loop, so changes apply live — no restart needed.
+SETTINGS = {
+    "play_sound": (False, bool),            # PC-side beep on kills
+    "kill_coalesce_seconds": (8.0, float),  # group kills into one clip window
+    "make_match_reels": (True, bool),
+    "reel_music": (True, bool),
+    "reel_announcer": (True, bool),
+    "make_shorts": (True, bool),
+    "shorts_labels": (True, bool),
+    "make_montage": (True, bool),
+    "make_card": (True, bool),
+    "capture_exfil_stats": (True, bool),
+}
+
+# Human labels for the settings panel, in display order.
+SETTINGS_META = [
+    ("kill_coalesce_seconds", "Group kills within (seconds)"),
+    ("make_match_reels", "Match highlight reels"),
+    ("reel_music", "Reel music bed"),
+    ("reel_announcer", "Reel announcer version"),
+    ("make_shorts", "Vertical Shorts renders"),
+    ("shorts_labels", "Shorts kill labels"),
+    ("make_montage", "Session montage"),
+    ("make_card", "Session match card"),
+    ("capture_exfil_stats", "Exfil stats capture"),
+    ("play_sound", "PC beep on kill"),
+]
+
+
 class LiveState:
     def __init__(self):
         self._lock = threading.Lock()
@@ -26,6 +56,8 @@ class LiveState:
         self.reels = []  # [{label, path}] — per-match highlight reels
         self.replays = []  # [{id, label, path, time}] — per-kill instant replays
         self._replay_seq = 0
+        self._cfg = None       # live config dict (bound per session)
+        self._save_cb = None   # persists changed settings to disk
 
     def reset(self):
         """Clear counts/feed for a fresh session (server stays up)."""
@@ -50,6 +82,41 @@ class LiveState:
                 if r["id"] == rid:
                     return r["path"]
             return None
+
+    def bind_config(self, cfg, save_cb):
+        """Attach the live session config so the dashboard can read/change it."""
+        with self._lock:
+            self._cfg = cfg
+            self._save_cb = save_cb
+
+    def get_settings(self):
+        with self._lock:
+            if self._cfg is None:
+                return {}
+            return {k: self._cfg.get(k, d) for k, (d, _) in SETTINGS.items()}
+
+    def apply_settings(self, changes: dict):
+        """Validate + apply dashboard-changed settings to the live config and
+        persist them. Returns the settings dict after applying."""
+        with self._lock:
+            if self._cfg is None:
+                return {}
+            clean = {}
+            for k, v in changes.items():
+                if k not in SETTINGS:
+                    continue
+                _, typ = SETTINGS[k]
+                try:
+                    clean[k] = bool(v) if typ is bool else max(0.0, float(v))
+                except (TypeError, ValueError):
+                    continue
+            self._cfg.update(clean)
+            if clean and self._save_cb is not None:
+                try:
+                    self._save_cb(clean)
+                except Exception as e:
+                    print(f"  [settings] could not persist: {e}")
+        return self.get_settings()
 
     def add_reel(self, label, path):
         with self._lock:
@@ -161,6 +228,11 @@ def start_web(state, port, base_dir):
                 if path == "/status":
                     self._send(json.dumps(state.snapshot()).encode(),
                                "application/json", cache=False)
+                elif path == "/config":
+                    self._send(json.dumps({
+                        "settings": state.get_settings(),
+                        "meta": SETTINGS_META,
+                    }).encode(), "application/json", cache=False)
                 elif path.startswith("/reel/"):
                     try:
                         fp = state.get_reel_path(int(path.rsplit("/", 1)[1]))
@@ -197,6 +269,15 @@ def start_web(state, port, base_dir):
                 if path == "/clip":
                     state.request_clip()
                     self._send(b'{"ok":true}', "application/json", cache=False)
+                elif path == "/config":
+                    n = int(self.headers.get("Content-Length") or 0)
+                    try:
+                        changes = json.loads(self.rfile.read(n) or b"{}")
+                    except ValueError:
+                        changes = {}
+                    result = state.apply_settings(changes if isinstance(changes, dict) else {})
+                    self._send(json.dumps({"settings": result}).encode(),
+                               "application/json", cache=False)
                 else:
                     self.send_error(404)
             except (BrokenPipeError, ConnectionResetError):
@@ -264,6 +345,28 @@ PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
   .modal .mlabel { color:var(--text); font-size:.85rem; margin:14px 0 10px; }
   .modal .close { background:var(--panel); color:var(--text); border:1px solid var(--line);
     border-radius:8px; padding:10px 26px; font:inherit; font-size:.8rem; cursor:pointer; }
+  .settings { background:var(--panel); border:1px solid var(--line); border-radius:14px;
+    padding:18px; max-width:480px; width:100%; max-height:80vh; overflow-y:auto;
+    text-align:left; }
+  .settings h2 { margin:0 0 14px; font-size:.85rem; letter-spacing:.14em;
+    text-transform:uppercase; color:var(--accent); }
+  .setrow { display:flex; align-items:center; justify-content:space-between;
+    gap:12px; padding:11px 2px; border-bottom:1px solid var(--line); font-size:.85rem; }
+  .setrow:last-of-type { border-bottom:none; }
+  .setrow input[type=number] { width:76px; background:var(--bg); color:var(--text);
+    border:1px solid var(--line); border-radius:6px; padding:7px 9px; font:inherit;
+    font-size:.85rem; text-align:center; }
+  .switch { position:relative; width:52px; height:30px; flex:none; }
+  .switch input { opacity:0; width:0; height:0; }
+  .slider { position:absolute; inset:0; background:var(--line); border-radius:15px;
+    cursor:pointer; transition:background .15s; }
+  .slider:before { content:''; position:absolute; width:24px; height:24px; left:3px;
+    top:3px; background:var(--muted); border-radius:50%; transition:transform .15s, background .15s; }
+  .switch input:checked + .slider { background:var(--accent); }
+  .switch input:checked + .slider:before { transform:translateX(22px); background:#0b0f12; }
+  .savedmsg { color:var(--accent); font-size:.75rem; text-align:center; margin-top:10px;
+    opacity:0; transition:opacity .3s; }
+  .savedmsg.show { opacity:1; }
   .feed { text-align:left; display:flex; flex-direction:column; gap:8px; }
   .row { background:var(--panel); border:1px solid var(--line); border-radius:10px;
     padding:11px 14px; display:flex; align-items:center; gap:12px; }
@@ -286,6 +389,7 @@ PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
   </div>
   <div class="btnrow">
     <button class="fsbtn" id="snd" onclick="toggleSound()">SOUND: ON</button>
+    <button class="fsbtn" onclick="openSettings()">Settings</button>
     <button class="fsbtn" id="fs" onclick="goFull()">Full screen</button>
   </div>
   <div class="reels" id="reels" style="display:none"><h3>Match Highlights</h3><div id="reellist"></div></div>
@@ -297,6 +401,15 @@ PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
   <video id="reelvid" controls playsinline></video>
   <div class="mlabel" id="mlabel"></div>
   <button class="close" onclick="closeReel()">CLOSE</button>
+</div>
+<div class="modal" id="setmodal">
+  <div class="settings">
+    <h2>Settings</h2>
+    <div id="setlist"></div>
+    <div class="savedmsg" id="savedmsg">Saved — applies immediately</div>
+  </div>
+  <div style="height:14px"></div>
+  <button class="close" onclick="closeSettings()">CLOSE</button>
 </div>
 <script>
   async function tick(){
@@ -408,6 +521,42 @@ PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
     var v = document.getElementById('reelvid');
     v.pause(); v.removeAttribute('src'); v.load();
     document.getElementById('modal').classList.remove('open');
+  }
+
+  // --- settings panel ---
+  async function openSettings(){
+    try {
+      var r = await fetch('/config', {cache:'no-store'});
+      var d = await r.json();
+      var html = d.meta.map(function(m){
+        var key = m[0], label = m[1], val = d.settings[key];
+        if (typeof val === 'boolean'){
+          return '<div class="setrow"><span>'+label+'</span>'+
+                 '<label class="switch"><input type="checkbox" data-key="'+key+'"'+
+                 (val ? ' checked' : '')+' onchange="saveSetting(this)">'+
+                 '<span class="slider"></span></label></div>';
+        }
+        return '<div class="setrow"><span>'+label+'</span>'+
+               '<input type="number" step="0.5" min="0" data-key="'+key+'" value="'+val+'"'+
+               ' onchange="saveSetting(this)"></div>';
+      }).join('');
+      document.getElementById('setlist').innerHTML = html;
+      document.getElementById('setmodal').classList.add('open');
+    } catch(e){}
+  }
+  function closeSettings(){
+    document.getElementById('setmodal').classList.remove('open');
+  }
+  async function saveSetting(el){
+    var key = el.dataset.key;
+    var val = el.type === 'checkbox' ? el.checked : parseFloat(el.value);
+    try {
+      await fetch('/config', {method:'POST', headers:{'Content-Type':'application/json'},
+                              body: JSON.stringify(Object.fromEntries([[key, val]]))});
+      var m = document.getElementById('savedmsg');
+      m.classList.add('show');
+      setTimeout(function(){ m.classList.remove('show'); }, 1800);
+    } catch(e){}
   }
 
   async function saveClip(){

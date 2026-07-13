@@ -34,7 +34,34 @@ _web_server = None
 
 def load_config(path=CONFIG_PATH) -> dict:
     with open(path) as f:
-        return yaml.safe_load(f)
+        cfg = yaml.safe_load(f)
+    # Settings changed from the web dashboard live in an override file so the
+    # commented config.yaml never gets rewritten.
+    override = os.path.join(os.path.dirname(os.path.abspath(path)) or ".",
+                            "settings_override.yaml")
+    if os.path.exists(override):
+        try:
+            with open(override) as f:
+                cfg.update(yaml.safe_load(f) or {})
+        except Exception as e:
+            print(f"(could not read settings_override.yaml: {e})")
+    return cfg
+
+
+def save_setting_overrides(changes: dict) -> None:
+    """Persist dashboard-changed settings to settings_override.yaml."""
+    base = os.path.dirname(os.path.abspath(__file__))
+    path = os.path.join(base, "settings_override.yaml")
+    current = {}
+    if os.path.exists(path):
+        try:
+            with open(path) as f:
+                current = yaml.safe_load(f) or {}
+        except Exception:
+            current = {}
+    current.update(changes)
+    with open(path, "w") as f:
+        yaml.safe_dump(current, f, default_flow_style=False)
 
 
 def build_detector(cfg: dict):
@@ -362,6 +389,7 @@ def _setup_session(cfg, dry_run):
                 _web_server = webserver.start_web(_web_state, port, base)
             web = _web_state
             web.reset()
+            web.bind_config(cfg, save_setting_overrides)
             web.set_running(True)
             print(f"Live view: http://{webserver.local_ip()}:{port}  "
                   f"(open in your iPad/phone browser on the same Wi-Fi)")
@@ -385,11 +413,11 @@ def _setup_session(cfg, dry_run):
     }
 
 
-def _clip_ready_callback(s, tag, count):
-    """Callback for rename_clip_async: collect the clip for the match reel and
-    put it on the iPad as an instant replay."""
+def _clip_ready_callback(s, tag, count, kills=1):
+    """Callback for rename_clip_async: collect the clip (with its kill count,
+    for Play of the Game) and put it on the iPad as an instant replay."""
     def on_done(dest):
-        s["match_clips"].append(dest)
+        s["match_clips"].append({"path": dest, "kills": kills, "tag": tag})
         _register_replay_async(s, dest, tag, count)
     return on_done
 
@@ -437,7 +465,8 @@ def _flush_coalesce(s):
         s["last_save"] = time.monotonic()
         if s["organize"]:
             rename_clip_async(s["obs"], s["session_id"], combo_tag, counts[0],
-                              on_done=_clip_ready_callback(s, combo_tag, counts[0]))
+                              on_done=_clip_ready_callback(s, combo_tag, counts[0],
+                                                           kills=len(counts)))
     s["_coalesce_pending"] = []
     s["_coalesce_deadline"] = 0.0
 
@@ -523,7 +552,9 @@ def _build_match_reel_async(cfg, s, session_dir, stats_d):
             import match_reel
             import montage
             base = os.path.dirname(os.path.abspath(__file__))
+            ffmpeg = montage.find_ffmpeg(base, cfg)
             out = os.path.join(session_dir, "reels", f"match_{match_num}.mp4")
+            total_kills = sum(c.get("kills", 1) for c in clips)
             sub = []
             b1 = []
             if stats_d.get("runner_elims") is not None:
@@ -538,15 +569,35 @@ def _build_match_reel_async(cfg, s, session_dir, stats_d):
             b2.append(time.strftime("%Y-%m-%d %H:%M"))
             sub.append("  ·  ".join(b2))
 
+            music = ""
+            if cfg.get("reel_music", True):
+                music = match_reel.find_music(os.path.join(base, "music"))
+
             ok = match_reel.build_match_reel(
-                clips, out, montage.find_ffmpeg(base, cfg),
-                "MATCH HIGHLIGHTS", len(clips), sub,
-                os.path.join(base, "marathon_wordmark.png"))
+                clips, out, ffmpeg,
+                "MATCH HIGHLIGHTS", total_kills, sub,
+                os.path.join(base, "marathon_wordmark.png"), music)
             if ok:
                 print(f"  [reel] match {match_num} highlights -> {out}")
                 if s["web"] is not None:
                     s["web"].add_reel(f"Match {match_num} — {len(clips)} clip"
                                       f"{'s' if len(clips) != 1 else ''}", out)
+                if cfg.get("reel_announcer", True):
+                    import announcer
+                    wav = announcer.synth_to_wav(
+                        announcer.stat_line(total_kills, stats_d),
+                        os.path.join(session_dir, "reels", f"match_{match_num}_tts.wav"))
+                    if wav:
+                        aout = os.path.join(session_dir, "reels",
+                                            f"match_{match_num}_announced.mp4")
+                        if match_reel.add_announcer(out, aout, wav, ffmpeg):
+                            print(f"  [reel] announced version -> {aout}")
+                            if s["web"] is not None:
+                                s["web"].add_reel(f"Match {match_num} (announced)", aout)
+                        try:
+                            os.remove(wav)
+                        except OSError:
+                            pass
         except Exception as e:
             print(f"  [reel] error: {e}")
 
