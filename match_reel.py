@@ -121,8 +121,11 @@ def find_music(music_dir: str) -> str:
 
 def build_match_reel(clips, out_path: str, ffmpeg: str,
                      title: str, kills: int, sub_lines: list[str],
-                     wordmark_path: str = "", music_path: str = "") -> bool:
-    """Title card [+ POTG card] + clips [+ music bed] -> one mp4."""
+                     wordmark_path: str = "", music_path: str = "",
+                     music_volume: float = 0.08) -> bool:
+    """Title card [+ POTG card] + clips [+ music bed] -> one mp4.
+
+    music_volume is 0-1 (0.08 = quiet bed under the game audio)."""
     clips = _normalize_clips(clips)
     if not clips:
         print("  [reel] no clips on disk to build a reel from")
@@ -185,8 +188,9 @@ def build_match_reel(clips, out_path: str, ffmpeg: str,
     a_out = "[cat]"
     if music_path and os.path.exists(music_path):
         cmd += ["-stream_loop", "-1", "-i", music_path]
+        vol = max(0.0, float(music_volume))
         chains.append(f"[{in_i}:a]aformat=sample_rates=48000:channel_layouts=stereo,"
-                      f"volume=0.22[mus]")
+                      f"volume={vol}[mus]")
         chains.append("[cat][mus]amix=inputs=2:duration=first:normalize=0[mixed]")
         a_out = "[mixed]"
 

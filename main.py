@@ -576,7 +576,8 @@ def _build_match_reel_async(cfg, s, session_dir, stats_d):
             ok = match_reel.build_match_reel(
                 clips, out, ffmpeg,
                 "MATCH HIGHLIGHTS", total_kills, sub,
-                os.path.join(base, "marathon_wordmark.png"), music)
+                os.path.join(base, "marathon_wordmark.png"), music,
+                music_volume=cfg.get("reel_music_volume", 0.08))
             if ok:
                 print(f"  [reel] match {match_num} highlights -> {out}")
                 if s["web"] is not None:

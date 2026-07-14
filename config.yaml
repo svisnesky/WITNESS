@@ -143,6 +143,8 @@ capture_exfil_stats: true
 # + that match's clips) into <session>/reels/ and pop it up on the iPad
 # dashboard for instant rewatching.
 make_match_reels: true
+reel_music_volume: 0.08   # 0-1 loudness of the music bed under the game audio
+                          # (0.08 = quiet background; 0 = off, 0.22 = old level)
 
 # --- Live web dashboard (view on a phone/iPad browser over the LAN) ---
 web_dashboard: true    # serve a live kill feed page
