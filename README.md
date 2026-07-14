@@ -116,10 +116,30 @@ Marathon Sessions/<date_time>/
   replays/*.mp4                  iPad-playable copies of each clip
   shorts/*.mp4                   vertical renders
   highlights_<session>.mkv       end-of-session montage
+  session_reel.mp4               end-of-session reel (title card + POTG)
 ```
 
 Plus `stats/match_stats.csv` (per-match exfil stats), `stats/cards/` (match
 cards), and `session_log.csv` in the app folder.
+
+## YouTube auto-upload (optional)
+
+When on, the `session_reel.mp4` uploads to your YouTube as **unlisted** at
+session end and prints the link. One-time setup:
+
+1. Install the libraries:
+   `.venv\Scripts\python -m pip install google-api-python-client google-auth-oauthlib google-auth-httplib2`
+2. At [console.cloud.google.com](https://console.cloud.google.com): create a
+   project, then **APIs & Services → Library → enable "YouTube Data API v3"**.
+3. **OAuth consent screen → External**, fill in an app name + your email, and
+   add your own Google account under **Test users**.
+4. **Credentials → Create credentials → OAuth client ID → Desktop app**.
+   Download the JSON, rename it `client_secret.json`, drop it in this folder.
+5. Set `youtube_upload_session_reel: true` in `config.yaml`.
+
+First upload opens a browser once to approve (click through the "unverified
+app" notice — it's your own). The token is cached; it never asks again. YouTube
+allows ~6 uploads/day, and this uploads once per session, so you're fine.
 
 ## Files
 
