@@ -980,6 +980,70 @@ def _end_session(cfg, tags, start_monotonic, start_wall, dry_run, obs=None, sess
         except Exception as e:
             print(f"(shorts error: {e})")
 
+    # Session highlight reel (all clips + title card + Play of the Game), and
+    # optional unlisted YouTube upload of just that one video.
+    if session_dir and (cfg.get("make_session_reel", True)
+                        or cfg.get("youtube_upload_session_reel", False)):
+        _build_session_reel_and_upload(cfg, session_dir, tags)
+
+
+def _session_clips_from_dir(session_dir: str):
+    """List this session's organized clips (top level only) as reel dicts,
+    inferring the kill count from the filename tag (e.g. down+finisher = 2)."""
+    import montage
+    out = []
+    for f in sorted(os.listdir(session_dir)):
+        if not f.lower().endswith(montage.VIDEO_EXTS):
+            continue
+        if f.lower().startswith("highlights") or f.lower().startswith("session"):
+            continue
+        # NNN_tag_time.ext  ->  tag
+        parts = f.split("_")
+        tag = parts[1] if len(parts) >= 3 else "kill"
+        kills = len([p for p in tag.split("+") if p]) or 1
+        out.append({"path": os.path.join(session_dir, f), "kills": kills, "tag": tag})
+    return out
+
+
+def _build_session_reel_and_upload(cfg, session_dir, tags):
+    try:
+        import match_reel
+        import montage
+        base = os.path.dirname(os.path.abspath(__file__))
+        clips = _session_clips_from_dir(session_dir)
+        if not clips:
+            print("  [session reel] no clips this session, skipping")
+            return
+        ffmpeg = montage.find_ffmpeg(base, cfg)
+        out = os.path.join(session_dir, "session_reel.mp4")
+        c = Counter(tags)
+        total = len(tags)
+        sub = [f"{c.get('finisher',0)} FINISHERS  ·  {c.get('precision',0)} PRECISION  "
+               f"·  {c.get('assist',0)} ASSISTS",
+               time.strftime("%Y-%m-%d")]
+        music = ""
+        if cfg.get("reel_music", True):
+            music = match_reel.find_music(os.path.join(base, "music"))
+        ok = match_reel.build_match_reel(
+            clips, out, ffmpeg, "SESSION HIGHLIGHTS", total, sub,
+            os.path.join(base, "marathon_wordmark.png"), music,
+            music_volume=cfg.get("reel_music_volume", 0.08))
+        if not ok:
+            print("  [session reel] build failed")
+            return
+        print(f"  [session reel] -> {out}")
+
+        if cfg.get("youtube_upload_session_reel", False):
+            import youtube_upload
+            title = f"Marathon — {total} kills — {time.strftime('%b %d, %Y')}"
+            desc = ("Auto-uploaded Marathon session highlights.\n"
+                    f"{c.get('finisher',0)} finishers, {c.get('precision',0)} precision, "
+                    f"{c.get('assist',0)} assists.")
+            youtube_upload.upload(out, title, desc, base,
+                                  privacy=cfg.get("youtube_privacy", "unlisted"))
+    except Exception as e:
+        print(f"  [session reel] error: {e}")
+
 
 def _tray_icon_image(base: str, cfg: dict):
     """Build a square tray icon from the skull PNG (transparent, centered)."""

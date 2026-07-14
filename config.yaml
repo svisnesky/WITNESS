@@ -151,6 +151,17 @@ make_match_reels: true
 reel_music_volume: 0.08   # 0-1 loudness of the music bed under the game audio
                           # (0.08 = quiet background; 0 = off, 0.22 = old level)
 
+# At session end, build ONE reel of the whole session's clips (title card +
+# Play of the Game) -> <session>/session_reel.mp4
+make_session_reel: true
+
+# --- YouTube auto-upload (one-time setup required; see README) ---
+# When true, the session_reel is uploaded to YouTube at session end. Needs
+# client_secret.json in this folder (from Google Cloud) + the google upload
+# libraries installed. Leave false until you've done the setup.
+youtube_upload_session_reel: false
+youtube_privacy: "unlisted"   # unlisted | private | public
+
 # --- Live web dashboard (view on a phone/iPad browser over the LAN) ---
 web_dashboard: true    # serve a live kill feed page
 web_port: 8000         # open http://<your-PC-IP>:8000 on the device

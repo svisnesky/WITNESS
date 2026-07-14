@@ -26,3 +26,9 @@ Pillow>=10.0
 
 # Optional: system-tray skull icon (run with --tray).
 pystray>=0.19
+
+# Optional: YouTube auto-upload of the session reel (see README). Only needed
+# if youtube_upload_session_reel: true in config.yaml.
+google-api-python-client>=2.100
+google-auth-oauthlib>=1.2
+google-auth-httplib2>=0.2
