@@ -40,6 +40,12 @@ CASES = [
     ("elim + finisher combo",  ["RUNNER ELIM +10 XP", "FINISHER 5Tz +50"], True),
     # real combined read from the live log (down+elim+finisher in one frame)
     ("real combined kill",     ["RUNNER DOIN +15 XP RUNNER ELIM +10 XP FINISHER 5 +50"], True),
+    # real assist reads from the live log
+    ("assist down+precision",  ["HA RUNNER DOIN [ASSIST] +15 XP PRECISION DOIN [ASSIST] T +25"], True),
+    ("assist runner elim",     ["RUNNER DOIN [ASSIST] +15 XP"],   True),
+    # --- your kill sharing a frame with an NPC popup (must STILL fire) ---
+    ("kill next to uesc",      ["RUNNER DOIN [ASSIST] | +15 XP | UESC ELIM | +5 XP | RUNNER ELIM [ASSIST] | +10 XP"], True),
+    ("finisher next to uesc",  ["UESC ELIM | +5 XP | RUNNER ELIM [ASSIST] | +10 XP | FINISHER [ASSIST] | 5Tz | +50"], True),
     # --- NPC kills (must NOT fire) ---
     ("uesc cmdr elim",         ["UESC CMDR ELIM +15XP"],          False),
     ("uesc drone elim",        ["UESC DRONE ELIM +5XP"],          False),

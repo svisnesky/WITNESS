@@ -41,6 +41,12 @@ def looks_like_exfil(lines) -> bool:
     return any(fuzz.partial_ratio(w, blob) >= 85 for w in _DETECT_WORDS)
 
 
+def _label_text(line: str) -> str:
+    """The alphabetic part of a line (drops the trailing number), for matching
+    a stat label against 'Combatant Eliminations 14' etc."""
+    return re.sub(r"[^a-z ]", " ", line.lower()).strip()
+
+
 def _num(text: str):
     """Last integer in a line ('Inventory Value 9,015' -> 9015)."""
     m = re.findall(r"[\d][\d,\.]*", text)
@@ -57,15 +63,26 @@ def parse_exfil_lines(lines) -> dict:
     A label whose number OCR'd onto the following line is handled too."""
     stats = {}
     lines = [l.strip() for l in lines if l.strip()]
+    used = set()
+    # For each stat, pick the SINGLE best-matching line by full-string ratio
+    # (not partial_ratio — "Runner Eliminations" and "Combatant Eliminations"
+    # share "Eliminations", so partial matching cross-assigns their numbers).
     for key, label in LABELS.items():
+        best_i, best_score = None, 0
         for i, line in enumerate(lines):
-            if fuzz.partial_ratio(label.lower(), line.lower()) >= 82:
-                val = _num(line)
-                if val is None and i + 1 < len(lines):
-                    val = _num(lines[i + 1])
-                if val is not None:
-                    stats[key] = val
-                break
+            if i in used:
+                continue
+            score = fuzz.ratio(label.lower(), _label_text(line))
+            if score > best_score:
+                best_score, best_i = score, i
+        if best_i is not None and best_score >= 75:
+            val = _num(lines[best_i])
+            if (val is None and best_i + 1 < len(lines)
+                    and re.fullmatch(r"[\d,\.]+", lines[best_i + 1].strip())):
+                val = _num(lines[best_i + 1])
+            if val is not None:
+                stats[key] = val
+                used.add(best_i)
     # Run time reads like "Run Time 22:50"
     for line in lines:
         if fuzz.partial_ratio("run time", line.lower()) >= 82:

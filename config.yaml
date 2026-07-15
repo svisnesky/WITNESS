@@ -29,13 +29,14 @@ popup_confirm_frames: 1      # popup must persist this many frames in a row to c
 popup_absence_frames: 3      # popup must vanish this many frames before it can re-fire
 popup_cooldown_seconds: 2.0  # minimum seconds between kills — stops a single popup
                              # whose OCR flickers from counting twice
-# If any of these appear on screen, skip detection (you're downed / can't get
-# kills / it's an NPC popup or a summary screen) so that text can't count as a
-# false kill.
+# If any of these appear on screen, skip the WHOLE frame. Only use this for
+# screens where you genuinely can't get a kill (death / exfil summary) — NOT
+# for NPC popups, because those stack on-screen next to your real kill popups,
+# and suppressing the frame would drop the real kill too. NPC popups ("UESC
+# ...") are already ignored on their own: they don't match a trigger phrase.
 suppress_phrases:
   - "SELF REVIVE"        # death screen
   - "GIVE UP"            # death screen
-  - "UESC"               # NPC kill popups: "UESC CMDR ELIM", "UESC DRONE ELIM"
   - "RUNNER DAMAGE"      # exfil summary screen stats (in the OCR crop region)
   - "CREW REVIVES"       # exfil summary screen stats
   - "INVENTORY VALUE"    # exfil summary screen stats
