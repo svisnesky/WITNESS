@@ -674,7 +674,15 @@ def run_live(cfg: dict, dry_run: bool = False, stop_event=None, on_count=None):
     region = cfg.get("detect_region_frac") or cfg.get("detect_region") or cfg.get("feed_region")
     print(f"Detecting [{mode}] at {poll_fps} fps via {cfg.get('capture_source')}. "
           f"Region={region}. "
-          f"{'DRY-RUN' if dry_run else 'LIVE'}. Ctrl-C to stop.\n")
+          f"{'DRY-RUN' if dry_run else 'LIVE'}. Ctrl-C to stop.")
+    # Echo the live config so you can confirm the running session has the
+    # latest settings (a mid-session file update does NOT take effect until
+    # you stop and start again).
+    if mode == "popup":
+        print(f"  config: confirm_frames={cfg.get('popup_confirm_frames')}, "
+              f"cooldown={cfg.get('popup_cooldown_seconds')}s, "
+              f"suppress={cfg.get('suppress_phrases')}")
+    print()
 
     with make_capture(cfg) as cap:
         try:
