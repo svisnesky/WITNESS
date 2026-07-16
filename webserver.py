@@ -196,6 +196,78 @@ class LiveState:
                                 for r in reversed(self.replays)]}
 
 
+def _esc(s):
+    return str(s).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+def _stats_page(base_dir: str) -> str:
+    """Career + economy + squad leaderboard, built from stats/squad_stats.csv
+    (with match_stats.csv as the fallback for your own older rows)."""
+    import csv as _csv
+
+    rows = []
+    sq = os.path.join(base_dir, "stats", "squad_stats.csv")
+    if os.path.exists(sq):
+        with open(sq, encoding="utf-8") as f:
+            rows = list(_csv.DictReader(f))
+
+    def num(v):
+        try:
+            return int(float(v))
+        except (TypeError, ValueError):
+            return 0
+
+    # your rows: squad_stats where is_you, plus legacy match_stats.csv
+    yours = [r for r in rows if r.get("is_you") == "1"]
+    legacy = os.path.join(base_dir, "stats", "match_stats.csv")
+    if os.path.exists(legacy):
+        with open(legacy, encoding="utf-8") as f:
+            for r in _csv.DictReader(f):
+                r["is_you"] = "1"
+                yours.append(r)
+
+    def totals(rs):
+        return {
+            "matches": len(rs),
+            "elims": sum(num(r.get("runner_elims")) for r in rs),
+            "downs": sum(num(r.get("runners_downed")) for r in rs),
+            "damage": sum(num(r.get("runner_damage")) for r in rs),
+            "loot": sum(num(r.get("inventory_value")) for r in rs),
+            "best_haul": max((num(r.get("inventory_value")) for r in rs), default=0),
+        }
+
+    me = totals(yours)
+
+    # squad leaderboard: group by display name (before the #tag)
+    by_player = {}
+    for r in rows:
+        name = (r.get("player") or "").split("#")[0] or ("You" if r.get("is_you") == "1" else "Unknown")
+        by_player.setdefault(name, []).append(r)
+    board = sorted(((n, totals(rs)) for n, rs in by_player.items()),
+                   key=lambda kv: -kv[1]["loot"])
+
+    cards = "".join(
+        f'<div class="tile"><div class="tn">{v:,}</div><div class="tl">{l}</div></div>'
+        for l, v in [("Matches", me["matches"]), ("Runner elims", me["elims"]),
+                     ("Downs", me["downs"]), ("Runner damage", me["damage"]),
+                     ("Loot extracted", me["loot"]), ("Best haul", me["best_haul"])])
+
+    if board:
+        head = "<tr><th></th><th>Player</th><th>Matches</th><th>Elims</th><th>Downs</th><th>Damage</th><th>Loot</th><th>Best haul</th></tr>"
+        trs = ""
+        for i, (name, t) in enumerate(board):
+            crown = '<span class="hog">LOOT HOG</span>' if i == 0 and len(board) > 1 else ""
+            trs += (f"<tr><td>{crown}</td><td>{_esc(name)}</td><td>{t['matches']}</td>"
+                    f"<td>{t['elims']}</td><td>{t['downs']}</td><td>{t['damage']:,}</td>"
+                    f"<td>{t['loot']:,}</td><td>{t['best_haul']:,}</td></tr>")
+        squad_html = f'<h3>Squad leaderboard</h3><div class="tblwrap"><table>{head}{trs}</table></div>'
+    else:
+        squad_html = ('<h3>Squad leaderboard</h3><p class="empty2">No squad data yet — '
+                      'play a trios match and exfil. Teammate panels are logged automatically.</p>')
+
+    return STATS_PAGE.replace("%%CARDS%%", cards).replace("%%SQUAD%%", squad_html)
+
+
 def local_ip():
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -265,6 +337,9 @@ def start_web(state, port, base_dir, host="0.0.0.0"):
                         "settings": state.get_settings(),
                         "meta": SETTINGS_META,
                     }).encode(), "application/json", cache=False)
+                elif path == "/stats":
+                    self._send(_stats_page(base_dir).encode("utf-8"),
+                               "text/html; charset=utf-8", cache=False)
                 elif path.startswith("/reel/"):
                     try:
                         fp = state.get_reel_path(int(path.rsplit("/", 1)[1]))
@@ -322,6 +397,49 @@ def start_web(state, port, base_dir, host="0.0.0.0"):
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     return srv
 
+
+STATS_PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Marathon Stats</title>
+<style>
+  :root { --bg:#0b0f12; --panel:#12181d; --line:#232d34; --text:#e8edf0;
+          --muted:#7d8a94; --accent:#d3f24b; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text);
+    font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+    padding:calc(20px + env(safe-area-inset-top)) 16px calc(40px + env(safe-area-inset-bottom)); }
+  .wrap { max-width:720px; margin:0 auto; }
+  h2 { color:var(--accent); font-size:.95rem; letter-spacing:.16em; text-transform:uppercase;
+    margin:0 0 4px; }
+  .sub { color:var(--muted); font-size:.78rem; margin:0 0 18px; }
+  h3 { color:var(--muted); font-size:.7rem; letter-spacing:.16em; text-transform:uppercase;
+    margin:26px 0 10px; }
+  .tiles { display:grid; grid-template-columns:repeat(3,1fr); gap:8px; }
+  @media(max-width:480px){ .tiles{ grid-template-columns:repeat(2,1fr); } }
+  .tile { background:var(--panel); border:1px solid var(--line); border-radius:10px;
+    padding:14px 6px 11px; text-align:center; }
+  .tile .tn { font-size:1.35rem; font-weight:800; color:var(--accent);
+    font-variant-numeric:tabular-nums; }
+  .tile .tl { font-size:.58rem; letter-spacing:.1em; text-transform:uppercase;
+    color:var(--muted); margin-top:4px; }
+  .tblwrap { overflow-x:auto; }
+  table { border-collapse:collapse; width:100%; font-size:.78rem; }
+  th, td { text-align:right; padding:8px 10px; border-bottom:1px solid var(--line);
+    white-space:nowrap; font-variant-numeric:tabular-nums; }
+  th:nth-child(2), td:nth-child(2) { text-align:left; }
+  th { color:var(--muted); font-size:.6rem; letter-spacing:.1em; text-transform:uppercase; }
+  .hog { background:var(--accent); color:#0b0f12; font-size:.55rem; font-weight:700;
+    letter-spacing:.08em; padding:2px 7px; border-radius:4px; }
+  .empty2 { color:var(--muted); font-size:.8rem; }
+  .back { display:inline-block; margin-top:26px; color:var(--muted); font-size:.75rem;
+    text-decoration:none; border:1px solid var(--line); border-radius:8px; padding:8px 16px; }
+</style></head><body><div class="wrap">
+  <h2>Career Stats</h2>
+  <p class="sub">From every exfil screen the app has captured. It only gets deeper from here.</p>
+  <div class="tiles">%%CARDS%%</div>
+  %%SQUAD%%
+  <a class="back" href="/">&larr; Back to the kill feed</a>
+</div></body></html>"""
 
 PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
@@ -454,6 +572,7 @@ PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
   <div class="btnrow">
     <button class="fsbtn" id="snd" onclick="toggleSound()">SOUND: ON</button>
     <button class="fsbtn" onclick="openSettings()">Settings</button>
+    <button class="fsbtn" onclick="location.href='/stats'">Stats</button>
     <button class="fsbtn" onclick="openHelp()">How to use</button>
     <button class="fsbtn" id="fs" onclick="goFull()">Full screen</button>
   </div>

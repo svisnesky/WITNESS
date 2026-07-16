@@ -713,7 +713,7 @@ def _maybe_capture_exfil(cfg, engine, lines, s, now):
                 save_dir = os.path.join(rec, "Marathon Sessions", s["session_id"])
         except Exception:
             pass
-        stats_d = exfil_stats.capture_exfil_stats(cfg, engine, save_dir)
+        stats_d, squad = exfil_stats.capture_exfil_stats(cfg, engine, save_dir)
         # Audit THIS match's detected kills vs the game's count, then reset the
         # per-match tally for the next match.
         match_tags = s.get("match_tags", [])
@@ -722,6 +722,12 @@ def _maybe_capture_exfil(cfg, engine, lines, s, now):
             base = os.path.dirname(os.path.abspath(__file__))
             exfil_stats.log_match_stats(base, s["session_id"], stats_d,
                                         len(match_tags))
+            if squad:
+                exfil_stats.log_squad_stats(base, s["session_id"], squad)
+                names = ", ".join(f"{p.get('name') or p['position']}"
+                                  f" ({p.get('inventory_value', '?')} loot)"
+                                  for p in squad)
+                print(f"  [squad] logged {len(squad)} player(s): {names}")
         s["match_tags"] = []
         if cfg.get("make_match_reels", True) and save_dir:
             _build_match_reel_async(cfg, s, save_dir, stats_d)

@@ -19,6 +19,20 @@ from rapidfuzz import fuzz
 # The stat panel region as fractions of the full frame (generous margins).
 PANEL_FRAC = {"x": 0.34, "y": 0.46, "w": 0.32, "h": 0.44}
 
+# Trios layout: three panels side by side, local player ALWAYS center.
+# Calibrated from a real 16:9 trios exfil screenshot.
+SQUAD_PANELS = {
+    "left":   {"x": 0.030, "y": 0.46, "w": 0.310, "h": 0.44},
+    "center": {"x": 0.340, "y": 0.46, "w": 0.320, "h": 0.44},
+    "right":  {"x": 0.660, "y": 0.46, "w": 0.310, "h": 0.44},
+}
+# Name plates ("SupremePlays#5291") sit above the character models.
+NAME_STRIP = {
+    "left":   {"x": 0.030, "y": 0.085, "w": 0.310, "h": 0.085},
+    "center": {"x": 0.340, "y": 0.085, "w": 0.320, "h": 0.085},
+    "right":  {"x": 0.660, "y": 0.085, "w": 0.310, "h": 0.085},
+}
+
 # CSV column -> label as it appears on the exfil screen.
 LABELS = {
     "combatant_elims": "Combatant Eliminations",
@@ -101,20 +115,51 @@ def _grab_full(cfg):
     return grab_full_virtualcam(cfg.get("obs_virtualcam_index", 0))
 
 
-def _parse_panel(frame, engine) -> dict:
+def _crop(frame, frac):
     H, W = frame.shape[:2]
-    x, y = int(PANEL_FRAC["x"] * W), int(PANEL_FRAC["y"] * H)
-    w, h = int(PANEL_FRAC["w"] * W), int(PANEL_FRAC["h"] * H)
-    panel = frame[y:y + h, x:x + w]
-    return parse_exfil_lines(engine.read_lines(panel))
+    x, y = int(frac["x"] * W), int(frac["y"] * H)
+    w, h = int(frac["w"] * W), int(frac["h"] * H)
+    return frame[y:y + h, x:x + w]
+
+
+def _parse_panel(frame, engine) -> dict:
+    return parse_exfil_lines(engine.read_lines(_crop(frame, PANEL_FRAC)))
+
+
+def _read_player_name(frame, engine, pos: str) -> str:
+    """The gamertag from a panel's name plate ('SupremePlays#5291')."""
+    lines = engine.read_lines(_crop(frame, NAME_STRIP[pos]))
+    for line in lines:
+        for tok in line.replace("|", " ").split():
+            if "#" in tok and len(tok) > 3:
+                return tok.strip()
+    # no #tag read: take the longest word-ish token as a best effort
+    toks = [t for l in lines for t in l.replace("|", " ").split() if len(t) >= 4]
+    return max(toks, key=len) if toks else ""
+
+
+def parse_squad(frame, engine) -> list[dict]:
+    """All player panels on the exfil screen. Solo -> just you (center).
+    Returns [{position, name, is_you, **stats}] for panels that parsed."""
+    players = []
+    for pos, frac in SQUAD_PANELS.items():
+        stats = parse_exfil_lines(engine.read_lines(_crop(frame, frac)))
+        if len(stats) < 3:      # panel not present (solo/duo) or unreadable
+            continue
+        players.append({"position": pos,
+                        "name": _read_player_name(frame, engine, pos),
+                        "is_you": pos == "center", **stats})
+    return players
 
 
 def capture_exfil_stats(cfg, engine, save_dir: str = "", retries: int = 3):
-    """Grab the exfil screen and OCR the (always-centered) stat panel. The panel
-    animates in, so retry a few times and keep the first good parse. Returns the
-    parsed stats ({} if unreadable). Saves the screen PNG once if save_dir given."""
+    """Grab the exfil screen and OCR the stat panels. The panel animates in,
+    so retry a few times and keep the first good parse. Returns
+    (your_stats, squad) — squad is every readable panel (trios: all three,
+    with gamertags). Saves the screen PNG once if save_dir given."""
     saved = False
     best = {}
+    squad = []
     for attempt in range(max(1, retries)):
         frame = _grab_full(cfg)
         if save_dir and not saved:
@@ -132,9 +177,40 @@ def capture_exfil_stats(cfg, engine, save_dir: str = "", retries: int = 3):
             best = stats
         # a good read has most of the labels; stop early once we have them
         if len(best) >= 4:
+            if cfg.get("squad_stats", True):
+                try:
+                    squad = parse_squad(frame, engine)
+                except Exception as e:
+                    print(f"  [exfil] squad parse failed: {e}")
             break
         time.sleep(0.6)  # let the panel finish animating in
-    return best
+    return best, squad
+
+
+def log_squad_stats(base_dir: str, session_id: str, squad: list[dict]) -> str:
+    """One row per player per match -> stats/squad_stats.csv. Feeds the
+    career/economy/squad views (and the buddy loot-hog leaderboard)."""
+    sdir = os.path.join(base_dir, "stats")
+    os.makedirs(sdir, exist_ok=True)
+    path = os.path.join(sdir, "squad_stats.csv")
+    cols = ["date", "time", "session", "player", "is_you",
+            *LABELS.keys(), "run_time"]
+    new = not os.path.exists(path)
+    with open(path, "a", newline="", encoding="utf-8") as f:
+        wr = csv.DictWriter(f, fieldnames=cols)
+        if new:
+            wr.writeheader()
+        for p in squad:
+            wr.writerow({
+                "date": time.strftime("%Y-%m-%d"),
+                "time": time.strftime("%H:%M:%S"),
+                "session": session_id,
+                "player": p.get("name", ""),
+                "is_you": int(bool(p.get("is_you"))),
+                **{k: p.get(k, "") for k in LABELS},
+                "run_time": p.get("run_time", ""),
+            })
+    return path
 
 
 def log_match_stats(base_dir: str, session_id: str, stats: dict, detected_kills: int) -> str:

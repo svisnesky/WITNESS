@@ -163,6 +163,11 @@ ffmpeg_path: ""        # leave empty to auto-find ffmpeg.exe in this folder / PA
 # — and print an audit: game's kill count vs what we detected.
 capture_exfil_stats: true
 
+# In trios/duos, the exfil screen shows every player's panel — parse teammates
+# too (names + stats -> stats/squad_stats.csv). Powers the squad leaderboard
+# and buddy economy tracking on the dashboard's Stats page.
+squad_stats: true
+
 # After each match's exfil, build an ESPN-style highlight reel (stat title card
 # + that match's clips) into <session>/reels/ and pop it up on the iPad
 # dashboard for instant rewatching.
