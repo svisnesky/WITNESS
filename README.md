@@ -6,6 +6,28 @@ into a highlight reel.
 **New here? Follow [QUICKSTART.md](QUICKSTART.md)** — zero to auto-clipped
 kills in ~15 minutes, no coding.
 
+## What it looks like
+
+**The live dashboard** (any phone/iPad on your Wi-Fi) — kill counter,
+breakdown, instant replays you can tap seconds after the kill, per-match
+highlight reels, a +1 button for anything the detector misses:
+
+<img src="docs/screenshots/dashboard.png" width="440" alt="Live dashboard">
+
+**Highlight reels** open on a stat card, lead with your Play of the Game, and
+close with a GG — music bed, crossfades, kill chyrons, and an optional
+announcer voiceover:
+
+<img src="docs/screenshots/reel_title_card.png" width="440" alt="Reel title card">
+<img src="docs/screenshots/reel_potg_card.png" width="440" alt="Play of the Game card">
+
+**Career + squad stats**, parsed straight off the exfil screens — including
+your teammates. The squad's top extractor wears the crown:
+
+<img src="docs/screenshots/stats.png" width="440" alt="Career and squad stats">
+
+<img src="docs/screenshots/reel_end_card.png" width="440" alt="GG end card">
+
 Marathon has no public kill API, so this tool *watches your screen*: it OCRs
 the center-screen reward popup that appears only on your downs
 (**"RUNNER DOWN +15 XP"**, **"FINISHER +50"**, **"PRECISION DOWN +25"**). On
