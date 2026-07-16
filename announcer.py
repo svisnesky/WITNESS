@@ -22,7 +22,7 @@ DEFAULT_PITCH = "-18Hz"          # deep broadcast voice — Stan-approved
 
 
 def synth_to_wav(text: str, out_wav: str, voice: str = DEFAULT_VOICE,
-                 pitch: str = "+0Hz") -> str | None:
+                 pitch: str = DEFAULT_PITCH) -> str | None:
     """Render `text` to audio near out_wav. Returns the actual file written
     (mp3 for the neural voice, wav for fallbacks) or None.
     pitch: e.g. "-18Hz" to deepen any voice (neural only)."""
@@ -108,7 +108,7 @@ MEDALS = {
 
 
 def ensure_medal_sounds(base_dir: str, voice: str, ffmpeg: str,
-                        pitch: str = "+0Hz") -> dict:
+                        pitch: str = DEFAULT_PITCH) -> dict:
     """Pre-render the medal call-outs ('Double kill!' ...) so playback is
     instant mid-game. Cached per voice under cache_medals/ — after the first
     render they work offline forever. Returns {kill_count: wav_path}."""
