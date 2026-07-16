@@ -740,6 +740,8 @@ def _maybe_capture_exfil(cfg, engine, lines, s, now):
         match_tags = s.get("match_tags", [])
         print(exfil_stats.report(stats_d, Counter(match_tags)))
         if stats_d:
+            exfil_stats.accumulate_accuracy(s.setdefault("accuracy", {}),
+                                            stats_d, Counter(match_tags))
             base = os.path.dirname(os.path.abspath(__file__))
             exfil_stats.log_match_stats(base, s["session_id"], stats_d,
                                         len(match_tags))
@@ -951,8 +953,19 @@ def _run_live_inner(cfg: dict, dry_run: bool = False, stop_event=None, on_count=
     _flush_coalesce(s)
     if s["web"] is not None:
         s["web"].set_running(False)
+    acc_line = exfil_stats_accuracy(s)
+    if acc_line:
+        print(acc_line)
     _end_session(cfg, s["session_tags"], s["session_start"],
                  s["session_start_wall"], dry_run, s["obs"], s["session_id"])
+
+
+def exfil_stats_accuracy(s) -> str:
+    try:
+        import exfil_stats
+        return exfil_stats.accuracy_summary(s.get("accuracy", {}))
+    except Exception:
+        return ""
 
 
 def _end_session(cfg, tags, start_monotonic, start_wall, dry_run, obs=None, session_id=None):
@@ -1176,6 +1189,8 @@ def main():
                    help="OCR a saved screenshot and report detected kills (no OBS, no loop)")
     p.add_argument("--test-lines", nargs="+", metavar="LINE",
                    help="run detection on literal feed lines (no OCR, no OBS)")
+    p.add_argument("--wrapped", action="store_true",
+                   help="build this week's Marathon Wrapped card from your stats")
     p.add_argument("--bench", action="store_true",
                    help="measure OCR speed on THIS machine and say whether it "
                         "can keep up (run it with the game open for a real number)")
@@ -1204,6 +1219,26 @@ def main():
         run_test_image(cfg, args.test_image)
     elif args.bench:
         run_bench(cfg)
+    elif args.wrapped:
+        import wrapped
+        base = os.path.dirname(os.path.abspath(__file__))
+        rec = ""
+        try:
+            from obs_client import OBSClient
+            obs_cfg = cfg.get("obs", {})
+            c = OBSClient(host=obs_cfg.get("host", "localhost"),
+                          port=obs_cfg.get("port", 4455),
+                          password=obs_cfg.get("password", ""))
+            c.connect()
+            rec = c.get_record_directory() or ""
+        except Exception:
+            pass  # no OBS running: card still builds, just without Best Play
+        out = wrapped.build_wrapped(base, rec)
+        if out:
+            try:
+                os.startfile(out)  # pop it open (Windows)
+            except Exception:
+                pass
     elif args.tray:
         run_tray(cfg, dry_run=args.dry_run)
     else:

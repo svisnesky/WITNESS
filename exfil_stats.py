@@ -274,3 +274,34 @@ def report(stats: dict, tag_counts: dict) -> str:
         else:
             lines.append(f"  [exfil] AUDIT {label}: {ours} = game's count, clean")
     return "\n".join(lines)
+
+
+def accumulate_accuracy(acc: dict, stats: dict, tag_counts: dict) -> None:
+    """Roll one match's audit into the session accuracy tally (mutates acc)."""
+    pairs = [("downs", "runners_downed", ("down", "precision", "kill")),
+             ("elims", "runner_elims", ("finisher", "assist"))]
+    for name, key, tags in pairs:
+        game = stats.get(key)
+        if game is None:
+            continue
+        d = acc.setdefault(name, {"game": 0, "detected": 0, "matches": 0})
+        d["game"] += game
+        d["detected"] += sum(tag_counts.get(t, 0) for t in tags)
+        d["matches"] += 1
+
+
+def accuracy_summary(acc: dict) -> str:
+    """One end-of-session line: how detection did across every audited match."""
+    if not acc:
+        return ""
+    bits = []
+    for name in ("downs", "elims"):
+        d = acc.get(name)
+        if not d or not d["matches"]:
+            continue
+        pct = 100.0 * min(d["detected"], d["game"]) / d["game"] if d["game"] else 100.0
+        bits.append(f"{name}: detected {d['detected']}/{d['game']} ({pct:.0f}%)")
+    if not bits:
+        return ""
+    n = max(d["matches"] for d in acc.values())
+    return f"Detection accuracy across {n} audited match(es) — " + ", ".join(bits)
