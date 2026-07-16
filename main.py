@@ -717,6 +717,27 @@ def _handle_kill(cfg, ev, s, on_count=None):
         show_overlay(cfg)
 
 
+def _maybe_detect_runner(cfg, engine, lines, s):
+    """Once per match: when the deployment screen is up, one full-frame scan
+    for which runner/shell you're playing."""
+    if not cfg.get("runner_detection", True) or s.get("runner_checked"):
+        return
+    try:
+        import runner_detect
+        if not runner_detect.is_deploy_screen(lines):
+            return
+        s["runner_checked"] = True
+        runner = runner_detect.capture_runner(cfg, engine)
+        s["current_runner"] = runner
+        if runner:
+            print(f"  [runner] playing {runner}")
+        else:
+            print("  [runner] deploy screen seen, but no shell/runner name read")
+    except Exception as e:
+        s["runner_checked"] = True
+        print(f"  [runner] detection error: {e}")
+
+
 def _maybe_capture_exfil(cfg, engine, lines, s, now):
     """When the EXFILTRATED summary screen is up, grab it once and log the
     match stats + a kill-count audit. Re-arms after 3 minutes (next match)."""
@@ -746,12 +767,16 @@ def _maybe_capture_exfil(cfg, engine, lines, s, now):
             exfil_stats.log_match_stats(base, s["session_id"], stats_d,
                                         len(match_tags))
             if squad:
-                exfil_stats.log_squad_stats(base, s["session_id"], squad)
+                exfil_stats.log_squad_stats(base, s["session_id"], squad,
+                                            your_runner=s.get("current_runner", ""))
                 names = ", ".join(f"{p.get('name') or p['position']}"
                                   f" ({p.get('inventory_value', '?')} loot)"
                                   for p in squad)
                 print(f"  [squad] logged {len(squad)} player(s): {names}")
         s["match_tags"] = []
+        s["runner_checked"] = False       # re-detect next match
+        s["last_runner"] = s.get("current_runner", "")
+        s["current_runner"] = ""
         if cfg.get("make_match_reels", True) and save_dir:
             _build_match_reel_async(cfg, s, save_dir, stats_d)
     except Exception as e:
@@ -817,7 +842,8 @@ def _build_match_reel_async(cfg, s, session_dir, stats_d):
                     script = announcer.stat_line(
                         total_kills, stats_d,
                         potg_tag=(potg["tag"] if potg else ""),
-                        player=cfg.get("announcer_player_name", ""))
+                        player=cfg.get("announcer_player_name", ""),
+                        runner=s.get("last_runner", ""))
                     wav = announcer.synth_to_wav(
                         script,
                         os.path.join(session_dir, "reels", f"match_{match_num}_tts.wav"),
@@ -934,6 +960,9 @@ def _run_live_inner(cfg: dict, dry_run: bool = False, stop_event=None, on_count=
 
                 if blocked and cfg.get("capture_exfil_stats", True):
                     _maybe_capture_exfil(cfg, engine, lines, s, loop_start)
+
+                if not blocked:
+                    _maybe_detect_runner(cfg, engine, lines, s)
 
                 if overlay_det is not None and not blocked:
                     oev = overlay_det.process_frame(lines, now=loop_start)

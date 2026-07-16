@@ -187,17 +187,20 @@ def capture_exfil_stats(cfg, engine, save_dir: str = "", retries: int = 3):
     return best, squad
 
 
-def log_squad_stats(base_dir: str, session_id: str, squad: list[dict]) -> str:
+def log_squad_stats(base_dir: str, session_id: str, squad: list[dict],
+                    your_runner: str = "") -> str:
     """One row per player per match -> stats/squad_stats.csv. Feeds the
-    career/economy/squad views (and the buddy loot-hog leaderboard)."""
+    career/economy/squad views (and the buddy loot-hog leaderboard).
+    your_runner: which shell YOU played (detected at deploy) — teammates' rows
+    leave it blank."""
     sdir = os.path.join(base_dir, "stats")
     os.makedirs(sdir, exist_ok=True)
     path = os.path.join(sdir, "squad_stats.csv")
     cols = ["date", "time", "session", "player", "is_you",
-            *LABELS.keys(), "run_time"]
+            *LABELS.keys(), "run_time", "runner"]
     new = not os.path.exists(path)
     with open(path, "a", newline="", encoding="utf-8") as f:
-        wr = csv.DictWriter(f, fieldnames=cols)
+        wr = csv.DictWriter(f, fieldnames=cols, extrasaction="ignore")
         if new:
             wr.writeheader()
         for p in squad:
@@ -209,6 +212,7 @@ def log_squad_stats(base_dir: str, session_id: str, squad: list[dict]) -> str:
                 "is_you": int(bool(p.get("is_you"))),
                 **{k: p.get(k, "") for k in LABELS},
                 "run_time": p.get("run_time", ""),
+                "runner": your_runner if p.get("is_you") else "",
             })
     return path
 

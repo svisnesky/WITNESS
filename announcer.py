@@ -162,13 +162,15 @@ def _spoken_number(n: int) -> str:
 
 
 def stat_line(kills: int, stats: dict, potg_tag: str = "",
-              player: str = "") -> str:
+              player: str = "", runner: str = "") -> str:
     """A short broadcast-style script, varied per match instead of a fixed
     monotone template. Keeps to ~2 sentences so it lands over the intro."""
     import random
 
     k = _spoken_number(kills)
     who = player or "our runner"
+    if runner:
+        who = f"{who}, on {runner},"
 
     if kills == 0:
         return random.choice([

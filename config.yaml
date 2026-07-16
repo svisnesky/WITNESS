@@ -162,6 +162,11 @@ capture_exfil_stats: true
 # and buddy economy tracking on the dashboard's Stats page.
 squad_stats: true
 
+# Detect which runner/shell you're playing (one full-frame scan when the
+# deployment screen appears). Feeds per-runner stats and the announcer
+# ("...on Glitch, drops four kills").
+runner_detection: true
+
 # After each match's exfil, build an ESPN-style highlight reel (stat title card
 # + that match's clips) into <session>/reels/ and pop it up on the iPad
 # dashboard for instant rewatching.
