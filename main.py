@@ -598,7 +598,8 @@ def _prepare_medals_async(cfg, s):
             base = os.path.dirname(os.path.abspath(__file__))
             s["medal_sounds"] = announcer.ensure_medal_sounds(
                 base, cfg.get("announcer_voice", announcer.DEFAULT_VOICE),
-                montage.find_ffmpeg(base, cfg))
+                montage.find_ffmpeg(base, cfg),
+                pitch=cfg.get("announcer_pitch", "+0Hz"))
         except Exception as e:
             print(f"  [medals] prep failed: {e}")
     threading.Thread(target=work, daemon=True).start()
@@ -859,7 +860,8 @@ def _build_match_reel_async(cfg, s, session_dir, stats_d):
                     wav = announcer.synth_to_wav(
                         script,
                         os.path.join(session_dir, "reels", f"match_{match_num}_tts.wav"),
-                        voice=cfg.get("announcer_voice", announcer.DEFAULT_VOICE))
+                        voice=cfg.get("announcer_voice", announcer.DEFAULT_VOICE),
+                        pitch=cfg.get("announcer_pitch", "+0Hz"))
                     if wav:
                         aout = os.path.join(session_dir, "reels",
                                             f"match_{match_num}_announced.mp4")

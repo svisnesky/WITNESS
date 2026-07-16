@@ -20,12 +20,14 @@ import sys
 DEFAULT_VOICE = "en-US-GuyNeural"
 
 
-def synth_to_wav(text: str, out_wav: str, voice: str = DEFAULT_VOICE) -> str | None:
+def synth_to_wav(text: str, out_wav: str, voice: str = DEFAULT_VOICE,
+                 pitch: str = "+0Hz") -> str | None:
     """Render `text` to audio near out_wav. Returns the actual file written
-    (mp3 for the neural voice, wav for fallbacks) or None."""
+    (mp3 for the neural voice, wav for fallbacks) or None.
+    pitch: e.g. "-18Hz" to deepen any voice (neural only)."""
     os.makedirs(os.path.dirname(out_wav), exist_ok=True)
 
-    path = _edge_neural(text, os.path.splitext(out_wav)[0] + ".mp3", voice)
+    path = _edge_neural(text, os.path.splitext(out_wav)[0] + ".mp3", voice, pitch)
     if path:
         return path
     try:
@@ -38,7 +40,8 @@ def synth_to_wav(text: str, out_wav: str, voice: str = DEFAULT_VOICE) -> str | N
     return None
 
 
-def _edge_neural(text: str, out_mp3: str, voice: str) -> str | None:
+def _edge_neural(text: str, out_mp3: str, voice: str,
+                 pitch: str = "+0Hz") -> str | None:
     """Microsoft neural TTS via edge-tts. Quietly returns None when the
     package is missing or there's no internet — callers fall back."""
     try:
@@ -51,7 +54,8 @@ def _edge_neural(text: str, out_mp3: str, voice: str) -> str | None:
         return None
     try:
         async def go():
-            await edge_tts.Communicate(text, voice, rate="+8%").save(out_mp3)
+            await edge_tts.Communicate(text, voice, rate="+8%",
+                                       pitch=pitch).save(out_mp3)
         asyncio.run(asyncio.wait_for(go(), timeout=25))
         if os.path.exists(out_mp3) and os.path.getsize(out_mp3) > 1000:
             return out_mp3
@@ -102,11 +106,12 @@ MEDALS = {
 }
 
 
-def ensure_medal_sounds(base_dir: str, voice: str, ffmpeg: str) -> dict:
+def ensure_medal_sounds(base_dir: str, voice: str, ffmpeg: str,
+                        pitch: str = "+0Hz") -> dict:
     """Pre-render the medal call-outs ('Double kill!' ...) so playback is
     instant mid-game. Cached per voice under cache_medals/ — after the first
     render they work offline forever. Returns {kill_count: wav_path}."""
-    safe_voice = "".join(c for c in voice if c.isalnum() or c in "-_")
+    safe_voice = "".join(c for c in f"{voice}{pitch}" if c.isalnum() or c in "-_")
     mdir = os.path.join(base_dir, "cache_medals", safe_voice)
     os.makedirs(mdir, exist_ok=True)
     out = {}
@@ -115,7 +120,7 @@ def ensure_medal_sounds(base_dir: str, voice: str, ffmpeg: str) -> dict:
         if os.path.exists(wav):
             out[n] = wav
             continue
-        src = synth_to_wav(text, os.path.join(mdir, f"{name}_raw.wav"), voice)
+        src = synth_to_wav(text, os.path.join(mdir, f"{name}_raw.wav"), voice, pitch)
         if not src:
             continue
         if src.endswith(".wav"):

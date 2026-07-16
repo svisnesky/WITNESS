@@ -177,6 +177,8 @@ make_match_reels: true
 # robotic voice without it). Try en-US-ChristopherNeural, en-GB-RyanNeural...
 # Full list: .venv\Scripts\python -m edge_tts --list-voices
 announcer_voice: "en-US-GuyNeural"
+# Deepen any voice: "-18Hz" makes it noticeably more badass. "+0Hz" = natural.
+announcer_pitch: "+0Hz"
 # How the announcer says your name (phonetic). Empty = "our runner".
 announcer_player_name: "Mister Viz Nasty"
 reel_music_volume: 0.08   # 0-1 loudness of the music bed under the game audio
