@@ -65,14 +65,24 @@ def place(position, sw, sh, w, h, m):
 def main():
     if len(sys.argv) < 2:
         return
-    image_path = sys.argv[1]
-    duration = int(sys.argv[2]) if len(sys.argv) > 2 else 1400
-    alpha = float(sys.argv[3]) if len(sys.argv) > 3 else 1.0
-    size = int(sys.argv[4]) if len(sys.argv) > 4 else 120
-    position = sys.argv[5] if len(sys.argv) > 5 else "top-right"
-    margin = int(sys.argv[6]) if len(sys.argv) > 6 else 40
-
-    path = scaled_image_path(image_path, size)
+    # Two modes:
+    #   image:  overlay.py <image.png> [duration alpha size position margin]
+    #   text:   overlay.py --text "DOUBLE KILL" [duration alpha size position
+    #           margin color rise]   (size = font px, rise 0/1)
+    text_mode = sys.argv[1] == "--text"
+    if text_mode:
+        text = sys.argv[2] if len(sys.argv) > 2 else ""
+        argv = sys.argv[2:]
+    else:
+        image_path = sys.argv[1]
+        argv = sys.argv[1:]
+    duration = int(argv[1]) if len(argv) > 1 else 1400
+    alpha = float(argv[2]) if len(argv) > 2 else 1.0
+    size = int(argv[3]) if len(argv) > 3 else 120
+    position = argv[4] if len(argv) > 4 else "top-right"
+    margin = int(argv[5]) if len(argv) > 5 else 40
+    color = argv[6] if len(argv) > 6 else "#d3f24b"
+    rise_on = (argv[7] != "0") if len(argv) > 7 else True
 
     root = tk.Tk()
     root.overrideredirect(True)
@@ -87,19 +97,28 @@ def main():
     except tk.TclError:
         pass
 
-    try:
-        img = tk.PhotoImage(file=path)     # Tk 8.6+ reads PNG
-    except Exception:
-        return
+    if text_mode:
+        if not text:
+            return
+        lbl = tk.Label(root, text=text, bg=MAGIC, fg=color,
+                       font=("Arial Black", max(10, int(size * 0.75)), "bold"))
+        lbl.pack()
+        root.update_idletasks()
+        w, h = lbl.winfo_reqwidth(), lbl.winfo_reqheight()
+    else:
+        path = scaled_image_path(image_path, size)
+        try:
+            img = tk.PhotoImage(file=path)     # Tk 8.6+ reads PNG
+        except Exception:
+            return
+        w, h = img.width(), img.height()
+        lbl = tk.Label(root, image=img, borderwidth=0, highlightthickness=0, bg=MAGIC)
+        lbl.image = img                   # keep a reference so it isn't GC'd
+        lbl.pack()
 
-    w, h = img.width(), img.height()
     sw, sh = root.winfo_screenwidth(), root.winfo_screenheight()
     x, y = place(position, sw, sh, w, h, margin)
     root.geometry(f"{w}x{h}+{x}+{y}")
-
-    lbl = tk.Label(root, image=img, borderwidth=0, highlightthickness=0, bg=MAGIC)
-    lbl.image = img                       # keep a reference so it isn't GC'd
-    lbl.pack()
 
     # Click-through + non-activating on Windows.
     root.update_idletasks()
@@ -121,7 +140,7 @@ def main():
     # glitch next to Marathon's animated UI.
     FADE_IN = 120                     # ms
     FADE_OUT = 450                    # ms
-    RISE = max(20, h // 4)            # px of upward drift during fade-out
+    RISE = max(20, h // 4) if rise_on else 0   # upward drift during fade-out
     TICK = 16                         # ~60fps
     hold = max(0, duration - FADE_IN - FADE_OUT)
 

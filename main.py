@@ -338,6 +338,33 @@ def show_overlay(cfg: dict) -> None:
         pass
 
 
+def show_text_overlay(cfg, text, size=60, position="custom:0.5,0.42",
+                      color="#d3f24b", duration_ms=1600, rise=True):
+    """Flash click-through text over the game (DOUBLE KILL, CLIP SAVED...).
+    Same animation language as the skull; never blocks the capture loop."""
+    if not cfg.get("show_overlays", True):
+        return
+    try:
+        import subprocess
+        import sys
+        base = os.path.dirname(os.path.abspath(__file__))
+        script = os.path.join(base, "overlay.py")
+        if not os.path.exists(script):
+            return
+        pyw = os.path.join(os.path.dirname(sys.executable), "pythonw.exe")
+        runner = pyw if os.path.exists(pyw) else sys.executable
+        subprocess.Popen(
+            [runner, script, "--text", text, str(duration_ms), "1.0",
+             str(size), position, "40", color, "1" if rise else "0"],
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+    except Exception:
+        pass
+
+
+MULTIKILL_NAMES = {2: "DOUBLE KILL", 3: "TRIPLE KILL", 4: "QUAD KILL"}
+
+
 def log_kill(cfg: dict, event, count: int) -> None:
     path = os.path.join(os.path.dirname(CONFIG_PATH), cfg.get("session_log", "session_log.csv"))
     new_file = not os.path.exists(path)
@@ -548,6 +575,10 @@ def _clip_ready_callback(s, tag, count, kills=1):
     def on_done(dest):
         s["match_clips"].append({"path": dest, "kills": kills, "tag": tag})
         _register_replay_async(s, dest, tag, count)
+        if s["cfg"].get("overlay_clip_saved", True):
+            show_text_overlay(s["cfg"], "CLIP SAVED", size=26,
+                              position="bottom-right", color="#aab4bd",
+                              duration_ms=1100, rise=False)
     return on_done
 
 
@@ -590,6 +621,10 @@ def _flush_coalesce(s):
     combo_tag = "+".join(dict.fromkeys(tags))  # e.g. "down+finisher", deduped, order-preserving
     label = ",".join(str(c) for c in counts)
     print(f"  [coalesce] saving clip for kill(s) #{label} [{combo_tag}]")
+    if len(counts) >= 2 and s["cfg"].get("overlay_multikill", True):
+        show_text_overlay(s["cfg"],
+                          MULTIKILL_NAMES.get(len(counts), "MULTI KILL"),
+                          size=64, position="custom:0.5,0.40", duration_ms=1700)
     if s["obs"].save_replay():
         s["last_save"] = time.monotonic()
         if s["organize"]:
@@ -718,6 +753,10 @@ def _build_match_reel_async(cfg, s, session_dir, stats_d):
                 if s["web"] is not None:
                     s["web"].add_reel(f"Match {match_num} — {len(clips)} clip"
                                       f"{'s' if len(clips) != 1 else ''}", out)
+                if cfg.get("overlay_reel_ready", True):
+                    show_text_overlay(cfg, "HIGHLIGHTS READY", size=26,
+                                      position="bottom-right", color="#d3f24b",
+                                      duration_ms=2000, rise=False)
                 if cfg.get("reel_announcer", True):
                     import announcer
                     wav = announcer.synth_to_wav(
