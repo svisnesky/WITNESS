@@ -142,6 +142,10 @@ overlay_multikill: true    # "DOUBLE KILL" / "TRIPLE KILL" when kills land toget
 overlay_clip_saved: true   # small "CLIP SAVED" bottom-right when a clip lands
 overlay_reel_ready: true   # "HIGHLIGHTS READY" when the match reel finishes
 
+# Halo-style announcer VOICE shouting "Double kill!" etc. when kills land
+# together (uses announcer_voice; rendered once per voice, then works offline).
+announcer_medals: true
+
 # --- Clips + recap ---
 organize_clips: true   # rename each saved clip by event+time and sort into a
                        # per-session folder ("Marathon Sessions/<date_time>/")

@@ -93,6 +93,65 @@ def _mac_say(text: str, out_wav: str) -> str | None:
     return out_wav if r2.returncode == 0 and os.path.exists(out_wav) else None
 
 
+MEDALS = {
+    2: ("double_kill", "Double kill!"),
+    3: ("triple_kill", "Triple kill!"),
+    4: ("quad_kill", "Quadra kill!"),
+    5: ("multi_kill", "Multi kill!"),   # 5+ all use this one
+}
+
+
+def ensure_medal_sounds(base_dir: str, voice: str, ffmpeg: str) -> dict:
+    """Pre-render the medal call-outs ('Double kill!' ...) so playback is
+    instant mid-game. Cached per voice under cache_medals/ — after the first
+    render they work offline forever. Returns {kill_count: wav_path}."""
+    safe_voice = "".join(c for c in voice if c.isalnum() or c in "-_")
+    mdir = os.path.join(base_dir, "cache_medals", safe_voice)
+    os.makedirs(mdir, exist_ok=True)
+    out = {}
+    for n, (name, text) in MEDALS.items():
+        wav = os.path.join(mdir, f"{name}.wav")
+        if os.path.exists(wav):
+            out[n] = wav
+            continue
+        src = synth_to_wav(text, os.path.join(mdir, f"{name}_raw.wav"), voice)
+        if not src:
+            continue
+        if src.endswith(".wav"):
+            os.replace(src, wav)
+        else:
+            # neural output is mp3; winsound needs wav
+            r = subprocess.run([ffmpeg, "-y", "-i", src, "-ar", "48000", wav],
+                               capture_output=True, text=True,
+                               creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+            try:
+                os.remove(src)
+            except OSError:
+                pass
+            if r.returncode != 0:
+                continue
+        if os.path.exists(wav):
+            out[n] = wav
+    if out:
+        print(f"  [medals] {len(out)} call-outs ready ({voice})")
+    return out
+
+
+def play_medal(medal_sounds: dict, kill_count: int) -> None:
+    """Fire-and-forget playback of the right call-out (async, never blocks)."""
+    wav = medal_sounds.get(kill_count) or medal_sounds.get(5)
+    if not wav or not os.path.exists(wav):
+        return
+    try:
+        if sys.platform == "win32":
+            import winsound
+            winsound.PlaySound(wav, winsound.SND_FILENAME | winsound.SND_ASYNC)
+        elif sys.platform == "darwin":
+            subprocess.Popen(["afplay", wav])
+    except Exception:
+        pass
+
+
 def _spoken_number(n: int) -> str:
     """Numbers up to twelve read better as words."""
     words = ["zero", "one", "two", "three", "four", "five", "six", "seven",

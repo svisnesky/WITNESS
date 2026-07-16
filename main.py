@@ -553,7 +553,7 @@ def _setup_session(cfg, dry_run):
         except Exception as e:
             print(f"(web dashboard off: {e})")
 
-    return {
+    s = {
         "obs": obs,
         "web": web,
         "count": 0,
@@ -567,7 +567,27 @@ def _setup_session(cfg, dry_run):
         "match_clips": [],   # organized clip paths since the last exfil (this match)
         "match_num": 0,
         "cfg": cfg,
+        "medal_sounds": {},
     }
+    if cfg.get("announcer_medals", True) and not dry_run:
+        _prepare_medals_async(cfg, s)
+    return s
+
+
+def _prepare_medals_async(cfg, s):
+    """Render the medal call-outs in the background so the first DOUBLE KILL
+    plays instantly (cached per voice; offline after the first render)."""
+    def work():
+        try:
+            import announcer
+            import montage
+            base = os.path.dirname(os.path.abspath(__file__))
+            s["medal_sounds"] = announcer.ensure_medal_sounds(
+                base, cfg.get("announcer_voice", announcer.DEFAULT_VOICE),
+                montage.find_ffmpeg(base, cfg))
+        except Exception as e:
+            print(f"  [medals] prep failed: {e}")
+    threading.Thread(target=work, daemon=True).start()
 
 
 def _clip_ready_callback(s, tag, count, kills=1):
@@ -622,10 +642,14 @@ def _flush_coalesce(s):
     combo_tag = "+".join(dict.fromkeys(tags))  # e.g. "down+finisher", deduped, order-preserving
     label = ",".join(str(c) for c in counts)
     print(f"  [coalesce] saving clip for kill(s) #{label} [{combo_tag}]")
-    if len(counts) >= 2 and s["cfg"].get("overlay_multikill", True):
-        show_text_overlay(s["cfg"],
-                          MULTIKILL_NAMES.get(len(counts), "MULTI KILL"),
-                          size=64, position="custom:0.5,0.40", duration_ms=1700)
+    if len(counts) >= 2:
+        if s["cfg"].get("overlay_multikill", True):
+            show_text_overlay(s["cfg"],
+                              MULTIKILL_NAMES.get(len(counts), "MULTI KILL"),
+                              size=64, position="custom:0.5,0.40", duration_ms=1700)
+        if s["cfg"].get("announcer_medals", True):
+            import announcer
+            announcer.play_medal(s["medal_sounds"], len(counts))
     if s["obs"].save_replay():
         s["last_save"] = time.monotonic()
         if s["organize"]:
