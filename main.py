@@ -128,11 +128,16 @@ def build_detector(cfg: dict):
     """Return (detector, mode). mode is 'popup', 'killfeed', or 'audio'."""
     mode = cfg.get("detection_mode", "popup")
     if mode == "popup":
+        # NOTE: defaults here must mirror config.yaml's tuned values — existing
+        # installs keep their own config.yaml across updates, so behavior
+        # changes ship as these code defaults.
         det = PopupDetector(
-            trigger_phrases=cfg.get("popup_trigger_phrases", ["RUNNER DOWN"]),
-            phrase_match_threshold=cfg.get("popup_match_threshold", 80),
-            absence_frames=cfg.get("popup_absence_frames", 2),
-            confirm_frames=cfg.get("popup_confirm_frames", 2),
+            trigger_phrases=cfg.get("popup_trigger_phrases",
+                                    ["RUNNER DOWN", "PRECISION DOWN",
+                                     "FINISHER", "RUNNER ELIM"]),
+            phrase_match_threshold=cfg.get("popup_match_threshold", 85),
+            absence_frames=cfg.get("popup_absence_frames", 3),
+            confirm_frames=cfg.get("popup_confirm_frames", 1),
             require_reward=cfg.get("require_reward", True),
             cooldown_seconds=cfg.get("popup_cooldown_seconds", 2.0),
         )
@@ -205,7 +210,9 @@ def is_suppressed(cfg: dict, lines) -> bool:
     on the self-revive or give-up screen). Prevents false kills from the death
     UI + lingering kill-feed text."""
     from detector import _normalize, phrase_matches
-    phrases = cfg.get("suppress_phrases", ["SELF REVIVE", "GIVE UP"])
+    phrases = cfg.get("suppress_phrases",
+                      ["SELF REVIVE", "GIVE UP", "RUNNER DAMAGE",
+                       "CREW REVIVES", "INVENTORY VALUE"])
     blob = _normalize(" ".join(lines))
     if not blob:
         return False
@@ -505,7 +512,10 @@ def _setup_session(cfg, dry_run):
             port = cfg.get("web_port", 8000)
             if _web_server is None:
                 _web_state = webserver.LiveState()
-                _web_server = webserver.start_web(_web_state, port, base)
+                # web_lan: true serves to your Wi-Fi (needed for the iPad).
+                # false = this PC only (most locked-down).
+                host = "0.0.0.0" if cfg.get("web_lan", True) else "127.0.0.1"
+                _web_server = webserver.start_web(_web_state, port, base, host=host)
             web = _web_state
             web.reset()
             web.bind_config(cfg, save_setting_overrides)

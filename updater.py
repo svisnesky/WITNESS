@@ -28,6 +28,9 @@ VERSION_FILE = ".app_version"
 EXTS = (".py", ".yaml", ".md", ".txt", ".bat", ".png", ".wav")
 # Repo files that must never overwrite local state.
 SKIP = {"settings_override.yaml", "session_log.csv"}
+# Written on first install only, then left alone — a user's edits (OBS
+# password, tuning) must survive updates. New options ship as code defaults.
+SKIP_IF_EXISTS = {"config.yaml"}
 
 
 def _get(url: str, timeout: float = 10) -> bytes:
@@ -86,6 +89,8 @@ def check_and_update(base_dir: str) -> tuple[bool, str]:
     changed = []
     for path, data in fetched:
         dest = os.path.join(base_dir, path.replace("/", os.sep))
+        if os.path.basename(path) in SKIP_IF_EXISTS and os.path.exists(dest):
+            continue  # user-owned file: never overwrite after first install
         try:
             with open(dest, "rb") as f:
                 if f.read() == data:

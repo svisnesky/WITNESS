@@ -12,6 +12,18 @@ session_log.csv
 # Local overrides (keep secrets like OBS password out of git)
 config.local.yaml
 
+# Credentials — NEVER commit these
+client_secret.json
+youtube_token.json
+*.pem
+*.key
+
+# Personal/session artifacts
+stats/
+debug_frame.png
+.app_version
+music/
+
 # OS
 .DS_Store
 Thumbs.db

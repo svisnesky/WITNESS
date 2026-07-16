@@ -173,6 +173,11 @@ youtube_privacy: "unlisted"   # unlisted | private | public
 # --- Live web dashboard (view on a phone/iPad browser over the LAN) ---
 web_dashboard: true    # serve a live kill feed page
 web_port: 8000         # open http://<your-PC-IP>:8000 on the device
+web_lan: true          # true = reachable from devices on your Wi-Fi (the iPad).
+                       # NOTE: the dashboard has no password — anyone on the same
+                       # network can see stats and press its buttons. On a home
+                       # network that's fine; on shared/public Wi-Fi set false
+                       # (this PC only).
 
 # =========================================================================
 # AUDIO MODE settings (only used when detection_mode: audio)

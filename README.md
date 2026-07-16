@@ -42,6 +42,27 @@ only reads OBS's Virtual Camera; for provably zero risk, run it on a second PC
 fed by a capture card. No guarantees about Bungie's policies — use at your own
 discretion.
 
+## Security notes
+
+Worth knowing before you run someone else's recorder:
+
+- **Nothing leaves your machine** except: the update check to this GitHub repo
+  (HTTPS), and — only if you set it up yourself — YouTube uploads using your
+  own Google OAuth credentials. No telemetry, no accounts, no third parties.
+- **Auto-update runs code from this repo.** That's what an auto-updater is:
+  whatever lands on the `main` branch runs on your PC at next launch. If you
+  don't want that trust relationship, set `auto_update: false` and update
+  manually by reading the diffs.
+- **The dashboard has no password.** It serves on your local network so a
+  phone/iPad can reach it; anyone on the same Wi-Fi can view stats and press
+  its buttons (save clip, +1, settings). Fine at home — on shared or public
+  Wi-Fi, set `web_lan: false` (this PC only) or `web_dashboard: false`.
+- **Credentials stay local and out of git**: your OBS password lives in your
+  local `config.yaml` (never overwritten by updates), and
+  `client_secret.json` / `youtube_token.json` are gitignored.
+- The dashboard serves only fixed assets and clips the app itself registered —
+  requests can't reach arbitrary files, and on-screen text is HTML-escaped.
+
 ## Requirements
 
 - Windows PC (the game machine). NVIDIA GPU recommended for EasyOCR.

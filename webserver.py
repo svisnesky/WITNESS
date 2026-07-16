@@ -197,7 +197,7 @@ def local_ip():
         return "127.0.0.1"
 
 
-def start_web(state, port, base_dir):
+def start_web(state, port, base_dir, host="0.0.0.0"):
     imgs = {"/skull.png": "marathon_skull.png",
             "/wordmark.png": "marathon_wordmark.png"}
 
@@ -308,7 +308,7 @@ def start_web(state, port, base_dir):
             except (BrokenPipeError, ConnectionResetError):
                 pass
 
-    srv = ThreadingHTTPServer(("0.0.0.0", int(port)), Handler)
+    srv = ThreadingHTTPServer((host, int(port)), Handler)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     return srv
 
