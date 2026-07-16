@@ -599,7 +599,7 @@ def _prepare_medals_async(cfg, s):
             s["medal_sounds"] = announcer.ensure_medal_sounds(
                 base, cfg.get("announcer_voice", announcer.DEFAULT_VOICE),
                 montage.find_ffmpeg(base, cfg),
-                pitch=cfg.get("announcer_pitch", "+0Hz"))
+                pitch=cfg.get("announcer_pitch", announcer.DEFAULT_PITCH))
         except Exception as e:
             print(f"  [medals] prep failed: {e}")
     threading.Thread(target=work, daemon=True).start()
@@ -861,7 +861,7 @@ def _build_match_reel_async(cfg, s, session_dir, stats_d):
                         script,
                         os.path.join(session_dir, "reels", f"match_{match_num}_tts.wav"),
                         voice=cfg.get("announcer_voice", announcer.DEFAULT_VOICE),
-                        pitch=cfg.get("announcer_pitch", "+0Hz"))
+                        pitch=cfg.get("announcer_pitch", announcer.DEFAULT_PITCH))
                     if wav:
                         aout = os.path.join(session_dir, "reels",
                                             f"match_{match_num}_announced.mp4")

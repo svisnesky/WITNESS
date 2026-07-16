@@ -17,7 +17,8 @@ import os
 import subprocess
 import sys
 
-DEFAULT_VOICE = "en-US-GuyNeural"
+DEFAULT_VOICE = "en-US-ChristopherNeural"
+DEFAULT_PITCH = "-18Hz"          # deep broadcast voice — Stan-approved
 
 
 def synth_to_wav(text: str, out_wav: str, voice: str = DEFAULT_VOICE,
@@ -175,31 +176,35 @@ def stat_line(kills: int, stats: dict, potg_tag: str = "",
     k = _spoken_number(kills)
     who = player or "our runner"
     if runner:
-        who = f"{who}, on {runner},"
+        who = f"{who} on {runner}"
 
+    # One flowing sentence + a short sting. Neural voices take a full breath
+    # at every period, so chains of short sentences sound choppy — clauses
+    # keep the delivery natural.
     if kills == 0:
         return random.choice([
-            f"Quiet one on the kill feed, but {who} made it out. Roll the tape.",
-            f"No kills this run, but an exfil is an exfil. Here's how it went.",
+            f"Quiet one on the kill feed, but {who} made it out alive. Roll the tape.",
+            f"No kills this run, but an exfil is an exfil. Here's how it went down.",
         ])
 
-    openers = [
-        f"Match highlights. {who} drops {k} kill{'s' if kills != 1 else ''}.",
-        f"{k.capitalize()} kill{'s' if kills != 1 else ''} for {who} this run.",
-        f"Highlights incoming. {k.capitalize()} kill{'s' if kills != 1 else ''} on the board.",
-    ]
-    parts = [random.choice(openers)]
-
+    ks = f"{k} kill{'s' if kills != 1 else ''}"
     if potg_tag:
         tag = potg_tag.replace("+", " and ").replace("_", " ").lower()
-        parts.append(random.choice([
-            f"Play of the game: a {tag}.",
-            f"The big one? A {tag}.",
-        ]))
+        bodies = [
+            f"Match highlights, where {who} drops {ks}, capped by a {tag} for play of the game.",
+            f"{ks.capitalize()} for {who} this run, and the big one was a {tag}.",
+            f"{who.capitalize()} puts {ks} on the board, including a {tag} you'll want to see twice.",
+        ]
     elif stats.get("runner_damage"):
-        parts.append(f"{stats['runner_damage']} runner damage dealt.")
+        bodies = [
+            f"Match highlights, where {who} drops {ks} and {stats['runner_damage']} runner damage.",
+            f"{ks.capitalize()} and {stats['runner_damage']} damage for {who} this run.",
+        ]
+    else:
+        bodies = [
+            f"Match highlights, where {who} drops {ks}.",
+            f"{ks.capitalize()} for {who} this run.",
+        ]
 
-    parts.append(random.choice([
-        "Roll the tape.", "Watch this.", "To the footage.", "Enjoy.",
-    ]))
-    return " ".join(parts)
+    sting = random.choice(["Roll the tape.", "Watch this.", "To the footage."])
+    return f"{random.choice(bodies)} {sting}"
