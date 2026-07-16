@@ -1,6 +1,10 @@
 # Marathon Auto Kill Recorder — configuration
 # Edit these values; no code changes needed.
 
+# Check GitHub for a newer version on every launch and update automatically
+# (then relaunch on the fresh code). No more manual downloads.
+auto_update: true
+
 # =========================================================================
 # DETECTION MODE
 #   popup    -> (recommended) watch the center-screen personal confirmation
@@ -106,6 +110,9 @@ obs:
   counter_source: "KillCounter"  # name of the Text source in your OBS scene
   counter_format: "Kills: {count}"  # {count} is replaced with the running total
   auto_start_replay_buffer: true    # start the Replay Buffer on launch if not running
+  auto_launch: true                 # if OBS itself isn't running, launch it and wait
+  exe_path: ""                      # path to obs64.exe; empty = auto-find the
+                                    # standard install location
 
 # --- Kill signal (single-monitor friendly) ---
 play_sound: false   # PC-side beep on each kill (off: the iPad dashboard dings

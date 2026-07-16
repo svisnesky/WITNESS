@@ -422,6 +422,59 @@ def _tune_performance(cfg):
         pass
 
 
+def _obs_port_open(host: str, port: int, timeout: float = 1.5) -> bool:
+    import socket
+    try:
+        with socket.create_connection((host, int(port)), timeout=timeout):
+            return True
+    except OSError:
+        return False
+
+
+def _ensure_obs_running(cfg) -> None:
+    """If OBS's websocket isn't reachable, launch OBS ourselves and wait for it
+    (Windows). Kills the classic 'connection refused because OBS wasn't open'
+    startup failure. Controlled by obs.auto_launch (default true)."""
+    obs_cfg = cfg.get("obs", {})
+    host = obs_cfg.get("host", "localhost")
+    port = obs_cfg.get("port", 4455)
+    if _obs_port_open(host, port):
+        return
+    if not obs_cfg.get("auto_launch", True) or sys.platform != "win32":
+        return
+
+    exe = (obs_cfg.get("exe_path") or "").strip()
+    if not exe:
+        for cand in (r"C:\Program Files\obs-studio\bin\64bit\obs64.exe",
+                     r"C:\Program Files (x86)\obs-studio\bin\64bit\obs64.exe"):
+            if os.path.exists(cand):
+                exe = cand
+                break
+    if not exe or not os.path.exists(exe):
+        print("OBS isn't running and obs64.exe wasn't found — start OBS "
+              "manually (or set obs.exe_path in config.yaml).")
+        return
+
+    print("OBS isn't running — launching it for you...")
+    try:
+        # OBS must be started FROM its own bin directory or it errors out.
+        import subprocess
+        subprocess.Popen([exe, "--startreplaybuffer", "--minimize-to-tray",
+                          "--disable-shutdown-check"],
+                         cwd=os.path.dirname(exe))
+    except Exception as e:
+        print(f"Could not launch OBS: {e}")
+        return
+    # Wait for the websocket to come up (OBS cold start takes a few seconds).
+    for _ in range(30):
+        time.sleep(1)
+        if _obs_port_open(host, port):
+            print("OBS is up.")
+            return
+    print("OBS was launched but its WebSocket isn't answering yet — check "
+          "Tools -> WebSocket Server Settings is enabled.")
+
+
 def _setup_session(cfg, dry_run):
     """Common session setup shared by OCR and audio run modes. Returns a dict
     of session state (obs, web, counters, etc.)."""
@@ -431,6 +484,7 @@ def _setup_session(cfg, dry_run):
     if dry_run:
         obs = DryRunOBS()
     else:
+        _ensure_obs_running(cfg)
         obs = OBSClient(
             host=obs_cfg.get("host", "localhost"),
             port=obs_cfg.get("port", 4455),
@@ -1212,6 +1266,19 @@ def main():
     p.add_argument("--tray", action="store_true",
                    help="run from a system-tray skull icon (no console window)")
     args = p.parse_args()
+
+    # Self-update before anything loads config or starts detecting. If files
+    # changed, this relaunches the process so the new code actually runs.
+    if not (args.test_image or args.test_lines):
+        try:
+            import updater
+            msg = updater.update_and_relaunch_if_needed(
+                os.path.dirname(os.path.abspath(__file__)))
+            print(msg)
+        except SystemExit:
+            raise
+        except Exception as e:
+            print(f"(update check skipped: {e})")
 
     cfg = load_config(args.config)
 

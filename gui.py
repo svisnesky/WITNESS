@@ -17,6 +17,18 @@ from tkinter import scrolledtext
 
 BASE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, BASE)
+
+# Self-update BEFORE importing app code, so fresh files actually load. If
+# anything changed, this relaunches the window on the new version.
+UPDATE_MSG = ""
+try:
+    import updater
+    UPDATE_MSG = updater.update_and_relaunch_if_needed(BASE)
+except SystemExit:
+    raise
+except Exception as _e:
+    UPDATE_MSG = f"Update check skipped: {_e}"
+
 import main as app  # noqa: E402  (reuse run_live / load_config)
 
 BG = "#0b0f12"
@@ -137,8 +149,10 @@ class ControlPanel:
             font=("Consolas", 9), height=12, wrap="word", borderwidth=0)
         self.log.pack(fill="both", expand=True, padx=20, pady=(0, 16))
         self.log.configure(state="disabled")
-        self._log("Ready. Make sure OBS is open with the Replay Buffer running, "
-                  "then press START.")
+        if UPDATE_MSG:
+            self._log(UPDATE_MSG)
+        self._log("Ready. Press START (OBS will be launched for you if it "
+                  "isn't already running).")
 
     def _render_dry(self):
         on = self.dry.get()

@@ -95,6 +95,11 @@ Open the printed dashboard URL on your iPad, tap the page once (unlocks the
 kill ding), and play. The dashboard's **How to use** button explains every
 feature in-app.
 
+**It keeps itself updated**: on every launch the app checks GitHub, downloads
+anything new, and relaunches on the fresh code — no manual downloads. Turn off
+with `auto_update: false`. It also **launches OBS for you** (with the Replay
+Buffer) if OBS isn't already running (`obs.auto_launch`).
+
 Test without OBS side effects:
 
 ```bat
