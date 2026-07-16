@@ -31,6 +31,66 @@ CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.y
 _web_state = None
 _web_server = None
 
+# Per-session console log: everything printed is also written to a file so you
+# can just send the file instead of copy-pasting a live, scrolling console.
+_log_fh = None
+_log_prev_stdout = None
+_log_path = None
+
+
+class _Tee:
+    """Write to the real stream AND the session log file."""
+    def __init__(self, stream, fh):
+        self._stream, self._fh = stream, fh
+    def write(self, s):
+        try:
+            self._stream.write(s)
+        except Exception:
+            pass
+        try:
+            self._fh.write(s); self._fh.flush()
+        except Exception:
+            pass
+    def flush(self):
+        for t in (self._stream, self._fh):
+            try:
+                t.flush()
+            except Exception:
+                pass
+
+
+def _install_session_log():
+    """Tee stdout to logs/session_<time>.log. Returns the path (or None)."""
+    global _log_fh, _log_prev_stdout, _log_path
+    try:
+        base = os.path.dirname(os.path.abspath(__file__))
+        logdir = os.path.join(base, "logs")
+        os.makedirs(logdir, exist_ok=True)
+        _log_path = os.path.join(logdir, f"session_{time.strftime('%Y-%m-%d_%H-%M-%S')}.log")
+        _log_fh = open(_log_path, "w", encoding="utf-8")
+        _log_prev_stdout = sys.stdout
+        sys.stdout = _Tee(sys.stdout, _log_fh)
+        print(f"Logging this session to: {_log_path}")
+        return _log_path
+    except Exception as e:
+        print(f"(could not open session log: {e})")
+        return None
+
+
+def _close_session_log():
+    global _log_fh, _log_prev_stdout
+    try:
+        if _log_path:
+            print(f"Session log saved: {_log_path}  (send me this file)")
+        if _log_prev_stdout is not None:
+            sys.stdout = _log_prev_stdout
+        if _log_fh is not None:
+            _log_fh.close()
+    except Exception:
+        pass
+    finally:
+        _log_fh = None; _log_prev_stdout = None
+
 
 def load_config(path=CONFIG_PATH) -> dict:
     with open(path) as f:
@@ -647,6 +707,14 @@ def _classify_audio_event(tag: str) -> str:
 
 
 def run_live(cfg: dict, dry_run: bool = False, stop_event=None, on_count=None):
+    _install_session_log()
+    try:
+        return _run_live_inner(cfg, dry_run, stop_event, on_count)
+    finally:
+        _close_session_log()
+
+
+def _run_live_inner(cfg: dict, dry_run: bool = False, stop_event=None, on_count=None):
     det, mode = build_detector(cfg)
 
     if mode == "audio":
