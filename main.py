@@ -530,7 +530,19 @@ def _setup_session(cfg, dry_run):
             counter_format=obs_cfg.get("counter_format", "Kills: {count}"),
             auto_start_replay_buffer=obs_cfg.get("auto_start_replay_buffer", True),
         )
-    obs.connect()
+    # A freshly-launched OBS opens its websocket port BEFORE it's ready to
+    # answer requests ("code 207: OBS is not ready"). Retry the handshake
+    # until it finishes booting.
+    for attempt in range(20):
+        try:
+            obs.connect()
+            break
+        except Exception as e:
+            if attempt >= 19:
+                raise
+            if attempt == 0:
+                print("OBS is still starting up — waiting for it...")
+            time.sleep(1.5)
     obs.set_counter(0)
 
     web = None
