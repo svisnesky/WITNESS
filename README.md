@@ -57,6 +57,20 @@ screen -> OCR -> detector -> OBS replay save -> clips, reels, shorts, dashboard
 - **Session recap** — montage, shareable match-card PNG, and an HTML recap at
   session end.
 
+## Console players?
+
+Yes — with a capture card and any spare PC. The whole pipeline just reads a
+video feed, so: console -> HDMI capture card (passthrough to your TV, zero
+added latency) -> a PC running OBS + this app. Every feature works exactly the
+same — detection, clips, reels, stats, the phone dashboard. The PC doesn't
+need to be a gaming rig (the console renders the game); anything that passes
+`--bench` works. A ~$20 USB HDMI grabber is enough — the popup text is large.
+In OBS, right-click the capture-card source -> Fullscreen Projector on the
+monitor this app watches.
+
+Without a PC anywhere in the chain there's nothing we can do — no code can
+run on the console itself.
+
 ## Anti-cheat note
 
 This tool never touches the game: it does **not** read game memory, inject
