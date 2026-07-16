@@ -3,6 +3,9 @@
 Automatically clips every kill you get in **Marathon** — and turns each match
 into a highlight reel.
 
+**New here? Follow [QUICKSTART.md](QUICKSTART.md)** — zero to auto-clipped
+kills in ~15 minutes, no coding.
+
 Marathon has no public kill API, so this tool *watches your screen*: it OCRs
 the center-screen reward popup that appears only on your downs
 (**"RUNNER DOWN +15 XP"**, **"FINISHER +50"**, **"PRECISION DOWN +25"**). On

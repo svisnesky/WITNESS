@@ -187,7 +187,8 @@ def build_match_reel(clips, out_path: str, ffmpeg: str,
                      title: str, kills: int, sub_lines: list[str],
                      wordmark_path: str = "", music_path: str = "",
                      music_volume: float = 0.08,
-                     music_tracks: list[str] | None = None) -> bool:
+                     music_tracks: list[str] | None = None,
+                     transitions: bool = True, chyrons: bool = True) -> bool:
     """Title card [+ POTG card] + clips [+ music bed] -> one mp4.
 
     music_volume is 0-1 (0.08 = quiet bed under the game audio).
@@ -201,6 +202,8 @@ def build_match_reel(clips, out_path: str, ffmpeg: str,
         return False
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
 
+    for i, c in enumerate(clips):        # kill numbers in match order,
+        c["n"] = i + 1                   # assigned before the POTG reorder
     potg = pick_potg(clips)
     if potg is not None:
         clips = [potg] + [c for c in clips if c is not potg]
@@ -226,53 +229,96 @@ def build_match_reel(clips, out_path: str, ffmpeg: str,
         print("  [reel] NO cards built (Pillow missing?) — reel will be clips only. "
               "Run: .venv\\Scripts\\python -m pip install pillow")
 
-    # Input plan: title card, [clip0 (potg)], [potg card inserted BEFORE clip0]...
-    # Segment order: title card -> (potg card -> potg clip) -> remaining clips.
-    segments = []  # ("card", png) | ("clip", path)
+    # End card ("GG") closes the reel.
+    end_png = stem + "_end.png"
+    have_end_card = _build_card(end_png, "MARATHON", "GG", "",
+                                ["AUTO KILL RECORDER"], wordmark_path)
+    END_SECONDS = 2.4
+
+    # Segment order: title card -> (POTG card -> POTG clip) -> clips -> end card.
+    segments = []  # {kind, path, dur, label}
     if cards:
-        segments.append(("card", title_png))
+        segments.append({"kind": "card", "path": title_png, "dur": CARD_SECONDS})
     if potg is not None and have_potg_card:
-        segments.append(("card", potg_png))
+        segments.append({"kind": "card", "path": potg_png, "dur": CARD_SECONDS})
     for c in clips:
-        segments.append(("clip", c["path"]))
+        tag_txt = c["tag"].replace("+", " + ").replace("_", " ").upper()
+        label = (f"PLAY OF THE GAME - {tag_txt}" if c is potg
+                 else f"KILL {c.get('n', '?')} - {tag_txt}")
+        segments.append({"kind": "clip", "path": c["path"],
+                         "dur": probe_duration(c["path"], ffmpeg), "label": label})
+    if have_end_card:
+        segments.append({"kind": "card", "path": end_png, "dur": END_SECONDS})
+
+    # Broadcast chyron ("KILL 3 - PRECISION") on each clip, if this ffmpeg
+    # build has drawtext.
+    import shorts as _shorts
+    font = _shorts._find_font()
+    use_chyrons = bool(chyrons and font and _shorts._has_drawtext(ffmpeg))
+
+    def _chyron(label: str) -> str:
+        ff = font.replace(":", r"\:")
+        txt = label.replace("'", "").replace(":", r"\:")
+        a = ("'if(lt(t,0.4),0,if(lt(t,0.9),(t-0.4)*2,"
+             "if(lt(t,4.2),1,if(lt(t,4.9),(4.9-t)/0.7,0))))'")
+        return (f",drawtext=fontfile='{ff}':text='{txt}':fontsize=52:fontcolor=white:"
+                f"borderw=4:bordercolor=black@0.85:x=64:y=h-150:alpha={a}")
 
     cmd = [ffmpeg, "-y"]
-    for kind, path in segments:
-        if kind == "card":
-            cmd += ["-loop", "1", "-framerate", "60", "-t", str(CARD_SECONDS), "-i", path,
-                    "-f", "lavfi", "-t", str(CARD_SECONDS), "-i", "anullsrc=r=48000:cl=stereo"]
+    for seg in segments:
+        if seg["kind"] == "card":
+            cmd += ["-loop", "1", "-framerate", "60", "-t", str(seg["dur"]), "-i", seg["path"],
+                    "-f", "lavfi", "-t", str(seg["dur"]), "-i", "anullsrc=r=48000:cl=stereo"]
         else:
-            cmd += ["-i", path]
+            cmd += ["-i", seg["path"]]
 
     # Cards consume two inputs each (image + silence); clips consume one.
+    n_seg = len(segments)
+    use_xfade = bool(transitions) and all(s["dur"] is not None for s in segments) and n_seg > 1
     in_i = 0
     chains = []
-    for si, (kind, path) in enumerate(segments):
-        if kind == "card":
-            fade = (f",fade=t=in:d=0.4,fade=t=out:st={CARD_SECONDS - 0.4}:d=0.4")
-            chains.append(f"[{in_i}:v]scale=1920:1080,setsar=1,format=yuv420p{fade}[v{si}];"
+    for si, seg in enumerate(segments):
+        if seg["kind"] == "card":
+            # In xfade mode the transitions handle the blend; only the very
+            # first fade-in stays.
+            if use_xfade:
+                fade = ",fade=t=in:d=0.4" if si == 0 else ""
+            else:
+                fade = f",fade=t=in:d=0.4,fade=t=out:st={seg['dur'] - 0.4}:d=0.4"
+            chains.append(f"[{in_i}:v]scale=1920:1080,setsar=1,fps=60,format=yuv420p{fade}[v{si}];"
                           f"[{in_i + 1}:a]anull[a{si}]")
             in_i += 2
         else:
-            chains.append(f"[{in_i}:v]scale=1920:1080,setsar=1,fps=60,format=yuv420p[v{si}];"
+            dt = _chyron(seg["label"]) if use_chyrons else ""
+            chains.append(f"[{in_i}:v]scale=1920:1080,setsar=1,fps=60,format=yuv420p{dt}[v{si}];"
                           f"[{in_i}:a]aformat=sample_rates=48000:channel_layouts=stereo[a{si}]")
             in_i += 1
 
-    pairs = "".join(f"[v{i}][a{i}]" for i in range(len(segments)))
-    chains.append(f"{pairs}concat=n={len(segments)}:v=1:a=1[v][cat]")
+    if use_xfade:
+        XF = 0.5
+        prev_v, prev_a, acc = "[v0]", "[a0]", segments[0]["dur"]
+        for k in range(1, n_seg):
+            nv, na = f"[vx{k}]", f"[ax{k}]"
+            chains.append(f"{prev_v}[v{k}]xfade=transition=fade:duration={XF}:"
+                          f"offset={acc - XF:.3f}{nv}")
+            chains.append(f"{prev_a}[a{k}]acrossfade=d={XF}{na}")
+            prev_v, prev_a = nv, na
+            acc += segments[k]["dur"] - XF
+        total = acc
+        chains.append(f"{prev_v}fade=t=out:st={max(0.0, total - 0.7):.3f}:d=0.7[v]")
+        chains.append(f"{prev_a}anull[cat]")
+    else:
+        pairs = "".join(f"[v{i}][a{i}]" for i in range(n_seg))
+        chains.append(f"{pairs}concat=n={n_seg}:v=1:a=1[v][cat]")
+        durs = [s["dur"] for s in segments]
+        total = sum(durs) if all(d is not None for d in durs) else None
 
     a_out = "[cat]"
     tracks = [t for t in (music_tracks or ([music_path] if music_path else []))
               if t and os.path.exists(t)]
     if tracks:
         vol = max(0.0, min(1.0, float(music_volume)))
-        # Total reel length = cards + clips; needed for fade-out placement and
-        # per-track segment sizing. If probing fails, fall back to the plain
-        # looped bed (no fades).
-        n_cards = sum(1 for kind, _ in segments if kind == "card")
-        clip_durs = [probe_duration(c["path"], ffmpeg) for c in clips]
-        if all(d is not None for d in clip_durs):
-            total = n_cards * CARD_SECONDS + sum(clip_durs)
+        if total is not None:
             m_args, m_chains = _music_inputs_and_chain(tracks, total, vol, ffmpeg, in_i)
             cmd += m_args
             chains += m_chains
@@ -288,7 +334,7 @@ def build_match_reel(clips, out_path: str, ffmpeg: str,
             "-c:a", "aac", "-b:a", "160k", "-movflags", "+faststart", out_path]
 
     r = _run(cmd)
-    for png in (title_png, potg_png):
+    for png in (title_png, potg_png, end_png):
         try:
             os.remove(png)
         except OSError:
@@ -297,6 +343,18 @@ def build_match_reel(clips, out_path: str, ffmpeg: str,
         return True
     tail = (r.stderr.strip().splitlines() or ["(no output)"])[-1]
     print(f"  [reel] ffmpeg failed: {tail}")
+    # Degrade gracefully rather than produce nothing: drop chyrons first
+    # (drawtext is the flakiest across ffmpeg builds), then transitions.
+    if use_chyrons:
+        print("  [reel] retrying without chyrons...")
+        return build_match_reel(clips, out_path, ffmpeg, title, kills, sub_lines,
+                                wordmark_path, music_path, music_volume,
+                                music_tracks, transitions=transitions, chyrons=False)
+    if use_xfade:
+        print("  [reel] retrying without transitions...")
+        return build_match_reel(clips, out_path, ffmpeg, title, kills, sub_lines,
+                                wordmark_path, music_path, music_volume,
+                                music_tracks, transitions=False, chyrons=False)
     return False
 
 

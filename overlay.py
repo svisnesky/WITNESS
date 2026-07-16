@@ -116,7 +116,42 @@ def main():
     except Exception:
         pass  # non-Windows or API hiccup: still shows, just not click-through
 
-    root.after(duration, root.destroy)
+    # Animate like the game's own reward popups: fade in fast, hold, then
+    # drift upward while fading out. A static blink-on/blink-off reads as a
+    # glitch next to Marathon's animated UI.
+    FADE_IN = 120                     # ms
+    FADE_OUT = 450                    # ms
+    RISE = max(20, h // 4)            # px of upward drift during fade-out
+    TICK = 16                         # ~60fps
+    hold = max(0, duration - FADE_IN - FADE_OUT)
+
+    def set_alpha(a):
+        try:
+            root.attributes("-alpha", max(0.0, min(1.0, a)))
+        except tk.TclError:
+            pass
+
+    def fade_in(step=0):
+        t = step * TICK
+        set_alpha(alpha * min(1.0, t / FADE_IN))
+        if t < FADE_IN:
+            root.after(TICK, fade_in, step + 1)
+        else:
+            root.after(hold, fade_out, 0)
+
+    def fade_out(step=0):
+        t = step * TICK
+        p = min(1.0, t / FADE_OUT)
+        ease = 1 - (1 - p) * (1 - p)          # ease-out
+        set_alpha(alpha * (1.0 - p))
+        root.geometry(f"{w}x{h}+{x}+{int(y - RISE * ease)}")
+        if t < FADE_OUT:
+            root.after(TICK, fade_out, step + 1)
+        else:
+            root.destroy()
+
+    set_alpha(0.0)
+    fade_in()
     root.mainloop()
 
 
