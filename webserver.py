@@ -18,6 +18,10 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 # at use-time in the main loop, so changes apply live — no restart needed.
 SETTINGS = {
     "play_sound": (False, bool),            # PC-side beep on kills
+    "show_overlays": (True, bool),          # master switch for all on-screen flashes
+    "overlay_multikill": (True, bool),      # DOUBLE/TRIPLE KILL banner
+    "overlay_clip_saved": (True, bool),     # CLIP SAVED chip
+    "overlay_reel_ready": (True, bool),     # HIGHLIGHTS READY chip
     "kill_coalesce_seconds": (8.0, float),  # group kills into one clip window
     "make_match_reels": (True, bool),
     "reel_music": (True, bool),
@@ -32,6 +36,10 @@ SETTINGS = {
 
 # Human labels for the settings panel, in display order.
 SETTINGS_META = [
+    ("show_overlays", "On-screen flashes (master)"),
+    ("overlay_multikill", "DOUBLE KILL banner"),
+    ("overlay_clip_saved", "CLIP SAVED chip"),
+    ("overlay_reel_ready", "HIGHLIGHTS READY chip"),
     ("kill_coalesce_seconds", "Group kills within (seconds)"),
     ("make_match_reels", "Match highlight reels"),
     ("reel_music", "Reel music bed"),
