@@ -36,6 +36,13 @@ it's "open the app, press START" forever (the app keeps itself updated).
    and a session recap are waiting in your OBS recording folder under
    `Marathon Sessions/`.
 
+## Worried about performance?
+
+Run `python main.py --bench` (from the app folder, after setup) — it measures
+the detection loop on YOUR machine and tells you if it keeps up. Any 6 GB+
+NVIDIA card is comfortable; the heavy video work happens after you stop
+playing, not mid-fight.
+
 ## If something's off
 
 - **No clips saved** — is the Replay Buffer enabled in OBS?

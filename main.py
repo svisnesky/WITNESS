@@ -1176,6 +1176,9 @@ def main():
                    help="OCR a saved screenshot and report detected kills (no OBS, no loop)")
     p.add_argument("--test-lines", nargs="+", metavar="LINE",
                    help="run detection on literal feed lines (no OCR, no OBS)")
+    p.add_argument("--bench", action="store_true",
+                   help="measure OCR speed on THIS machine and say whether it "
+                        "can keep up (run it with the game open for a real number)")
     p.add_argument("--tray", action="store_true",
                    help="run from a system-tray skull icon (no console window)")
     args = p.parse_args()
@@ -1199,10 +1202,56 @@ def main():
         run_test_lines(cfg, args.test_lines)
     elif args.test_image:
         run_test_image(cfg, args.test_image)
+    elif args.bench:
+        run_bench(cfg)
     elif args.tray:
         run_tray(cfg, dry_run=args.dry_run)
     else:
         run_live(cfg, dry_run=args.dry_run)
+
+
+def run_bench(cfg, frames: int = 25):
+    """Answer 'will my PC handle this?' with a measurement instead of a guess:
+    time the real capture+OCR loop on this machine and compare against the
+    poll_fps budget. Run it with the game open for the honest number."""
+    from capture import make_capture
+    from ocr import OCREngine
+
+    print("Benchmarking capture + OCR on this machine...")
+    try:
+        import torch
+        if torch.cuda.is_available():
+            print(f"  GPU: {torch.cuda.get_device_name(0)} (OCR runs on GPU)")
+        else:
+            print("  GPU: none detected by PyTorch — OCR will run on CPU "
+                  "(works, but catches fewer fast popups; see README)")
+    except Exception:
+        pass
+
+    engine = OCREngine(cfg.get("ocr_engine", "easyocr"), cfg.get("ocr_upscale", 3))
+    poll_fps = max(1, cfg.get("poll_fps", 5))
+    budget_ms = 1000.0 / poll_fps
+
+    with make_capture(cfg) as cap:
+        engine.read_lines(cap.grab())      # warm-up (model load, first-run JIT)
+        times = []
+        for _ in range(frames):
+            t0 = time.perf_counter()
+            engine.read_lines(cap.grab())
+            times.append((time.perf_counter() - t0) * 1000)
+
+    avg, worst = sum(times) / len(times), max(times)
+    print(f"  {frames} frames: avg {avg:.0f} ms, worst {worst:.0f} ms "
+          f"(budget: {budget_ms:.0f} ms per frame at poll_fps={poll_fps})")
+    if worst < budget_ms * 0.7:
+        print("  VERDICT: plenty of headroom — this machine handles it easily.")
+    elif avg < budget_ms:
+        print("  VERDICT: workable. If kills get missed, lower poll_fps to 3 "
+              "or ocr_upscale to 2 in config.yaml.")
+    else:
+        print("  VERDICT: too slow at current settings. Set poll_fps: 3 and "
+              "ocr_upscale: 2 — or install the GPU build "
+              "(see QUICKSTART).")
 
 
 if __name__ == "__main__":

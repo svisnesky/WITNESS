@@ -96,6 +96,29 @@ Worth knowing before you run someone else's recorder:
 - **ffmpeg** for reels/shorts/montage: drop `ffmpeg.exe` in the app folder or
   have it on PATH.
 
+## Performance — will my PC handle it?
+
+Don't guess — **measure it on your machine**:
+
+```bat
+python main.py --bench
+```
+
+It times the real capture+OCR loop and gives a verdict (run it with the game
+open for the honest number). What the app actually costs while you play:
+
+- **Per frame**: one small screen-region grab + one OCR pass, 5x/second.
+  On a GPU that's ~10–40 ms of light inference — a fraction of one frame's
+  budget, nowhere near the game's own load.
+- **VRAM**: EasyOCR holds ~1–1.5 GB. Any 6 GB+ NVIDIA card (GTX 1060 / RTX
+  2060 and up) runs it comfortably alongside the game — an RTX 2070 is well
+  clear. CUDA builds cover GTX 10-series through RTX 50-series.
+- **No GPU / AMD**: it still works on CPU — expect it to catch slightly fewer
+  split-second popups. Set `poll_fps: 3` and `ocr_upscale: 2` to lighten it.
+- **Video work happens after you stop playing**: reels, Shorts, and montage
+  encode at session end (and reels ~30s after each exfil), not mid-fight.
+  Clip recording itself is OBS's replay buffer — the thing you already run.
+
 ## 1. One-time OBS setup
 
 1. **WebSocket:** *Tools → WebSocket Server Settings* → enable; note the port
