@@ -171,10 +171,11 @@ def detect_events(det, mode: str, lines, now: float) -> list:
 def play_kill_sound(cfg: dict) -> None:
     """Non-blocking audio cue on each detected kill (Windows).
 
-    Defaults ON so no config change is needed. Set play_sound: false to mute,
+    Defaults OFF — the on-screen chips + dashboard flash cover it. Set
+    play_sound: true to re-enable,
     or sound_file: "path\\to\\clip.wav" for a custom sound.
     """
-    if not cfg.get("play_sound", True):
+    if not cfg.get("play_sound", False):
         return
     try:
         import winsound  # Windows-only; silently no-ops elsewhere

@@ -560,7 +560,10 @@ PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
 
   // --- kill ding (WebAudio, unlocked by the first tap anywhere) ---
   var audioCtx = null;
-  var soundOn = localStorage.getItem('killSound') !== 'off';
+  // Sound is opt-in: the game popup + count flash + CLIP SAVED chip already
+  // confirm kills visually, so the ding defaults off. The SOUND button
+  // enables it and the choice sticks.
+  var soundOn = localStorage.getItem('killSound') === 'on';
   document.getElementById('snd').textContent = 'SOUND: ' + (soundOn ? 'ON' : 'OFF');
   function initAudio(){
     try {
