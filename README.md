@@ -101,7 +101,7 @@ Worth knowing before you run someone else's recorder:
 Don't guess — **measure it on your machine**:
 
 ```bat
-python main.py --bench
+python main.py --bench        (or double-click "4 - Benchmark....bat")
 ```
 
 It times the real capture+OCR loop and gives a verdict (run it with the game

@@ -38,8 +38,10 @@ it's "open the app, press START" forever (the app keeps itself updated).
 
 ## Worried about performance?
 
-Run `python main.py --bench` (from the app folder, after setup) — it measures
-the detection loop on YOUR machine and tells you if it keeps up. Any 6 GB+
+Double-click **`4 - Benchmark (will my PC handle it).bat`** — it measures the
+detection loop on YOUR machine and gives a verdict. Safe to run before any
+other setup (no OBS needed; the first run installs the same things the app
+needs anyway). Any 6 GB+
 NVIDIA card is comfortable; the heavy video work happens after you stop
 playing, not mid-fight.
 
