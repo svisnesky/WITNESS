@@ -1,0 +1,42 @@
+# Marathon — game profile (the reference profile).
+#
+# Marathon is the app's home game: its settings live in config.yaml and this
+# file is NOT loaded (game: marathon is a passthrough). It exists as the
+# template for what a profile looks like — new games get one of these from
+# the teach-a-game wizard (python main.py --teach), and a profile is pure
+# data: PR yours to the repo and everyone gets that game.
+
+game_name: "Marathon"
+
+# Text that means YOU got a kill (fuzzy-matched, so OCR slips still count).
+popup_trigger_phrases:
+  - "RUNNER DOWN"
+  - "PRECISION DOWN"
+  - "FINISHER"
+  - "RUNNER ELIM"
+popup_match_threshold: 85
+
+# Where on screen the kill popup appears (fractions of the frame).
+detect_region_frac:
+  x: 0.375
+  y: 0.71
+  w: 0.19
+  h: 0.12
+
+# Marathon kill popups always show a reward marker ("+15 XP").
+require_reward: true
+
+# Screens where kills can't happen (death / exfil summary).
+suppress_phrases:
+  - "SELF REVIVE"
+  - "GIVE UP"
+  - "RUNNER DAMAGE"
+  - "CREW REVIVES"
+  - "INVENTORY VALUE"
+
+# Marathon-specific systems, all mapped and on:
+capture_exfil_stats: true
+runner_detection: true
+squad_stats: true
+team_wipe: true
+track_names: true

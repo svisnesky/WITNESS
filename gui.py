@@ -134,6 +134,7 @@ class ControlPanel:
         btns.pack(fill="x", padx=20, pady=(10, 4))
         for label, cmd in [("Dashboard", self.open_dashboard),
                            ("Settings", self.open_settings),
+                           ("Teach a game", self.open_teach),
                            ("How to use", self.open_help),
                            ("Open Folder", self.open_folder)]:
             tk.Button(btns, text=label, command=cmd, bg=PANEL, fg=TEXT,
@@ -231,6 +232,25 @@ class ControlPanel:
 
     def open_settings(self):
         SettingsWindow(self.root, self.cfg, self._log)
+
+    def open_teach(self):
+        """The teach-a-game wizard is interactive — run it in its own console
+        window so it can ask questions while the GUI stays up."""
+        if self.running:
+            self._log("Stop the current session first, then teach a game.")
+            return
+        self._log("Launching the teach-a-game wizard in its own window...")
+        try:
+            exe = sys.executable
+            # the wizard needs a real console for input(); pythonw has none
+            if os.path.basename(exe).lower() == "pythonw.exe":
+                exe = os.path.join(os.path.dirname(exe), "python.exe")
+            subprocess.Popen([exe, os.path.join(BASE, "main.py"), "--teach"],
+                             cwd=BASE,
+                             creationflags=getattr(subprocess,
+                                                   "CREATE_NEW_CONSOLE", 0))
+        except Exception as e:
+            self._log(f"Could not launch the wizard: {e}")
 
     def open_help(self):
         HelpWindow(self.root)

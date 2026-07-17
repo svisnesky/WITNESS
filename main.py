@@ -95,16 +95,38 @@ def _close_session_log():
 def load_config(path=CONFIG_PATH) -> dict:
     with open(path) as f:
         cfg = yaml.safe_load(f)
-    # Settings changed from the web dashboard live in an override file so the
-    # commented config.yaml never gets rewritten.
-    override = os.path.join(os.path.dirname(os.path.abspath(path)) or ".",
-                            "settings_override.yaml")
-    if os.path.exists(override):
+    base = os.path.dirname(os.path.abspath(path)) or "."
+
+    # The dashboard's settings live in an override file (config.yaml comments
+    # never get rewritten) — read it early because it may pick the game.
+    override = {}
+    ov_path = os.path.join(base, "settings_override.yaml")
+    if os.path.exists(ov_path):
         try:
-            with open(override) as f:
-                cfg.update(yaml.safe_load(f) or {})
+            with open(ov_path) as f:
+                override = yaml.safe_load(f) or {}
         except Exception as e:
             print(f"(could not read settings_override.yaml: {e})")
+
+    # Game profile: games/<game>.yaml overrides config.yaml's detection
+    # settings (config.yaml's are Marathon's). Marathon needs no file; other
+    # games get theirs from the teach-a-game wizard. The dashboard override
+    # is applied LAST so live settings changes always win.
+    game = str(override.get("game") or cfg.get("game") or "marathon").strip().lower()
+    if game and game != "marathon":
+        pfile = os.path.join(base, "games", f"{game}.yaml")
+        try:
+            with open(pfile) as f:
+                profile = yaml.safe_load(f) or {}
+            cfg.update(profile)
+            print(f"(game profile: {profile.get('game_name', game)} — {pfile})")
+        except FileNotFoundError:
+            print(f"(game {game!r} has no profile at {pfile} — using Marathon "
+                  "settings; run  python main.py --teach  to create one)")
+        except Exception as e:
+            print(f"(could not read game profile {pfile}: {e})")
+
+    cfg.update(override)
     return cfg
 
 
@@ -1334,6 +1356,9 @@ def main():
                    help="OCR a saved screenshot and report detected kills (no OBS, no loop)")
     p.add_argument("--test-lines", nargs="+", metavar="LINE",
                    help="run detection on literal feed lines (no OCR, no OBS)")
+    p.add_argument("--teach", action="store_true",
+                   help="teach-a-game wizard: watch the screen while you get "
+                        "a kill in ANY game, then write a profile for it")
     p.add_argument("--wrapped", action="store_true",
                    help="build this week's Marathon Wrapped card from your stats")
     p.add_argument("--bench", action="store_true",
@@ -1358,7 +1383,10 @@ def main():
 
     cfg = load_config(args.config)
 
-    if args.test_lines:
+    if args.teach:
+        import teach
+        teach.run(cfg)
+    elif args.test_lines:
         run_test_lines(cfg, args.test_lines)
     elif args.test_image:
         run_test_image(cfg, args.test_image)

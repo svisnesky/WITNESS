@@ -6,6 +6,25 @@ into a highlight reel.
 **New here? Follow [QUICKSTART.md](QUICKSTART.md)** — zero to auto-clipped
 kills in ~15 minutes, no coding.
 
+## Any game (beta): teach it your game
+
+Marathon is the home game, but the engine works for **any game with an
+on-screen kill confirmation**. Run the wizard (or the **Teach a game**
+button in the app):
+
+    .venv\Scripts\python main.py --teach
+
+Name the game, alt-tab in, get a kill inside 90 seconds — the wizard reads
+everything on screen, ranks the popup-like lines, asks which one was your
+kill, and writes a ready-to-run profile to `games/<game>.yaml` (trigger
+phrases, screen region, reward marker — all measured automatically). Bot
+matches / practice ranges are perfect for this.
+
+Profiles are pure data. Share yours: PR your `games/<game>.yaml` and
+everyone gets that game. (Game-specific extras — Marathon's exfil stats,
+runner detection, kill-feed names — stay off for taught games until their
+screens get mapped.)
+
 ## What it looks like
 
 **The live dashboard** (any phone/iPad on your Wi-Fi) — kill counter,

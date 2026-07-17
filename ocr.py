@@ -70,6 +70,26 @@ class OCREngine:
         text = pytesseract.image_to_string(proc)
         return [ln.strip() for ln in text.splitlines() if ln.strip()]
 
+    def read_boxes(self, img_bgr: np.ndarray):
+        """[(text, (x0, y0, x1, y1))] with coordinates in ORIGINAL-image pixels
+        (upscale factored back out). Used by the teach-a-game wizard, which
+        needs to know WHERE text appeared, not just what it said."""
+        self._ensure_loaded()
+        h, w = img_bgr.shape[:2]
+        if self.engine_name != "easyocr":
+            return [(ln, (0, 0, w, h)) for ln in self.read_lines(img_bgr)]
+
+        proc = preprocess(img_bgr, self.upscale, binarize=False)
+        scale = float(self.upscale or 1)
+        out = []
+        for box, text, _conf in self._reader.readtext(proc, detail=1, paragraph=False):
+            if not text or not text.strip():
+                continue
+            xs = [p[0] / scale for p in box]
+            ys = [p[1] / scale for p in box]
+            out.append((text.strip(), (min(xs), min(ys), max(xs), max(ys))))
+        return out
+
     def read_rows(self, img_bgr: np.ndarray) -> List[str]:
         """Like read_lines, but each returned string is ONE visual row: boxes
         grouped by y-center, joined left-to-right. paragraph=True merges
