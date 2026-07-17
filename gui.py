@@ -519,6 +519,45 @@ def _fade(win, start, end, ms, done):
     step()
 
 
+def _splash_boom_setup():
+    """(boom_frame_index, wav_path) if the boot sound should fire, else None.
+    Off unless the wav + frame marker exist AND splash_sound isn't disabled."""
+    if sys.platform != "win32":
+        return None
+    wav = os.path.join(BASE, "splash_boom.wav")
+    marker = os.path.join(BASE, "splash_boom_frame.txt")
+    if not (os.path.exists(wav) and os.path.exists(marker)):
+        return None
+    # honor splash_sound (settings_override.yaml wins, else config.yaml, default on)
+    try:
+        import yaml
+        want = True
+        for name in ("config.yaml", "settings_override.yaml"):
+            p = os.path.join(BASE, name)
+            if os.path.exists(p):
+                d = yaml.safe_load(open(p)) or {}
+                if "splash_sound" in d:
+                    want = bool(d["splash_sound"])
+        if not want:
+            return None
+    except Exception:
+        pass
+    try:
+        with open(marker) as f:
+            return int(f.read().strip()), wav
+    except Exception:
+        return None
+
+
+def _play_boom(wav):
+    try:
+        import winsound
+        winsound.PlaySound(wav, winsound.SND_FILENAME | winsound.SND_ASYNC
+                           | winsound.SND_NODEFAULT)
+    except Exception:
+        pass
+
+
 def _claim_app_identity():
     """Tell Windows this is its own app (not 'Python'), so the taskbar shows
     the WITNESS icon and groups under our name."""
@@ -562,6 +601,7 @@ def main():
     skip = {"on": False}
     phase = {"leaving": False}
     anim = {"done": not frames}
+    boom = _splash_boom_setup()         # (frame_index, wav_path) or None
     splash.bind("<Button-1>", lambda e: skip.update(on=True))
 
     def finish():
@@ -588,6 +628,8 @@ def main():
         if not frames or not splash.winfo_exists():
             return
         splash._lbl.config(image=frames[min(i, len(frames) - 1)])
+        if boom and i == boom[0] and not skip["on"]:
+            _play_boom(boom[1])         # low hit, synced to the glitch
         if i < len(frames) - 1 and not skip["on"]:
             splash.after(45, play, i + 1)
         else:

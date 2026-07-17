@@ -36,6 +36,7 @@ SETTINGS = {
     "capture_exfil_stats": (True, bool),
     "track_names": (True, bool),            # read gamertags off the kill feed
     "auto_sweat": (True, bool),             # last-one-standing = flair mutes
+    "splash_sound": (True, bool),           # boot-splash boom (Windows)
 }
 
 # One-tap MODES: named bundles applied over the toggles above (through the
@@ -141,6 +142,7 @@ SETTINGS_META = [
     ("capture_exfil_stats", "Exfil stats capture"),
     ("track_names", "Name tracking (kill feed)"),
     ("auto_sweat", "Auto-sweat (clutch focus)"),
+    ("splash_sound", "Boot splash sound"),
     ("play_sound", "PC beep on kill"),
 ]
 

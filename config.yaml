@@ -5,6 +5,9 @@
 # (then relaunch on the fresh code). No more manual downloads.
 auto_update: true
 
+# Play the low "boom" on the boot splash (the glitch hit). Windows only.
+splash_sound: true
+
 # Which game to detect. "marathon" uses the settings in this file; any other
 # name loads games/<name>.yaml on top of them (made with the teach-a-game
 # wizard: python main.py --teach). Profiles are shareable — PR yours.
