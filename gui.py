@@ -77,6 +77,10 @@ class ControlPanel:
             tk.Label(head, image=self._icon, bg=BG).pack(side="left", padx=(0, 14))
             self._icon_full = tk.PhotoImage(file=os.path.join(BASE, "witness_logo.png"))
             r.iconphoto(True, self._icon_full)
+            # the .ico gives Windows a crisp title-bar/taskbar icon at every size
+            ico = os.path.join(BASE, "witness.ico")
+            if sys.platform == "win32" and os.path.exists(ico):
+                r.iconbitmap(ico)
         except Exception:
             pass
         title = tk.Frame(head, bg=BG)
@@ -494,8 +498,21 @@ def _show_splash(root, frames):
     return sp
 
 
+def _claim_app_identity():
+    """Tell Windows this is its own app (not 'Python'), so the taskbar shows
+    the WITNESS icon and groups under our name."""
+    if sys.platform != "win32":
+        return
+    try:
+        import ctypes
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("WITNESS.KillRecorder")
+    except Exception:
+        pass
+
+
 def main():
     global UPDATE_MSG, app
+    _claim_app_identity()
     root = tk.Tk()
     root.withdraw()
 

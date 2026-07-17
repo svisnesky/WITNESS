@@ -32,6 +32,9 @@ it's "open the app, press START" forever (the app keeps itself updated).
    everything automatically (big download, several minutes — it detects an
    NVIDIA card and installs GPU acceleration by itself). Later runs start in
    seconds.
+5. **(Optional) Double-click `Create Desktop Shortcut.bat`** once — it drops a
+   **WITNESS** icon on your desktop (the skull logo) so you can launch it
+   without digging through the folder.
 
 ## Play
 
