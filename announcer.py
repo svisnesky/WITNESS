@@ -24,7 +24,12 @@ DEFAULT_PITCH = "-18Hz"          # deep broadcast voice — Stan-approved
 # elevenlabs_key.txt in this folder (or the ELEVENLABS_API_KEY env var) and
 # every render upgrades automatically. Call-outs render ONCE and cache, so
 # even the free tier covers the whole medal set with room to spare.
-ELEVEN_DEFAULT_VOICE = "pNInz6obpgDQGcFmaJgB"   # "Adam" — deep American
+ELEVEN_DEFAULT_VOICE = "TsHrPyMlNFuIYnbODF01"   # "Alien Master" — ominous,
+                                                # dark and scary. The voice
+                                                # of WITNESS (Stan-cast).
+ELEVEN_FALLBACK_VOICE = "pNInz6obpgDQGcFmaJgB"  # "Adam" — premade, always
+                                                # available (library voices
+                                                # must be added per-account)
 
 
 def _eleven_key() -> str:
@@ -70,6 +75,12 @@ def _elevenlabs(text: str, out_mp3: str, voice_id: str = "",
                 f.write(audio)
             return out_mp3
     except Exception as e:
+        # Library voices only work for accounts that added them — if this
+        # one 4xx's, retry once with the always-available premade voice
+        # before giving up on ElevenLabs entirely.
+        if vid != ELEVEN_FALLBACK_VOICE:
+            return _elevenlabs(text, out_mp3, voice_id=ELEVEN_FALLBACK_VOICE,
+                               shout=shout)
         print(f"  [announcer] ElevenLabs unavailable ({type(e).__name__}) — "
               "using the neural voice")
     return None
