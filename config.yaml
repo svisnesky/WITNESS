@@ -145,7 +145,9 @@ overlay_reel_ready: true   # "HIGHLIGHTS READY" when the match reel finishes
 # Halo-style announcer VOICE shouting "Double kill!" etc. when kills land
 # together (uses announcer_voice; rendered once per voice, then works offline).
 # NOTE: a down + its finisher is ONE kill — multikills need multiple DOWNS.
-announcer_medals: true
+# Off by default — a voice in your ears mid-match isn't for everyone. Turn it
+# on here or in the dashboard Settings; it's one of the best features.
+announcer_medals: false
 
 # TEAM WIPE banner + call-out: three distinct enemy deaths (elim/finisher
 # popups, yours or assists) within ~2 minutes — in trios that's the squad.
@@ -156,11 +158,13 @@ team_wipe_size: 3      # deaths that make a wipe (2 for duos)
 organize_clips: true   # rename each saved clip by event+time and sort into a
                        # per-session folder ("Marathon Sessions/<date_time>/")
 make_card: true        # at session end, save a shareable match-card PNG to stats/cards/
-make_montage: true     # at session end, stitch the session's clips into one
-                       # highlight reel (needs ffmpeg)
-make_shorts: true      # at session end, render each clip as a 1080x1920 vertical
+make_montage: false    # at session end, stitch the session's clips into one
+                       # plain montage (needs ffmpeg). Off by default — the
+                       # session reel below is the better version of this.
+make_shorts: false     # at session end, render each clip as a 1080x1920 vertical
                        # (blurred background + centered gameplay) ready for
-                       # YouTube Shorts/TikTok -> session folder /shorts/
+                       # YouTube Shorts/TikTok -> session folder /shorts/.
+                       # Off by default: extra render time + disk per clip.
 shorts_labels: true    # bake "KILL #3 - FINISHER" text into each short
 ffmpeg_path: ""        # leave empty to auto-find ffmpeg.exe in this folder / PATH
 
@@ -177,9 +181,9 @@ gamertag: "MRVIZNASTY"
 # your kill feed — on-screen banner, voiced call-out, and if one of them
 # downs YOU the clip is saved automatically (your kills are clipped anyway).
 # Fuzzy-matched, so OCR slips still hit. Needs track_names: true.
-streamer_watchlist:
-  - "MARSHYY"
-  - "SERAPHMAXYT"
+# Empty by default — add YOUR favorite streamers/rivals, e.g.:
+#   - "MARSHYY"
+streamer_watchlist: []
 watchlist_clip_deaths: true
 
 # At match end, when the EXFILTRATED summary screen appears, grab it once and

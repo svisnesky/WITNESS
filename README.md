@@ -189,6 +189,11 @@ Feature toggles (reels, music, announcer, shorts, montage, coalesce window…)
 can be changed **live from the dashboard's Settings panel** — no restart, no
 file editing. Dashboard changes persist to `settings_override.yaml`.
 
+The loud stuff ships **off**: the voiced medal call-outs ("DOUBLE KILL!"),
+Shorts renders, and the session montage are opt-in — flip them on in
+Settings once you've decided you like the quiet version. The medal voices
+are worth trying.
+
 Optional: drop mp3s into a `music/` folder — each reel picks one at random.
 
 ## 4. Run
