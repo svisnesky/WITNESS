@@ -60,24 +60,23 @@ class ControlPanel:
 
     # --- layout --------------------------------------------------------------
 
+    DOT = "●"
+
     def _build(self):
         r = self.root
         r.title("WITNESS")
         r.configure(bg=BG)
-        r.geometry("580x620")
-        r.minsize(520, 560)
+        r.geometry("560x500")
+        r.minsize(520, 470)
 
-        # header: eye badge + WITNESS wordmark + subtitle
+        # header: badge + wordmark + tagline
         head = tk.Frame(r, bg=BG)
-        head.pack(fill="x", padx=20, pady=(18, 8))
-        # exact-size pre-rendered assets — tk's own scaling (subsample) is
-        # nearest-neighbor and makes everything look chewed
+        head.pack(fill="x", padx=22, pady=(20, 12))
         try:
             self._icon = tk.PhotoImage(file=os.path.join(BASE, "witness_logo_small.png"))
             tk.Label(head, image=self._icon, bg=BG).pack(side="left", padx=(0, 14))
             self._icon_full = tk.PhotoImage(file=os.path.join(BASE, "witness_logo.png"))
             r.iconphoto(True, self._icon_full)
-            # the .ico gives Windows a crisp title-bar/taskbar icon at every size
             ico = os.path.join(BASE, "witness.ico")
             if sys.platform == "win32" and os.path.exists(ico):
                 r.iconbitmap(ico)
@@ -92,66 +91,96 @@ class ControlPanel:
         except Exception:
             tk.Label(title, text="WITNESS", bg=BG, fg=ACCENT,
                      font=("Segoe UI Black", 18, "bold")).pack(anchor="w")
-        tk.Label(title, text="AUTO KILL RECORDER // IT SEES EVERYTHING",
-                 bg=BG, fg=MUTED,
+        tk.Label(title, text="IT SEES EVERYTHING", bg=BG, fg=MUTED,
                  font=("Consolas", 9)).pack(anchor="w", pady=(3, 0))
 
-        # status + count row
-        row = tk.Frame(r, bg=BG)
-        row.pack(fill="x", padx=20, pady=8)
-        self.status = tk.Label(row, text="STOPPED", bg=BG, fg=MUTED,
-                               font=("Consolas", 11, "bold"))
-        self.status.pack(side="left")
-        self.count_lbl = tk.Label(row, text="0 KILLS", bg=BG, fg=ACCENT,
-                                  font=("Consolas", 15, "bold"))
-        self.count_lbl.pack(side="right")
+        # status card: state on the left, live kill count on the right
+        card = tk.Frame(r, bg=PANEL, highlightbackground=LINE, highlightthickness=1)
+        card.pack(fill="x", padx=22, pady=(6, 16))
+        inner = tk.Frame(card, bg=PANEL)
+        inner.pack(fill="x", padx=22, pady=18)
+        left = tk.Frame(inner, bg=PANEL)
+        left.pack(side="left", anchor="w")
+        self.status = tk.Label(left, text=f"{self.DOT}  READY", bg=PANEL, fg=MUTED,
+                               font=("Consolas", 13, "bold"))
+        self.status.pack(anchor="w")
+        self.status_sub = tk.Label(left, text="Press START to begin watching",
+                                   bg=PANEL, fg=MUTED, font=("Consolas", 9))
+        self.status_sub.pack(anchor="w", pady=(4, 0))
+        right = tk.Frame(inner, bg=PANEL)
+        right.pack(side="right", anchor="e")
+        self.count_lbl = tk.Label(right, text="0", bg=PANEL, fg=ACCENT,
+                                  font=("Segoe UI", 34, "bold"))
+        self.count_lbl.pack(anchor="e")
+        tk.Label(right, text="KILLS", bg=PANEL, fg=MUTED,
+                 font=("Consolas", 8, "bold")).pack(anchor="e")
 
-        # start/stop
+        # start / stop
         self.toggle = tk.Button(r, text="START", command=self.toggle_run,
                                 bg=ACCENT, fg=BG, activebackground="#8746c4",
                                 activeforeground=BG, relief="flat",
-                                font=("Segoe UI", 13, "bold"), height=2, cursor="hand2")
-        self.toggle.pack(fill="x", padx=20, pady=(6, 4))
+                                font=("Segoe UI", 14, "bold"), height=2, cursor="hand2")
+        self.toggle.pack(fill="x", padx=22, pady=(0, 10))
 
-        # test-mode toggle (native Checkbutton indicators are invisible on the
-        # dark theme on Windows — use an explicit ON/OFF button instead)
+        # test mode (subtle)
         self.dry = tk.BooleanVar(value=False)
         dryrow = tk.Frame(r, bg=BG)
-        dryrow.pack(fill="x", padx=20)
-        tk.Label(dryrow, text="Test mode (detect only, don't save clips)",
+        dryrow.pack(fill="x", padx=22, pady=(0, 4))
+        tk.Label(dryrow, text="Test mode — detect only, save nothing",
                  bg=BG, fg=MUTED, font=("Consolas", 9)).pack(side="left")
-        self.dry_btn = tk.Button(dryrow, width=9, relief="raised", bd=2,
-                                 padx=6, pady=2,
+        self.dry_btn = tk.Button(dryrow, width=9, relief="flat", bd=0,
+                                 padx=6, pady=3,
                                  font=("Consolas", 9, "bold"), cursor="hand2",
                                  command=self._flip_dry)
         self._render_dry()
         self.dry_btn.pack(side="right")
 
-        # quick buttons
+        # actions
         btns = tk.Frame(r, bg=BG)
-        btns.pack(fill="x", padx=20, pady=(10, 4))
+        btns.pack(fill="x", padx=22, pady=(16, 4))
         for label, cmd in [("Dashboard", self.open_dashboard),
                            ("Settings", self.open_settings),
                            ("Teach a game", self.open_teach),
                            ("How to use", self.open_help),
-                           ("Open Folder", self.open_folder)]:
+                           ("Folder", self.open_folder)]:
             tk.Button(btns, text=label, command=cmd, bg=PANEL, fg=TEXT,
                       activebackground=LINE, activeforeground=TEXT, relief="flat",
-                      font=("Consolas", 9), cursor="hand2").pack(
+                      font=("Consolas", 9), cursor="hand2", pady=9).pack(
                           side="left", expand=True, fill="x", padx=3)
 
-        # log
-        tk.Label(r, text="ACTIVITY", bg=BG, fg=MUTED,
-                 font=("Consolas", 8, "bold")).pack(anchor="w", padx=20, pady=(12, 2))
+        # activity log — hidden by default, revealed by the toggle
+        self.activity_open = False
+        self.act_btn = tk.Button(r, text="▸  Activity log", anchor="w",
+                                 command=self._toggle_activity, bg=BG, fg=MUTED,
+                                 activebackground=BG, activeforeground=TEXT,
+                                 relief="flat", bd=0, font=("Consolas", 9),
+                                 cursor="hand2")
+        self.act_btn.pack(fill="x", padx=22, pady=(16, 2))
         self.log = scrolledtext.ScrolledText(
             r, bg=PANEL, fg=TEXT, insertbackground=TEXT, relief="flat",
-            font=("Consolas", 9), height=12, wrap="word", borderwidth=0)
-        self.log.pack(fill="both", expand=True, padx=20, pady=(0, 16))
-        self.log.configure(state="disabled")
+            font=("Consolas", 9), height=8, wrap="word", borderwidth=0)
+        self.log.configure(state="disabled")   # built, not shown until toggled
+
         if UPDATE_MSG:
             self._log(UPDATE_MSG)
-        self._log("Ready. Press START (OBS will be launched for you if it "
-                  "isn't already running).")
+        self._log("Ready. Press START — OBS launches automatically if needed.")
+
+    def _toggle_activity(self):
+        self.activity_open = not self.activity_open
+        if self.activity_open:
+            self.act_btn.config(text="▾  Activity log")
+            self.log.pack(fill="both", expand=True, padx=22, pady=(0, 16))
+            try:
+                self.root.geometry("560x700")
+            except Exception:
+                pass
+        else:
+            self.act_btn.config(text="▸  Activity log")
+            self.log.pack_forget()
+            try:
+                self.root.geometry("560x500")
+            except Exception:
+                pass
 
     def _render_dry(self):
         on = self.dry.get()
@@ -177,14 +206,14 @@ class ControlPanel:
 
     def start(self):
         self.count = 0
-        self.count_lbl.config(text="0 KILLS")
+        self.count_lbl.config(text="0")
         self.stop_event = threading.Event()
         self._orig_out = sys.stdout
         self._orig_err = sys.stderr
         sys.stdout = sys.stderr = QueueWriter(self.q)
         self.running = True
         self.toggle.config(text="STOP", bg=RED, activebackground="#d63a30", fg="white")
-        self._set_status("STARTING...", MUTED)
+        self._set_status(f"{self.DOT}  STARTING…", MUTED, "Loading the text reader…")
         self._log("Starting — loading the text reader (first start takes a few seconds)...")
 
         dry = self.dry.get()
@@ -206,9 +235,10 @@ class ControlPanel:
             self.stop_event.set()
         # The end-of-session builds (recap, montage, reels) run for a bit
         # after stop — say so instead of sitting on a red STOP that looks stuck.
-        self.toggle.config(text="FINISHING...", state="disabled",
+        self.toggle.config(text="FINISHING…", state="disabled",
                            bg=PANEL, activebackground=PANEL, fg=MUTED)
-        self._set_status("FINISHING — building recap + reels...", MUTED)
+        self._set_status(f"{self.DOT}  FINISHING…", MUTED,
+                         "Building your recap + reels…")
         self._log("Stopping — clips are safe; building your recap and reels...")
 
     def _finish_stop(self):
@@ -220,7 +250,7 @@ class ControlPanel:
             pass
         self.toggle.config(text="START", state="normal", bg=ACCENT,
                            activebackground="#8746c4", fg=BG)
-        self._set_status("STOPPED", MUTED)
+        self._set_status(f"{self.DOT}  READY", MUTED, "Press START to begin watching")
 
     def open_dashboard(self):
         if self.running and self.cfg.get("web_dashboard", True):
@@ -273,8 +303,10 @@ class ControlPanel:
         except Exception as e:
             self._log(f"Could not open {path}: {e}")
 
-    def _set_status(self, text, color):
+    def _set_status(self, text, color, sub=None):
         self.status.config(text=text, fg=color)
+        if sub is not None and hasattr(self, "status_sub"):
+            self.status_sub.config(text=sub)
 
     def _log(self, msg):
         self.log.configure(state="normal")
@@ -291,12 +323,14 @@ class ControlPanel:
                     if s:
                         self._log(s)
                         if "Detecting [" in s:
-                            self._set_status("RUNNING", GREEN)
+                            self._set_status(f"{self.DOT}  WATCHING", GREEN,
+                                             "Watching your screen for kills")
                 elif kind == "count":
                     self.count = val
-                    self.count_lbl.config(text=f"{val} KILLS")
+                    self.count_lbl.config(text=str(val))
                     if self.running:
-                        self._set_status("RUNNING", GREEN)
+                        self._set_status(f"{self.DOT}  WATCHING", GREEN,
+                                         "Watching your screen for kills")
                 elif kind == "stopped":
                     self._finish_stop()
         except queue.Empty:
@@ -435,22 +469,33 @@ class HelpWindow:
 
 
 def _load_splash_frames():
-    """Every frame of witness_splash.gif as PhotoImages (the sheen sweep),
-    or None if the GIF or per-frame loading isn't available. These are the
-    exact pre-rendered frames — no runtime blending, so no muddiness. Needs
-    a Tk root to exist first."""
+    """Every frame of witness_splash.gif as PhotoImages (the sheen/glitch
+    boot), or None. Uses Pillow's frame iterator — reliable across Tk builds,
+    unlike tk's native 'gif -index' (which silently fails on some Windows Tk
+    versions, leaving only the static fallback). Needs a Tk root to exist."""
     path = os.path.join(BASE, "witness_splash.gif")
     if not os.path.exists(path):
         return None
-    frames = []
-    i = 0
-    while i < 400:
-        try:
-            frames.append(tk.PhotoImage(file=path, format=f"gif -index {i}"))
-        except tk.TclError:
-            break
-        i += 1
-    return frames or None
+    try:
+        from PIL import Image, ImageSequence, ImageTk
+        im = Image.open(path)
+        frames = [ImageTk.PhotoImage(f.convert("RGBA"))
+                  for f in ImageSequence.Iterator(im)]
+        return frames or None
+    except Exception:
+        pass
+    # last-ditch: tk's native gif reader
+    try:
+        frames, i = [], 0
+        while i < 400:
+            try:
+                frames.append(tk.PhotoImage(file=path, format=f"gif -index {i}"))
+            except tk.TclError:
+                break
+            i += 1
+        return frames or None
+    except Exception:
+        return None
 
 
 def _show_splash(root, frames):
@@ -639,7 +684,11 @@ def main():
         if state["relaunch"]:
             os._exit(0)          # replaced by the freshly-updated process
         elapsed = time.monotonic() - born
-        if skip["on"] or (state["done"] and anim["done"] and elapsed >= MIN_HOLD):
+        ready = state["done"] and anim["done"] and elapsed >= MIN_HOLD
+        # hard cap: never let a slow update check leave the splash hanging —
+        # show the app after MAX_WAIT regardless (the update thread will still
+        # relaunch if it finishes with new code).
+        if skip["on"] or ready or elapsed >= 9.0:
             leave()
         else:
             splash.after(80, hold)
