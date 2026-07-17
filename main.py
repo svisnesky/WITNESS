@@ -800,9 +800,10 @@ def _check_clutch(cfg, engine, s, now):
             _clutch_celebrate(cfg, s, kills)
         else:
             print("  [clutch] squad's back up.")
-    elif now - s.get("clutch_start", now) > 300:
-        s["clutch"] = False           # stale state safety valve
-        print("  [clutch] stand-down (timeout).")
+    # No timeout exit: an ELIMINATED teammate stays on the panel for minutes,
+    # and a timeout would exit + instantly re-trigger, wiping the solo-kill
+    # tally. Clutch ends only on resolution: panel clears, you go down
+    # (GIVE UP), you exfil, or the next match's deploy screen appears.
 
 
 def _end_clutch_quietly(s, reason):
@@ -948,6 +949,7 @@ def _maybe_detect_runner(cfg, engine, lines, s):
         if not runner_detect.is_deploy_screen(lines):
             return
         s["runner_checked"] = True
+        _end_clutch_quietly(s, "new match starting — clutch state cleared.")
         runner = runner_detect.capture_runner(cfg, engine)
         s["current_runner"] = runner
         if runner:

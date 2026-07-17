@@ -1,7 +1,8 @@
 """Auto-sweat: when you're the last one standing, the app goes quiet.
 
-The squad panel (bottom-left) tags downed teammates with a DOWNED label.
-When every teammate shows it, you're clutching — all flair (banners, medal
+The squad panel (bottom-left) tags teammates who are out of the fight:
+DOWNED (bleeding out), ELIMINATED (dead), REVIVING... (self-revive running).
+When every teammate shows one of those, you're clutching — all flair (banners, medal
 voices, skull, ding) mutes automatically while clips keep recording. The
 clutch is CONFIRMED by its resolution, not guessed at: the panel clears
 (you revived them) or you exfil alive. If you got kills while solo, THAT's
@@ -20,17 +21,26 @@ from rapidfuzz import fuzz
 SQUAD_REGION = {"x": 0.0, "y": 0.70, "w": 0.24, "h": 0.15}
 
 
+# Every panel state that means "this teammate can't shoot right now" (from
+# Stan's frames): DOWNED (bleeding out), ELIMINATED (dead), REVIVING...
+# (self-revive in progress — still out of the fight until it completes).
+_OUT_STATES = ("downed", "eliminated", "reviving")
+
+
 def count_downed(lines) -> int:
-    """DOWNED tags in the squad-panel crop — one per teammate row at most."""
+    """Out-of-the-fight tags in the squad-panel crop. Counted per TOKEN, not
+    per line — OCR sometimes merges two teammates' tag rows into one line,
+    and undercounting would miss the clutch."""
     n = 0
     for line in lines:
         for tok in str(line).split():
             t = "".join(c for c in tok.lower() if c.isalpha())
-            # leading 'd' required: 'owned'/'ownedq' score 90+ against
-            # 'downed' on ratio alone, but real OCR slips keep the D
-            if len(t) >= 4 and t[0] == "d" and fuzz.ratio(t, "downed") >= 85:
+            if len(t) < 4:
+                continue
+            # leading-letter match required: 'owned' scores 90+ against
+            # 'downed' on ratio alone, but real OCR slips keep the first char
+            if any(t[0] == w[0] and fuzz.ratio(t, w) >= 85 for w in _OUT_STATES):
                 n += 1
-                break
     return n
 
 
