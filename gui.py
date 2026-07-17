@@ -368,7 +368,12 @@ class ControlPanel:
 
     def open_reels(self):
         self._nav_active("Reels")
-        self.open_dashboard()
+        # reels live in the Archive (every session, watch + download)
+        if self.running and self.cfg.get("web_dashboard", True):
+            self._open(f"http://localhost:{self.cfg.get('web_port', 8000)}/archive")
+            return
+        p = os.path.join(BASE, "stats", "dashboard.html")
+        self._open(p if os.path.exists(p) else BASE)
 
     def open_stats(self):
         self._nav_active("Stats")

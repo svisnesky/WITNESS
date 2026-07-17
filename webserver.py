@@ -671,88 +671,106 @@ def start_web(state, port, base_dir, host="0.0.0.0"):
 
 ARCHIVE_PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Marathon Archive</title>
+<title>WITNESS &mdash; Archive</title>
 <style>
   :root { --bg:#0b0f12; --panel:#12181d; --line:#232d34; --text:#e8edf0;
-          --muted:#7d8a94; --accent:#9c58da; }
+          --muted:#7d8a94; --dim:#5f6572; --accent:#9c58da; }
   * { box-sizing:border-box; }
   body { margin:0; background:var(--bg); color:var(--text);
     font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
-    padding:calc(20px + env(safe-area-inset-top)) 16px calc(40px + env(safe-area-inset-bottom)); }
-  .wrap { max-width:720px; margin:0 auto; }
-  h2 { color:var(--accent); font-size:.95rem; letter-spacing:.16em; text-transform:uppercase; margin:0 0 4px; }
-  .sub { color:var(--muted); font-size:.78rem; margin:0 0 18px; }
-  details { background:var(--panel); border:1px solid var(--line); border-radius:12px;
-    padding:0 16px; margin-bottom:10px; }
-  summary { padding:14px 0; cursor:pointer; font-size:.9rem; list-style:none; }
+    padding:calc(22px + env(safe-area-inset-top)) 18px calc(44px + env(safe-area-inset-bottom)); }
+  .wrap { max-width:760px; margin:0 auto; }
+  .top { display:flex; align-items:center; gap:12px; margin-bottom:6px; }
+  .top img { height:30px; }
+  .top .wm { color:var(--accent); font-weight:800; letter-spacing:.14em; font-size:15px;
+    font-family:"Helvetica Neue",Arial,sans-serif; }
+  .top .back { margin-left:auto; color:var(--muted); font-size:.72rem; text-decoration:none;
+    border:1px solid var(--line); border-radius:10px; padding:9px 16px; }
+  .top .back:hover { border-color:var(--accent); color:var(--accent); }
+  h2 { font-family:"Helvetica Neue",Arial,sans-serif; font-weight:800; font-size:1.5rem;
+    letter-spacing:-.01em; margin:18px 0 4px; }
+  .sub { color:var(--muted); font-size:.82rem; margin:0 0 22px; }
+  details { background:var(--panel); border:1px solid var(--line); border-radius:14px;
+    padding:2px 18px; margin-bottom:10px; }
+  summary { padding:16px 0; cursor:pointer; font-size:.92rem; list-style:none; }
   summary::-webkit-details-marker { display:none; }
   summary b { color:var(--text); }
   .meta { color:var(--muted); font-size:.72rem; float:right; }
-  h4 { color:var(--muted); font-size:.62rem; letter-spacing:.16em; text-transform:uppercase;
+  h4 { color:var(--dim); font-size:.6rem; letter-spacing:.16em; text-transform:uppercase;
     margin:10px 0 8px; }
-  .rc { font-size:.8rem; color:var(--text); padding:6px 0; border-bottom:1px solid var(--line); }
-  .rc.none { color:var(--muted); border:none; }
-  .mrow { display:flex; align-items:center; gap:10px; padding:9px 0;
+  .rc { font-size:.8rem; color:var(--text); padding:8px 0; border-bottom:1px solid var(--line); }
+  .rc.none { color:var(--muted); border:none; background:var(--panel);
+    border:1px solid var(--line); border-radius:14px; padding:20px; }
+  .mrow { display:flex; align-items:center; gap:10px; padding:11px 0;
     border-bottom:1px solid var(--line); font-size:.82rem; }
   .mrow:last-child, details .rc:last-of-type { border-bottom:none; }
   .play { color:var(--accent); font-size:.8rem; }
   .ml { color:var(--text); text-decoration:none; flex:1; }
   .dl { color:var(--accent); text-decoration:none; font-size:.7rem; letter-spacing:.08em;
-    text-transform:uppercase; border:1px solid var(--line); border-radius:6px; padding:4px 10px; }
+    text-transform:uppercase; border:1px solid var(--line); border-radius:8px; padding:5px 12px; }
+  .dl:hover { border-color:var(--accent); }
   details > *:last-child { margin-bottom:14px; }
-  .back { display:inline-block; margin-top:22px; color:var(--muted); font-size:.75rem;
-    text-decoration:none; border:1px solid var(--line); border-radius:8px; padding:8px 16px; }
 </style></head><body><div class="wrap">
+  <div class="top"><img src="/skull.png" alt=""><span class="wm">WITNESS</span>
+    <a class="back" href="/">&larr; Live</a></div>
   <h2>Archive</h2>
   <p class="sub">Every session, kept. Tap a reel to watch; "save" downloads it for sharing (Files &rarr; share sheet &rarr; group chat).</p>
   %%BODY%%
-  <a class="back" href="/">&larr; Back to the kill feed</a>
 </div></body></html>"""
 
 STATS_PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Marathon Stats</title>
+<title>WITNESS &mdash; Stats</title>
 <style>
-  :root { --bg:#0b0f12; --panel:#12181d; --line:#232d34; --text:#e8edf0;
-          --muted:#7d8a94; --accent:#9c58da; }
+  :root { --bg:#0b0f12; --panel:#12181d; --panel2:#161d26; --line:#232d34;
+          --text:#e8edf0; --muted:#7d8a94; --dim:#5f6572; --accent:#9c58da; }
   * { box-sizing:border-box; }
   body { margin:0; background:var(--bg); color:var(--text);
     font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
-    padding:calc(20px + env(safe-area-inset-top)) 16px calc(40px + env(safe-area-inset-bottom)); }
-  .wrap { max-width:720px; margin:0 auto; }
-  h2 { color:var(--accent); font-size:.95rem; letter-spacing:.16em; text-transform:uppercase;
-    margin:0 0 4px; }
-  .sub { color:var(--muted); font-size:.78rem; margin:0 0 18px; }
-  h3 { color:var(--muted); font-size:.7rem; letter-spacing:.16em; text-transform:uppercase;
-    margin:26px 0 10px; }
-  .tiles { display:grid; grid-template-columns:repeat(3,1fr); gap:8px; }
+    padding:calc(22px + env(safe-area-inset-top)) 18px calc(44px + env(safe-area-inset-bottom)); }
+  .wrap { max-width:760px; margin:0 auto; }
+  .top { display:flex; align-items:center; gap:12px; margin-bottom:6px; }
+  .top img { height:30px; }
+  .top .wm { color:var(--accent); font-weight:800; letter-spacing:.14em; font-size:15px;
+    font-family:"Helvetica Neue",Arial,sans-serif; }
+  .top .back { margin-left:auto; color:var(--muted); font-size:.72rem; text-decoration:none;
+    border:1px solid var(--line); border-radius:10px; padding:9px 16px; }
+  .top .back:hover { border-color:var(--accent); color:var(--accent); }
+  h2 { font-family:"Helvetica Neue",Arial,sans-serif; font-weight:800; font-size:1.5rem;
+    letter-spacing:-.01em; margin:18px 0 4px; }
+  .sub { color:var(--muted); font-size:.82rem; margin:0 0 22px; }
+  h3 { color:var(--dim); font-size:.68rem; letter-spacing:.16em; text-transform:uppercase;
+    margin:28px 0 12px; }
+  .tiles { display:grid; grid-template-columns:repeat(3,1fr); gap:10px; }
   @media(max-width:480px){ .tiles{ grid-template-columns:repeat(2,1fr); } }
-  .tile { background:var(--panel); border:1px solid var(--line); border-radius:10px;
-    padding:14px 6px 11px; text-align:center; }
-  .tile .tn { font-size:1.35rem; font-weight:800; color:var(--accent);
-    font-variant-numeric:tabular-nums; }
-  .tile .tl { font-size:.58rem; letter-spacing:.1em; text-transform:uppercase;
-    color:var(--muted); margin-top:4px; }
-  .tblwrap { overflow-x:auto; }
+  .tile { background:var(--panel); border:1px solid var(--line); border-radius:14px;
+    padding:18px 6px 15px; text-align:center; }
+  .tile .tn { font-size:1.6rem; font-weight:800; color:var(--accent);
+    font-variant-numeric:tabular-nums; font-family:"Helvetica Neue",Arial,sans-serif; }
+  .tile .tl { font-size:.56rem; letter-spacing:.12em; text-transform:uppercase;
+    color:var(--muted); margin-top:6px; }
+  .tblwrap { overflow-x:auto; background:var(--panel); border:1px solid var(--line);
+    border-radius:14px; padding:6px 4px; }
   table { border-collapse:collapse; width:100%; font-size:.78rem; }
-  th, td { text-align:right; padding:8px 10px; border-bottom:1px solid var(--line);
+  th, td { text-align:right; padding:11px 14px; border-bottom:1px solid var(--line);
     white-space:nowrap; font-variant-numeric:tabular-nums; }
+  tr:last-child td { border-bottom:none; }
   th:nth-child(2), td:nth-child(2) { text-align:left; }
-  th { color:var(--muted); font-size:.6rem; letter-spacing:.1em; text-transform:uppercase; }
+  th { color:var(--dim); font-size:.58rem; letter-spacing:.12em; text-transform:uppercase; }
   .hog { background:var(--accent); color:#0b0f12; font-size:.55rem; font-weight:700;
-    letter-spacing:.08em; padding:2px 7px; border-radius:4px; }
+    letter-spacing:.08em; padding:3px 8px; border-radius:5px; }
   .nem { background:#ff4d3d; color:#0b0f12; font-size:.55rem; font-weight:700;
-    letter-spacing:.08em; padding:2px 7px; border-radius:4px; }
-  .empty2 { color:var(--muted); font-size:.8rem; }
-  .back { display:inline-block; margin-top:26px; color:var(--muted); font-size:.75rem;
-    text-decoration:none; border:1px solid var(--line); border-radius:8px; padding:8px 16px; }
+    letter-spacing:.08em; padding:3px 8px; border-radius:5px; }
+  .empty2 { color:var(--muted); font-size:.82rem; background:var(--panel);
+    border:1px solid var(--line); border-radius:14px; padding:20px; }
 </style></head><body><div class="wrap">
-  <h2>Career Stats</h2>
-  <p class="sub">From every exfil screen the app has captured. It only gets deeper from here.</p>
+  <div class="top"><img src="/skull.png" alt=""><span class="wm">WITNESS</span>
+    <a class="back" href="/">&larr; Live</a></div>
+  <h2>Career stats</h2>
+  <p class="sub">From every exfil screen WITNESS has captured. It only gets deeper from here.</p>
   <div class="tiles">%%CARDS%%</div>
   %%SQUAD%%
   %%MENACE%%
-  <a class="back" href="/">&larr; Back to the kill feed</a>
 </div></body></html>"""
 
 PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
