@@ -271,3 +271,5 @@ web_lan: true          # true = reachable from devices on your Wi-Fi (the iPad).
 
 # --- Logging ---
 session_log: "session_log.csv"
+
+# auto-update self-test marker (harmless) — 2026-07-17
