@@ -19,7 +19,7 @@ from tkinter import scrolledtext
 BASE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, BASE)
 
-UPDATE_MSG = ""   # set during boot (behind the splash), read by ControlPanel
+UPDATE_MSG = ""   # set during boot  (auto-update self-test da7a37c) (behind the splash), read by ControlPanel
 app = None        # main module, imported during boot
 
 BG = "#0b0f12"
