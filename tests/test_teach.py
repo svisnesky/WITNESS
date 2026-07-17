@@ -60,6 +60,33 @@ def test_profile_yaml_is_valid_and_gated():
     assert prof["detect_region_frac"]["w"] == 0.25
     for k, v in PROFILE_DEFAULTS.items():
         assert prof[k] == v                            # marathon systems off
+    assert prof["theme"]["display_name"] == "ARC RAIDERS"
+    assert prof["theme"]["accent"].startswith("#")
+
+
+def test_apply_theme_reskins_pages():
+    import webserver
+    html = ('<title>Marathon Kill Feed</title><style>:root { --bg:#0b0f12; '
+            '--accent:#d3f24b; } .nem { background:#ff4d3d; }</style>'
+            '<header><img src="/wordmark.png" alt="MARATHON"></header>')
+    themed = webserver.apply_theme(html, {"theme": {
+        "display_name": "Arc Raiders", "accent": "#ff9d2b",
+        "danger": "#e33", "bg": "#101014"}})
+    assert "--accent:#ff9d2b" in themed and "--bg:#101014" in themed
+    assert "background:#e33" in themed
+    assert "<title>Arc Raiders Kill Feed</title>" in themed
+    assert "wordmark.png" not in themed and "ARC RAIDERS" in themed
+
+
+def test_apply_theme_marathon_and_bad_values_untouched():
+    import webserver
+    html = '<title>Marathon Stats</title>:root { --accent:#d3f24b; }'
+    assert webserver.apply_theme(html, {"theme": {}}) == html
+    assert webserver.apply_theme(html, {}) == html
+    evil = webserver.apply_theme(html, {"theme": {
+        "accent": "red;} body{display:none",
+        "display_name": "<script>alert(1)</script>"}})
+    assert "display:none" not in evil and "<script>" not in evil
 
 
 def test_slugify():

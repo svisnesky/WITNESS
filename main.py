@@ -372,6 +372,12 @@ def show_text_overlay(cfg, text, size=60, position="custom:0.5,0.42",
 MULTIKILL_NAMES = {2: "DOUBLE KILL", 3: "TRIPLE KILL", 4: "QUAD KILL"}
 
 
+def _theme_color(cfg, key, default):
+    """Overlay color from the active game profile's theme block (hex only)."""
+    v = str(((cfg.get("theme") or {}).get(key)) or "").strip()
+    return v if v.startswith("#") and 4 <= len(v) <= 9 else default
+
+
 def register_elim(elim_times: list, now: float, wipe_size: int = 3,
                   window: float = 120.0, burst: float = 5.0) -> bool:
     """Track enemy DEATHS toward a team wipe. One death often fires several
@@ -690,7 +696,8 @@ def _flush_coalesce(s):
         if s["cfg"].get("overlay_multikill", True):
             show_text_overlay(s["cfg"],
                               MULTIKILL_NAMES.get(n_downs, "MULTI KILL"),
-                              size=64, position="custom:0.5,0.40", duration_ms=1700)
+                              size=64, position="custom:0.5,0.40", duration_ms=1700,
+                              color=_theme_color(s["cfg"], "accent", "#d3f24b"))
         if s["cfg"].get("announcer_medals", True):
             import announcer
             announcer.play_medal(s["medal_sounds"], n_downs)
@@ -732,7 +739,8 @@ def _handle_kill(cfg, ev, s, on_count=None):
             if cfg.get("show_overlays", True):
                 show_text_overlay(cfg, "TEAM WIPE", size=72,
                                   position="custom:0.5,0.36",
-                                  color="#ff4d3d", duration_ms=2200)
+                                  color=_theme_color(cfg, "danger", "#ff4d3d"),
+                                  duration_ms=2200)
             if cfg.get("announcer_medals", True):
                 import announcer
                 announcer.play_medal(s["medal_sounds"], "wipe")
@@ -789,7 +797,8 @@ def _streamer_alert(cfg, s, direction, watch):
     text = f"YOU KILLED {watch}!" if killed else f"DOWNED BY {watch}"
     print(f"  *** STREAMER ALERT: {text} ***")
     show_text_overlay(cfg, text, size=64, position="custom:0.5,0.33",
-                      color="#d3f24b" if killed else "#ff4d3d",
+                      color=_theme_color(cfg, "accent", "#d3f24b") if killed
+                      else _theme_color(cfg, "danger", "#ff4d3d"),
                       duration_ms=2600)
     if s["web"] is not None:
         try:
@@ -956,7 +965,7 @@ def _build_match_reel_async(cfg, s, session_dir, stats_d):
                 "MATCH HIGHLIGHTS", total_kills, sub,
                 os.path.join(base, "marathon_wordmark.png"),
                 music_volume=cfg.get("reel_music_volume", 0.08),
-                music_tracks=tracks)
+                music_tracks=tracks, theme=cfg.get("theme"))
             if ok:
                 print(f"  [reel] match {match_num} highlights -> {out}")
                 if s["web"] is not None:
@@ -1254,7 +1263,7 @@ def _build_session_reel_and_upload(cfg, session_dir, tags):
             clips, out, ffmpeg, "SESSION HIGHLIGHTS", total, sub,
             os.path.join(base, "marathon_wordmark.png"),
             music_volume=cfg.get("reel_music_volume", 0.08),
-            music_tracks=tracks)
+            music_tracks=tracks, theme=cfg.get("theme"))
         if not ok:
             print("  [session reel] build failed")
             return

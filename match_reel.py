@@ -33,8 +33,10 @@ def _run(cmd) -> subprocess.CompletedProcess:
 
 
 def _build_card(out_png: str, title: str, kills, kills_label: str,
-                sub_lines: list[str], wordmark_path: str = "") -> bool:
-    """1920x1080 stat card in the match-card style."""
+                sub_lines: list[str], wordmark_path: str = "",
+                theme: dict | None = None) -> bool:
+    """1920x1080 stat card in the match-card style. theme (from the game
+    profile) overrides the Marathon palette + brand text."""
     try:
         from PIL import Image, ImageDraw
     except ImportError:
@@ -42,41 +44,48 @@ def _build_card(out_png: str, title: str, kills, kills_label: str,
               "Run: .venv\\Scripts\\python -m pip install pillow")
         return False
     try:
+        th = theme or {}
+        bg, accent = th.get("bg", BG), th.get("accent", ACCENT)
+        text, muted = th.get("text", TEXT), th.get("muted", MUTED)
+        line_c = th.get("line", LINE)
+        brand = str(th.get("display_name") or "MARATHON").upper()
 
         W, H = 1920, 1080
-        img = Image.new("RGB", (W, H), BG)
+        img = Image.new("RGB", (W, H), bg)
         d = ImageDraw.Draw(img)
         pad = 110
 
-        d.rectangle([0, 0, W, 10], fill=ACCENT)
-        d.rectangle([0, H - 10, W, H], fill=ACCENT)
+        d.rectangle([0, 0, W, 10], fill=accent)
+        d.rectangle([0, H - 10, W, H], fill=accent)
 
         y = pad
-        if wordmark_path and os.path.exists(wordmark_path):
+        # a themed game gets its name as the brand; the wordmark image is
+        # Marathon's and only used when the brand IS Marathon
+        if brand == "MARATHON" and wordmark_path and os.path.exists(wordmark_path):
             try:
                 wm = Image.open(wordmark_path).convert("RGBA")
                 scale = 64 / wm.height
                 wm = wm.resize((int(wm.width * scale), 64), Image.LANCZOS)
                 img.paste(wm, (pad, y), wm)
             except Exception:
-                d.text((pad, y), "MARATHON", font=_font("black", 56), fill=ACCENT)
+                d.text((pad, y), brand, font=_font("black", 56), fill=accent)
         else:
-            d.text((pad, y), "MARATHON", font=_font("black", 56), fill=ACCENT)
+            d.text((pad, y), brand, font=_font("black", 56), fill=accent)
 
-        d.text((pad, y + 110), title, font=_font("black", 110), fill=TEXT)
+        d.text((pad, y + 110), title, font=_font("black", 110), fill=text)
 
         kf = _font("black", 380)
         ks = str(kills)
-        d.text((pad - 10, 360), ks, font=kf, fill=ACCENT)
+        d.text((pad - 10, 360), ks, font=kf, fill=accent)
         d.text((pad + _text_w(d, ks, kf) + 40, 640), kills_label,
-               font=_font("bold", 64), fill=TEXT)
+               font=_font("bold", 64), fill=text)
 
         ly = 880
         for line in sub_lines[:2]:
-            d.text((pad, ly), line, font=_font("mono", 40), fill=MUTED)
+            d.text((pad, ly), line, font=_font("mono", 40), fill=muted)
             ly += 58
 
-        d.line([pad, 840, W - pad, 840], fill=LINE, width=2)
+        d.line([pad, 840, W - pad, 840], fill=line_c, width=2)
         img.save(out_png)
         return True
     except Exception as e:
@@ -188,7 +197,8 @@ def build_match_reel(clips, out_path: str, ffmpeg: str,
                      wordmark_path: str = "", music_path: str = "",
                      music_volume: float = 0.08,
                      music_tracks: list[str] | None = None,
-                     transitions: bool = True, chyrons: bool = True) -> bool:
+                     transitions: bool = True, chyrons: bool = True,
+                     theme: dict | None = None) -> bool:
     """Title card [+ POTG card] + clips [+ music bed] -> one mp4.
 
     music_volume is 0-1 (0.08 = quiet bed under the game audio).
@@ -211,7 +221,8 @@ def build_match_reel(clips, out_path: str, ffmpeg: str,
     stem = os.path.splitext(out_path)[0]
     cards = []  # (png_path, ok)
     title_png = stem + "_card.png"
-    if _build_card(title_png, title, kills, "KILLS", sub_lines, wordmark_path):
+    if _build_card(title_png, title, kills, "KILLS", sub_lines, wordmark_path,
+                   theme=theme):
         cards.append(title_png)
     potg_png = stem + "_potg.png"
     have_potg_card = False
@@ -219,7 +230,7 @@ def build_match_reel(clips, out_path: str, ffmpeg: str,
         tag_txt = potg["tag"].replace("+", " + ").replace("_", " ").upper()
         if _build_card(potg_png, "PLAY OF THE GAME", potg["kills"],
                        "KILL" + ("S" if potg["kills"] != 1 else ""),
-                       [tag_txt], wordmark_path):
+                       [tag_txt], wordmark_path, theme=theme):
             have_potg_card = True
 
     n_cards = len(cards) + (1 if have_potg_card else 0)
@@ -231,8 +242,10 @@ def build_match_reel(clips, out_path: str, ffmpeg: str,
 
     # End card ("GG") closes the reel.
     end_png = stem + "_end.png"
-    have_end_card = _build_card(end_png, "MARATHON", "GG", "",
-                                ["AUTO KILL RECORDER"], wordmark_path)
+    brand = str((theme or {}).get("display_name") or "MARATHON").upper()
+    have_end_card = _build_card(end_png, brand, "GG", "",
+                                ["AUTO KILL RECORDER"], wordmark_path,
+                                theme=theme)
     END_SECONDS = 2.4
 
     # Segment order: title card -> (POTG card -> POTG clip) -> clips -> end card.

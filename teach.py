@@ -156,6 +156,19 @@ require_reward: {str(reward).lower()}
 # if something false-triggers, e.g. a results screen re-showing kill text.
 suppress_phrases: []
 
+# Look & feel — the dashboard, on-screen banners, and reel stat cards all
+# take this game's colors. Hex values; make it yours.
+#   accent = kill counter / banners / highlights   danger = death-red alerts
+theme:
+  display_name: "{name.upper()}"
+  accent: "#d3f24b"
+  danger: "#ff4d3d"
+  bg: "#0b0f12"
+  panel: "#12181d"
+  line: "#232d34"
+  text: "#e8edf0"
+  muted: "#7d8a94"
+
 # Marathon-specific systems (exfil stat parsing, runner detection, kill-feed
 # names) stay off until this game's screens are mapped.
 {gates}

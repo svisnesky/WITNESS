@@ -37,6 +37,42 @@ SETTINGS = {
     "track_names": (True, bool),            # read gamertags off the kill feed
 }
 
+# Theme: per-game look. Game profiles (games/<game>.yaml) may carry a
+# theme: block; these are Marathon's colors and the fallback for any key a
+# profile doesn't set. Values are swapped into the page CSS at request time.
+THEME_DEFAULTS = {
+    "bg": "#0b0f12", "panel": "#12181d", "line": "#232d34",
+    "text": "#e8edf0", "muted": "#7d8a94",
+    "accent": "#d3f24b", "danger": "#ff4d3d",
+}
+_HEX = None  # compiled lazily
+
+
+def apply_theme(html: str, cfg) -> str:
+    """Swap the default palette + branding for the active game's theme.
+    No theme block (Marathon) = untouched. Non-hex values are ignored so a
+    typo'd profile can't inject anything into the page."""
+    import re
+    global _HEX
+    th = (cfg or {}).get("theme") or {}
+    if not th:
+        return html
+    if _HEX is None:
+        _HEX = re.compile(r"#[0-9a-fA-F]{3,8}\Z")
+    for key, default in THEME_DEFAULTS.items():
+        v = str(th.get(key) or "").strip()
+        if v and v != default and _HEX.match(v):
+            html = html.replace(default, v)
+    name = re.sub(r"[^A-Za-z0-9 :'\-]", "", str(th.get("display_name") or "")).strip()
+    if name and name.upper() != "MARATHON":
+        html = html.replace("<title>Marathon ", f"<title>{name} ")
+        html = html.replace(
+            '<img src="/wordmark.png" alt="MARATHON">',
+            f'<span style="font-weight:800;letter-spacing:.14em;'
+            f'color:var(--accent);font-size:1.05rem;">{name.upper()}</span>')
+    return html
+
+
 # Human labels for the settings panel, in display order.
 SETTINGS_META = [
     ("show_overlays", "On-screen flashes (master)"),
@@ -485,11 +521,13 @@ def start_web(state, port, base_dir, host="0.0.0.0"):
                         "meta": SETTINGS_META,
                     }).encode(), "application/json", cache=False)
                 elif path == "/stats":
-                    self._send(_stats_page(base_dir).encode("utf-8"),
+                    self._send(apply_theme(_stats_page(base_dir),
+                                           state._cfg).encode("utf-8"),
                                "text/html; charset=utf-8", cache=False)
                 elif path == "/archive":
-                    self._send(_archive_page(base_dir,
-                                             getattr(state, "record_dir", "")).encode("utf-8"),
+                    self._send(apply_theme(
+                        _archive_page(base_dir, getattr(state, "record_dir", "")),
+                        state._cfg).encode("utf-8"),
                                "text/html; charset=utf-8", cache=False)
                 elif path == "/avideo":
                     q = _uparse.parse_qs(self.path.partition("?")[2])
@@ -540,7 +578,8 @@ def start_web(state, port, base_dir, host="0.0.0.0"):
                     else:
                         self.send_error(404)
                 else:
-                    self._send(PAGE.encode("utf-8"), "text/html; charset=utf-8", cache=False)
+                    self._send(apply_theme(PAGE, state._cfg).encode("utf-8"),
+                               "text/html; charset=utf-8", cache=False)
             except (BrokenPipeError, ConnectionResetError):
                 pass
 

@@ -34,6 +34,21 @@ suppress_phrases:
   - "CREW REVIVES"
   - "INVENTORY VALUE"
 
+# Look & feel — dashboard, on-screen banners, and reel stat cards take the
+# active game's colors. These are Marathon's (acid green on dark); they're
+# also the built-in defaults, so this block is reference only. In YOUR
+# profile, change display_name + the hex values and the whole app reskins.
+#   accent = kill counter / banners / highlights   danger = death-red alerts
+theme:
+  display_name: "MARATHON"
+  accent: "#d3f24b"
+  danger: "#ff4d3d"
+  bg: "#0b0f12"
+  panel: "#12181d"
+  line: "#232d34"
+  text: "#e8edf0"
+  muted: "#7d8a94"
+
 # Marathon-specific systems, all mapped and on:
 capture_exfil_stats: true
 runner_detection: true

@@ -10,6 +10,13 @@ auto_update: true
 # wizard: python main.py --teach). Profiles are shareable — PR yours.
 game: "marathon"
 
+# Each game profile can carry a theme: block (colors + display name) that
+# reskins the dashboard, on-screen banners, and reel stat cards. To restyle
+# Marathon itself, uncomment and edit (see games/marathon.yaml for the keys):
+# theme:
+#   accent: "#d3f24b"
+#   danger: "#ff4d3d"
+
 # =========================================================================
 # DETECTION
 #   Watches the center-screen personal reward popup that appears only when
