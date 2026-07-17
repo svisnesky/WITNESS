@@ -434,61 +434,129 @@ class HelpWindow:
         t.configure(state="disabled")
 
 
-def _show_splash(root):
-    """Borderless WITNESS splash — covers the update check + module load."""
+def _cinematic_frames(size=460):
+    """The boot cinematic: Stan's six keyframes, film-dissolved.
+    [(PhotoImage, ms)] or None when Pillow / the art isn't available."""
+    try:
+        from PIL import Image, ImageEnhance, ImageTk
+    except ImportError:
+        return None
+    ks = []
+    for i in range(1, 7):
+        p = os.path.join(BASE, f"witness_boot_{i}.png")
+        if not os.path.exists(p):
+            return None
+        ks.append(Image.open(p).convert("RGB").resize((size, size),
+                                                      Image.LANCZOS))
+
+    def blends(a, b, n, ms):
+        return [(Image.blend(a, b, i / (n + 1)), ms) for i in range(1, n + 1)]
+
+    seq = [(ks[0], 900)]                     # calm in the smoke
+    seq += blends(ks[0], ks[1], 8, 55)       # the light rises
+    seq += [(ks[1], 350)]
+    seq += [(ImageEnhance.Brightness(ks[2]).enhance(1.45), 40)]  # capture flash
+    seq += [(ks[2], 700)]                    # the headshot, witnessed
+    seq += blends(ks[2], ks[3], 8, 60)       # beam fades, dust settles
+    seq += [(ks[3], 500)]
+    seq += blends(ks[3], ks[4], 6, 55)       # IT.
+    seq += [(ks[4], 550)]
+    seq += blends(ks[4], ks[5], 6, 55)       # SEES. EVERYTHING.
+    seq += [(ks[5], 250)]                    # then hold until the update's done
+    return [(ImageTk.PhotoImage(f), ms) for f, ms in seq]
+
+
+def _show_splash(root, frames):
+    """Borderless splash. Cinematic when frames exist, static otherwise.
+    Click anywhere to skip to the end of the animation."""
     sp = tk.Toplevel(root)
     sp.overrideredirect(True)
     sp.configure(bg=BG)
-    w, h = 380, 300
+    if frames:
+        w = h = frames[0][0].width()
+    else:
+        w, h = 380, 300
     x = (sp.winfo_screenwidth() - w) // 2
     y = (sp.winfo_screenheight() - h) // 2
     sp.geometry(f"{w}x{h}+{x}+{y}")
-    frame = tk.Frame(sp, bg=BG, highlightbackground=LINE, highlightthickness=1)
-    frame.pack(fill="both", expand=True)
-    try:
-        sp._logo = tk.PhotoImage(file=os.path.join(BASE, "witness_logo_splash.png"))
-        tk.Label(frame, image=sp._logo, bg=BG).pack(pady=(38, 10))
-    except Exception:
-        tk.Label(frame, text="◉", bg=BG, fg=ACCENT,
-                 font=("Consolas", 48)).pack(pady=(38, 10))
-    tk.Label(frame, text="WITNESS", bg=BG, fg=ACCENT,
-             font=("Segoe UI Black", 22, "bold")).pack()
-    tk.Label(frame, text="IT SEES EVERYTHING", bg=BG, fg=MUTED,
-             font=("Consolas", 9)).pack(pady=(2, 12))
-    status = tk.Label(frame, text="checking for updates...", bg=BG, fg=MUTED,
-                      font=("Consolas", 8))
-    status.pack()
+    holder = tk.Frame(sp, bg=BG, highlightbackground=LINE, highlightthickness=1)
+    holder.pack(fill="both", expand=True)
+    if frames:
+        sp._img = tk.Label(holder, bg=BG, bd=0)
+        sp._img.pack(fill="both", expand=True)
+    else:
+        try:
+            sp._logo = tk.PhotoImage(
+                file=os.path.join(BASE, "witness_logo_splash.png"))
+            tk.Label(holder, image=sp._logo, bg=BG).pack(pady=(38, 10))
+        except Exception:
+            tk.Label(holder, text="WITNESS", bg=BG, fg=ACCENT,
+                     font=("Segoe UI Black", 22, "bold")).pack(pady=(60, 10))
+        tk.Label(holder, text="IT SEES EVERYTHING", bg=BG, fg=MUTED,
+                 font=("Consolas", 9)).pack()
     sp.update()
-    return sp, status
+    return sp
 
 
 def main():
     global UPDATE_MSG, app
     root = tk.Tk()
     root.withdraw()
-    splash, status = _show_splash(root)
-    born = time.monotonic()
 
-    # Self-update BEFORE importing app code, so fresh files actually load.
-    # If anything changed this relaunches the process (splash dies with it
-    # and the new version shows its own).
+    # Update check runs BEHIND the splash so the cinematic actually plays.
+    state = {"done": False, "relaunch": False, "msg": ""}
+
+    def check_updates():
+        try:
+            import updater
+            state["msg"] = updater.update_and_relaunch_if_needed(BASE)
+        except SystemExit:
+            # updater spawned the fresh process and asked us to die —
+            # sys.exit in a thread doesn't kill the app, so signal it
+            state["relaunch"] = True
+        except Exception as e:
+            state["msg"] = f"Update check skipped: {e}"
+        state["done"] = True
+
+    threading.Thread(target=check_updates, daemon=True).start()
+
     try:
-        import updater
-        UPDATE_MSG = updater.update_and_relaunch_if_needed(BASE)
-    except SystemExit:
-        raise
-    except Exception as e:
-        UPDATE_MSG = f"Update check skipped: {e}"
+        frames = _cinematic_frames()
+    except Exception:
+        frames = None
+    splash = _show_splash(root, frames)
+    skip = {"on": False}
+    splash.bind("<Button-1>", lambda e: skip.update(on=True))
 
-    status.config(text="loading...")
-    splash.update()
-    import main as app_module
-    app = app_module
+    def finish_when_ready():
+        if state["relaunch"]:
+            os._exit(0)          # replaced by the freshly-updated process
+        if not state["done"]:
+            splash.after(150, finish_when_ready)
+            return
+        global UPDATE_MSG, app
+        UPDATE_MSG = state["msg"]
+        import main as app_module
+        app = app_module
+        splash.destroy()
+        root.deiconify()
+        ControlPanel(root)
 
-    time.sleep(max(0.0, 1.2 - (time.monotonic() - born)))  # let the splash land
-    splash.destroy()
-    root.deiconify()
-    ControlPanel(root)
+    if frames:
+        def play(i=0):
+            if state["relaunch"]:
+                os._exit(0)
+            if skip["on"]:
+                i = len(frames) - 1
+            img, ms = frames[i]
+            splash._img.config(image=img)
+            if i < len(frames) - 1:
+                splash.after(max(20, ms), play, i + 1)
+            else:
+                finish_when_ready()
+        play()
+    else:
+        finish_when_ready()
     root.mainloop()
 
 
