@@ -70,19 +70,20 @@ class ControlPanel:
         # header: eye badge + WITNESS wordmark + subtitle
         head = tk.Frame(r, bg=BG)
         head.pack(fill="x", padx=20, pady=(18, 8))
+        # exact-size pre-rendered assets — tk's own scaling (subsample) is
+        # nearest-neighbor and makes everything look chewed
         try:
-            badge = tk.PhotoImage(file=os.path.join(BASE, "witness_logo.png"))
-            self._icon_full = badge  # keep a ref for the window/taskbar icon
-            self._icon = badge.subsample(max(1, badge.height() // 46))
+            self._icon = tk.PhotoImage(file=os.path.join(BASE, "witness_logo_small.png"))
             tk.Label(head, image=self._icon, bg=BG).pack(side="left", padx=(0, 14))
-            r.iconphoto(True, badge)
+            self._icon_full = tk.PhotoImage(file=os.path.join(BASE, "witness_logo.png"))
+            r.iconphoto(True, self._icon_full)
         except Exception:
             pass
         title = tk.Frame(head, bg=BG)
         title.pack(side="left", anchor="w")
         try:
-            wm = tk.PhotoImage(file=os.path.join(BASE, "witness_wordmark.png"))
-            self._wordmark = wm.subsample(max(1, wm.height() // 26))
+            self._wordmark = tk.PhotoImage(
+                file=os.path.join(BASE, "witness_wordmark_small.png"))
             tk.Label(title, image=self._wordmark, bg=BG).pack(anchor="w")
         except Exception:
             tk.Label(title, text="WITNESS", bg=BG, fg=ACCENT,
@@ -445,8 +446,7 @@ def _show_splash(root):
     frame = tk.Frame(sp, bg=BG, highlightbackground=LINE, highlightthickness=1)
     frame.pack(fill="both", expand=True)
     try:
-        logo = tk.PhotoImage(file=os.path.join(BASE, "witness_logo.png"))
-        sp._logo = logo.subsample(max(1, logo.height() // 128))
+        sp._logo = tk.PhotoImage(file=os.path.join(BASE, "witness_logo_splash.png"))
         tk.Label(frame, image=sp._logo, bg=BG).pack(pady=(38, 10))
     except Exception:
         tk.Label(frame, text="◉", bg=BG, fg=ACCENT,
