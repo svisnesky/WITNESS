@@ -434,10 +434,29 @@ class HelpWindow:
         t.configure(state="disabled")
 
 
-def _show_splash(root):
-    """A clean, static branded splash: badge + wordmark + tagline on a dark
-    card. The only motion is a smooth window-opacity fade (handled in main) —
-    no image blending, so it can never look muddy. Click to dismiss early."""
+def _load_splash_frames():
+    """Every frame of witness_splash.gif as PhotoImages (the sheen sweep),
+    or None if the GIF or per-frame loading isn't available. These are the
+    exact pre-rendered frames — no runtime blending, so no muddiness. Needs
+    a Tk root to exist first."""
+    path = os.path.join(BASE, "witness_splash.gif")
+    if not os.path.exists(path):
+        return None
+    frames = []
+    i = 0
+    while i < 400:
+        try:
+            frames.append(tk.PhotoImage(file=path, format=f"gif -index {i}"))
+        except tk.TclError:
+            break
+        i += 1
+    return frames or None
+
+
+def _show_splash(root, frames):
+    """Borderless splash. Plays the pre-rendered sheen frames when available,
+    else a clean static badge + wordmark + tagline. Window-opacity fade is
+    handled in main(). Click dismisses early."""
     sp = tk.Toplevel(root)
     sp.overrideredirect(True)
     sp.configure(bg=BG)
@@ -445,28 +464,35 @@ def _show_splash(root):
         sp.attributes("-alpha", 0.0)   # start invisible; main() fades it in
     except Exception:
         pass
-    w, h = 420, 340
+    if frames:
+        w, h = frames[0].width(), frames[0].height()
+    else:
+        w, h = 420, 340
     x = (sp.winfo_screenwidth() - w) // 2
     y = (sp.winfo_screenheight() - h) // 2
     sp.geometry(f"{w}x{h}+{x}+{y}")
-    card = tk.Frame(sp, bg=BG, highlightbackground=LINE, highlightthickness=1)
-    card.pack(fill="both", expand=True)
-    inner = tk.Frame(card, bg=BG)
-    inner.place(relx=.5, rely=.5, anchor="center")
-    try:
-        sp._logo = tk.PhotoImage(file=os.path.join(BASE, "witness_logo_splash.png"))
-        tk.Label(inner, image=sp._logo, bg=BG).pack()
-    except Exception:
-        tk.Label(inner, text="WITNESS", bg=BG, fg=ACCENT,
-                 font=("Segoe UI Black", 26, "bold")).pack()
-    try:
-        sp._wm = tk.PhotoImage(file=os.path.join(BASE, "witness_wordmark_small.png"))
-        tk.Label(inner, image=sp._wm, bg=BG).pack(pady=(20, 0))
-    except Exception:
-        tk.Label(inner, text="WITNESS", bg=BG, fg=ACCENT,
-                 font=("Segoe UI Black", 22, "bold")).pack(pady=(20, 0))
-    tk.Label(inner, text="I T   S E E S   E V E R Y T H I N G", bg=BG, fg=MUTED,
-             font=("Consolas", 9)).pack(pady=(12, 0))
+    if frames:
+        sp._lbl = tk.Label(sp, image=frames[0], bd=0, bg=BG)
+        sp._lbl.pack(fill="both", expand=True)
+    else:
+        card = tk.Frame(sp, bg=BG, highlightbackground=LINE, highlightthickness=1)
+        card.pack(fill="both", expand=True)
+        inner = tk.Frame(card, bg=BG)
+        inner.place(relx=.5, rely=.5, anchor="center")
+        try:
+            sp._logo = tk.PhotoImage(file=os.path.join(BASE, "witness_logo_splash.png"))
+            tk.Label(inner, image=sp._logo, bg=BG).pack()
+        except Exception:
+            tk.Label(inner, text="WITNESS", bg=BG, fg=ACCENT,
+                     font=("Segoe UI Black", 26, "bold")).pack()
+        try:
+            sp._wm = tk.PhotoImage(file=os.path.join(BASE, "witness_wordmark_small.png"))
+            tk.Label(inner, image=sp._wm, bg=BG).pack(pady=(20, 0))
+        except Exception:
+            tk.Label(inner, text="WITNESS", bg=BG, fg=ACCENT,
+                     font=("Segoe UI Black", 22, "bold")).pack(pady=(20, 0))
+        tk.Label(inner, text="I T   S E E S   E V E R Y T H I N G", bg=BG,
+                 fg=MUTED, font=("Consolas", 9)).pack(pady=(12, 0))
     sp.update()
     return sp
 
@@ -526,13 +552,16 @@ def main():
             state["msg"] = f"Update check skipped: {e}"
         state["done"] = True
 
-    threading.Thread(target=check_updates, daemon=True).start()
-
-    splash = _show_splash(root)
+    try:
+        frames = _load_splash_frames()
+    except Exception:
+        frames = None
+    splash = _show_splash(root, frames)
     born = time.monotonic()
-    MIN_HOLD = 1.3          # seconds the splash stays up even on a fast boot
+    MIN_HOLD = 0.4 if frames else 1.3   # frames carry their own runtime
     skip = {"on": False}
     phase = {"leaving": False}
+    anim = {"done": not frames}
     splash.bind("<Button-1>", lambda e: skip.update(on=True))
 
     def finish():
@@ -553,16 +582,30 @@ def main():
         phase["leaving"] = True
         _fade(splash, 1.0, 0.0, 220, finish)
 
+    def play(i=0):
+        if state["relaunch"]:
+            os._exit(0)
+        if not frames or not splash.winfo_exists():
+            return
+        splash._lbl.config(image=frames[min(i, len(frames) - 1)])
+        if i < len(frames) - 1 and not skip["on"]:
+            splash.after(45, play, i + 1)
+        else:
+            anim["done"] = True     # hold on the last frame
+
     def hold():
         if state["relaunch"]:
             os._exit(0)          # replaced by the freshly-updated process
         elapsed = time.monotonic() - born
-        if skip["on"] or (state["done"] and elapsed >= MIN_HOLD):
+        if skip["on"] or (state["done"] and anim["done"] and elapsed >= MIN_HOLD):
             leave()
         else:
             splash.after(80, hold)
 
-    _fade(splash, 0.0, 1.0, 260, hold)
+    _fade(splash, 0.0, 1.0, 260, lambda: None)
+    if frames:
+        play()
+    hold()
     root.mainloop()
 
 
