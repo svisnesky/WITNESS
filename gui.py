@@ -434,68 +434,63 @@ class HelpWindow:
         t.configure(state="disabled")
 
 
-def _cinematic_frames(size=460):
-    """The boot cinematic: Stan's six keyframes, film-dissolved.
-    [(PhotoImage, ms)] or None when Pillow / the art isn't available."""
-    try:
-        from PIL import Image, ImageEnhance, ImageTk
-    except ImportError:
-        return None
-    ks = []
-    for i in range(1, 7):
-        p = os.path.join(BASE, f"witness_boot_{i}.png")
-        if not os.path.exists(p):
-            return None
-        ks.append(Image.open(p).convert("RGB").resize((size, size),
-                                                      Image.LANCZOS))
-
-    def blends(a, b, n, ms):
-        return [(Image.blend(a, b, i / (n + 1)), ms) for i in range(1, n + 1)]
-
-    seq = [(ks[0], 900)]                     # calm in the smoke
-    seq += blends(ks[0], ks[1], 8, 55)       # the light rises
-    seq += [(ks[1], 350)]
-    seq += [(ImageEnhance.Brightness(ks[2]).enhance(1.45), 40)]  # capture flash
-    seq += [(ks[2], 700)]                    # the headshot, witnessed
-    seq += blends(ks[2], ks[3], 8, 60)       # beam fades, dust settles
-    seq += [(ks[3], 500)]
-    seq += blends(ks[3], ks[4], 6, 55)       # IT.
-    seq += [(ks[4], 550)]
-    seq += blends(ks[4], ks[5], 6, 55)       # SEES. EVERYTHING.
-    seq += [(ks[5], 250)]                    # then hold until the update's done
-    return [(ImageTk.PhotoImage(f), ms) for f, ms in seq]
-
-
-def _show_splash(root, frames):
-    """Borderless splash. Cinematic when frames exist, static otherwise.
-    Click anywhere to skip to the end of the animation."""
+def _show_splash(root):
+    """A clean, static branded splash: badge + wordmark + tagline on a dark
+    card. The only motion is a smooth window-opacity fade (handled in main) —
+    no image blending, so it can never look muddy. Click to dismiss early."""
     sp = tk.Toplevel(root)
     sp.overrideredirect(True)
     sp.configure(bg=BG)
-    if frames:
-        w = h = frames[0][0].width()
-    else:
-        w, h = 380, 300
+    try:
+        sp.attributes("-alpha", 0.0)   # start invisible; main() fades it in
+    except Exception:
+        pass
+    w, h = 420, 340
     x = (sp.winfo_screenwidth() - w) // 2
     y = (sp.winfo_screenheight() - h) // 2
     sp.geometry(f"{w}x{h}+{x}+{y}")
-    holder = tk.Frame(sp, bg=BG, highlightbackground=LINE, highlightthickness=1)
-    holder.pack(fill="both", expand=True)
-    if frames:
-        sp._img = tk.Label(holder, bg=BG, bd=0)
-        sp._img.pack(fill="both", expand=True)
-    else:
-        try:
-            sp._logo = tk.PhotoImage(
-                file=os.path.join(BASE, "witness_logo_splash.png"))
-            tk.Label(holder, image=sp._logo, bg=BG).pack(pady=(38, 10))
-        except Exception:
-            tk.Label(holder, text="WITNESS", bg=BG, fg=ACCENT,
-                     font=("Segoe UI Black", 22, "bold")).pack(pady=(60, 10))
-        tk.Label(holder, text="IT SEES EVERYTHING", bg=BG, fg=MUTED,
-                 font=("Consolas", 9)).pack()
+    card = tk.Frame(sp, bg=BG, highlightbackground=LINE, highlightthickness=1)
+    card.pack(fill="both", expand=True)
+    inner = tk.Frame(card, bg=BG)
+    inner.place(relx=.5, rely=.5, anchor="center")
+    try:
+        sp._logo = tk.PhotoImage(file=os.path.join(BASE, "witness_logo_splash.png"))
+        tk.Label(inner, image=sp._logo, bg=BG).pack()
+    except Exception:
+        tk.Label(inner, text="WITNESS", bg=BG, fg=ACCENT,
+                 font=("Segoe UI Black", 26, "bold")).pack()
+    try:
+        sp._wm = tk.PhotoImage(file=os.path.join(BASE, "witness_wordmark_small.png"))
+        tk.Label(inner, image=sp._wm, bg=BG).pack(pady=(20, 0))
+    except Exception:
+        tk.Label(inner, text="WITNESS", bg=BG, fg=ACCENT,
+                 font=("Segoe UI Black", 22, "bold")).pack(pady=(20, 0))
+    tk.Label(inner, text="I T   S E E S   E V E R Y T H I N G", bg=BG, fg=MUTED,
+             font=("Consolas", 9)).pack(pady=(12, 0))
     sp.update()
     return sp
+
+
+def _fade(win, start, end, ms, done):
+    """Ease the window's opacity from start to end over ~ms, then call done().
+    Degrades to an instant switch where -alpha isn't supported."""
+    steps, i = 10, [0]
+    delay = max(12, ms // steps)
+
+    def step():
+        t = i[0] / steps
+        v = start + (end - start) * (t * t * (3 - 2 * t))   # smoothstep
+        try:
+            win.attributes("-alpha", max(0.0, min(1.0, v)))
+        except Exception:
+            done()
+            return
+        if i[0] >= steps:
+            done()
+            return
+        i[0] += 1
+        win.after(delay, step)
+    step()
 
 
 def _claim_app_identity():
@@ -533,43 +528,41 @@ def main():
 
     threading.Thread(target=check_updates, daemon=True).start()
 
-    try:
-        frames = _cinematic_frames()
-    except Exception:
-        frames = None
-    splash = _show_splash(root, frames)
+    splash = _show_splash(root)
+    born = time.monotonic()
+    MIN_HOLD = 1.3          # seconds the splash stays up even on a fast boot
     skip = {"on": False}
+    phase = {"leaving": False}
     splash.bind("<Button-1>", lambda e: skip.update(on=True))
 
-    def finish_when_ready():
-        if state["relaunch"]:
-            os._exit(0)          # replaced by the freshly-updated process
-        if not state["done"]:
-            splash.after(150, finish_when_ready)
-            return
+    def finish():
         global UPDATE_MSG, app
         UPDATE_MSG = state["msg"]
         import main as app_module
         app = app_module
-        splash.destroy()
+        try:
+            splash.destroy()
+        except Exception:
+            pass
         root.deiconify()
         ControlPanel(root)
 
-    if frames:
-        def play(i=0):
-            if state["relaunch"]:
-                os._exit(0)
-            if skip["on"]:
-                i = len(frames) - 1
-            img, ms = frames[i]
-            splash._img.config(image=img)
-            if i < len(frames) - 1:
-                splash.after(max(20, ms), play, i + 1)
-            else:
-                finish_when_ready()
-        play()
-    else:
-        finish_when_ready()
+    def leave():
+        if phase["leaving"]:
+            return
+        phase["leaving"] = True
+        _fade(splash, 1.0, 0.0, 220, finish)
+
+    def hold():
+        if state["relaunch"]:
+            os._exit(0)          # replaced by the freshly-updated process
+        elapsed = time.monotonic() - born
+        if skip["on"] or (state["done"] and elapsed >= MIN_HOLD):
+            leave()
+        else:
+            splash.after(80, hold)
+
+    _fade(splash, 0.0, 1.0, 260, hold)
     root.mainloop()
 
 
