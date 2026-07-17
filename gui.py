@@ -631,7 +631,7 @@ def main():
         if boom and i == boom[0] and not skip["on"]:
             _play_boom(boom[1])         # low hit, synced to the glitch
         if i < len(frames) - 1 and not skip["on"]:
-            splash.after(45, play, i + 1)
+            splash.after(54, play, i + 1)   # ~54ms/frame (matches the gif)
         else:
             anim["done"] = True     # hold on the last frame
 

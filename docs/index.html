@@ -12,6 +12,17 @@
 </head>
 <body>
 <style>
+  /* boot intro — the site starts up like the app, then reveals the page */
+  #boot{position:fixed;inset:0;z-index:9999;background:#08090C;display:flex;
+    align-items:center;justify-content:center;transition:opacity .5s ease;
+    cursor:pointer}
+  #boot img{width:min(440px,86vw);height:auto;
+    filter:drop-shadow(0 30px 80px rgba(0,0,0,.6))}
+  #boot .skip{position:absolute;bottom:26px;left:50%;transform:translateX(-50%);
+    font-family:ui-monospace,Menlo,Consolas,monospace;font-size:11px;
+    letter-spacing:.22em;text-transform:uppercase;color:#5B6070}
+  #boot.gone{opacity:0;pointer-events:none}
+  @media(prefers-reduced-motion:reduce){#boot{display:none}}
   :root{
     --void:#08090C; --void-2:#0B0D12; --panel:#0F1116; --panel-2:#141722;
     --line:#1E2230; --line-2:#2A2F42;
@@ -220,6 +231,11 @@
   }
 </style>
 
+<div id="boot">
+  <img src="witness_splash.gif" alt="WITNESS booting up">
+  <span class="skip">Click to skip</span>
+</div>
+
 <div class="scan" aria-hidden="true"></div>
 
 <div class="topbar">
@@ -378,6 +394,20 @@
 
 <script>
   (function(){
+    var boot=document.getElementById('boot');
+    if(boot){
+      if(sessionStorage.getItem('witnessBooted')){ boot.remove(); }
+      else{
+        var dismiss=function(){
+          if(!boot) return;
+          boot.classList.add('gone');
+          sessionStorage.setItem('witnessBooted','1');
+          setTimeout(function(){ if(boot){boot.remove(); boot=null;} },550);
+        };
+        boot.addEventListener('click',dismiss);
+        setTimeout(dismiss,4000);   // one play-through of the boot animation
+      }
+    }
     var modes=document.querySelectorAll('.mode'),desc=document.getElementById('modeDesc');
     modes.forEach(function(m){
       m.addEventListener('click',function(){
@@ -393,7 +423,7 @@
     document.querySelectorAll('.reveal').forEach(function(el){io.observe(el);});
     document.getElementById('getBtn').addEventListener('click',function(ev){
       ev.preventDefault();
-      this.textContent='github.com/svisnesky/Marathon-OBS';
+      this.textContent='github.com/svisnesky/WITNESS';
     });
   })();
 </script>
