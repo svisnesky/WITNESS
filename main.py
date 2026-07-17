@@ -350,7 +350,14 @@ def show_overlay(cfg: dict) -> None:
         import sys
         base = os.path.dirname(os.path.abspath(__file__))
         script = os.path.join(base, "overlay.py")
-        image = os.path.join(base, cfg.get("overlay_image", "marathon_skull.png"))
+        img_name = cfg.get("overlay_image", "witness_headshot.png")
+        # soft upgrade: configs that still carry the old default get the
+        # WITNESS headshot skull (an explicit custom image is left alone)
+        if img_name == "marathon_skull.png":
+            new = os.path.join(base, "witness_headshot.png")
+            if os.path.exists(new):
+                img_name = "witness_headshot.png"
+        image = os.path.join(base, img_name)
         if not (os.path.exists(script) and os.path.exists(image)):
             return
         # Prefer pythonw.exe so no extra console window flashes.
@@ -370,7 +377,7 @@ def show_overlay(cfg: dict) -> None:
 
 
 def show_text_overlay(cfg, text, size=60, position="custom:0.5,0.42",
-                      color="#d3f24b", duration_ms=1600, rise=True):
+                      color="#9c58da", duration_ms=1600, rise=True):
     """Flash click-through text over the game (DOUBLE KILL, CLIP SAVED...).
     Same animation language as the skull; never blocks the capture loop."""
     if not cfg.get("show_overlays", True):
@@ -722,7 +729,7 @@ def _flush_coalesce(s):
             show_text_overlay(s["cfg"],
                               MULTIKILL_NAMES.get(n_downs, "MULTI KILL"),
                               size=64, position="custom:0.5,0.40", duration_ms=1700,
-                              color=_theme_color(s["cfg"], "accent", "#d3f24b"))
+                              color=_theme_color(s["cfg"], "accent", "#9c58da"))
         if s["cfg"].get("announcer_medals", True):
             import announcer
             announcer.play_medal(s["medal_sounds"], n_downs)
@@ -855,7 +862,7 @@ def _clutch_celebrate(cfg, s, kills):
         except Exception:
             pass
     show_text_overlay(cfg, "CLUTCH", size=84, position="custom:0.5,0.36",
-                      color=_theme_color(cfg, "accent", "#d3f24b"),
+                      color=_theme_color(cfg, "accent", "#9c58da"),
                       duration_ms=2600)
     if cfg.get("announcer_medals", True):
         phrase = str(cfg.get("clutch_callout") or "HOLY SHIT!")
@@ -912,7 +919,7 @@ def _streamer_alert(cfg, s, direction, watch):
     print(f"  *** STREAMER ALERT: {text} ***")
     if not quiet:
         show_text_overlay(cfg, text, size=64, position="custom:0.5,0.33",
-                          color=_theme_color(cfg, "accent", "#d3f24b") if killed
+                          color=_theme_color(cfg, "accent", "#9c58da") if killed
                           else _theme_color(cfg, "danger", "#ff4d3d"),
                           duration_ms=2600)
     if s["web"] is not None:
@@ -1089,7 +1096,7 @@ def _build_match_reel_async(cfg, s, session_dir, stats_d):
             ok = match_reel.build_match_reel(
                 clips, out, ffmpeg,
                 "MATCH HIGHLIGHTS", total_kills, sub,
-                os.path.join(base, "marathon_wordmark.png"),
+                os.path.join(base, "witness_wordmark.png"),
                 music_volume=cfg.get("reel_music_volume", 0.08),
                 music_tracks=tracks, theme=cfg.get("theme"))
             if ok:
@@ -1099,7 +1106,7 @@ def _build_match_reel_async(cfg, s, session_dir, stats_d):
                                       f"{'s' if len(clips) != 1 else ''}", out)
                 if cfg.get("overlay_reel_ready", True):
                     show_text_overlay(cfg, "HIGHLIGHTS READY", size=26,
-                                      position="bottom-right", color="#d3f24b",
+                                      position="bottom-right", color="#9c58da",
                                       duration_ms=2000, rise=False)
                 if cfg.get("reel_announcer", True):
                     import announcer
@@ -1317,7 +1324,7 @@ def _end_session(cfg, tags, start_monotonic, start_wall, dry_run, obs=None,
             import matchcard
             base = os.path.dirname(os.path.abspath(__file__))
             card = os.path.join(base, "stats", "cards", f"card_{session_id or 'session'}.png")
-            p = matchcard.build_card(session, card, os.path.join(base, "marathon_wordmark.png"))
+            p = matchcard.build_card(session, card, os.path.join(base, "witness_wordmark.png"))
             if p:
                 print(f"Match card: {p}")
         except Exception as e:
@@ -1394,7 +1401,7 @@ def _build_session_reel_and_upload(cfg, session_dir, tags):
             tracks = match_reel.list_music(os.path.join(base, "music"))
         ok = match_reel.build_match_reel(
             clips, out, ffmpeg, "SESSION HIGHLIGHTS", total, sub,
-            os.path.join(base, "marathon_wordmark.png"),
+            os.path.join(base, "witness_wordmark.png"),
             music_volume=cfg.get("reel_music_volume", 0.08),
             music_tracks=tracks, theme=cfg.get("theme"))
         if not ok:
@@ -1431,7 +1438,7 @@ def _tray_icon_image(base: str, cfg: dict):
     except Exception:
         # fallback: a plain acid-yellow square
         from PIL import ImageDraw
-        ImageDraw.Draw(canvas).rectangle([6, 6, size - 6, size - 6], fill=(211, 242, 75, 255))
+        ImageDraw.Draw(canvas).rectangle([6, 6, size - 6, size - 6], fill=(156, 88, 218, 255))
     return canvas
 
 

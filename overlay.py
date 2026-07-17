@@ -81,7 +81,7 @@ def main():
     size = int(argv[3]) if len(argv) > 3 else 120
     position = argv[4] if len(argv) > 4 else "top-right"
     margin = int(argv[5]) if len(argv) > 5 else 40
-    color = argv[6] if len(argv) > 6 else "#d3f24b"
+    color = argv[6] if len(argv) > 6 else "#9c58da"
     rise_on = (argv[7] != "0") if len(argv) > 7 else True
 
     root = tk.Tk()

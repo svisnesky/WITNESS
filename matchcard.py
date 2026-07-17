@@ -11,7 +11,7 @@ PANEL = (18, 24, 29)
 LINE = (35, 45, 52)
 TEXT = (232, 237, 240)
 MUTED = (125, 138, 148)
-ACCENT = (211, 242, 75)
+ACCENT = (156, 88, 218)
 
 FONT_CANDIDATES = {
     "bold": ["C:/Windows/Fonts/segoeuib.ttf", "C:/Windows/Fonts/arialbd.ttf",
@@ -57,9 +57,9 @@ def build_card(session, out_path, wordmark_path=None):
             wm = wm.resize((int(wm.width * scale), 46), Image.LANCZOS)
             img.paste(wm, (pad, y), wm)
         except Exception:
-            d.text((pad, y), "MARATHON", font=_font("black", 40), fill=ACCENT)
+            d.text((pad, y), "WITNESS", font=_font("black", 40), fill=ACCENT)
     else:
-        d.text((pad, y), "MARATHON", font=_font("black", 40), fill=ACCENT)
+        d.text((pad, y), "WITNESS", font=_font("black", 40), fill=ACCENT)
 
     d.text((pad, y + 60), "SESSION RECAP", font=_font("bold", 22), fill=TEXT)
     sub = "%s   %s   ·   %s min" % (session.get("date", ""), session.get("start", ""),

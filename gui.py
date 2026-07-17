@@ -24,7 +24,7 @@ app = None        # main module, imported during boot
 
 BG = "#0b0f12"
 PANEL = "#12181d"
-ACCENT = "#d3f24b"
+ACCENT = "#9c58da"
 TEXT = "#e8edf0"
 MUTED = "#7d8a94"
 LINE = "#232d34"
@@ -103,7 +103,7 @@ class ControlPanel:
 
         # start/stop
         self.toggle = tk.Button(r, text="START", command=self.toggle_run,
-                                bg=ACCENT, fg=BG, activebackground="#bfe038",
+                                bg=ACCENT, fg=BG, activebackground="#8746c4",
                                 activeforeground=BG, relief="flat",
                                 font=("Segoe UI", 13, "bold"), height=2, cursor="hand2")
         self.toggle.pack(fill="x", padx=20, pady=(6, 4))
@@ -155,7 +155,7 @@ class ControlPanel:
         self.dry_btn.config(text="[X] ON" if on else "[  ] OFF",
                             bg=ACCENT if on else PANEL,
                             fg=BG if on else TEXT,
-                            activebackground="#bfe038" if on else LINE,
+                            activebackground="#8746c4" if on else LINE,
                             activeforeground=BG if on else TEXT)
 
     def _flip_dry(self):
@@ -214,7 +214,7 @@ class ControlPanel:
         except Exception:
             pass
         self.toggle.config(text="START", state="normal", bg=ACCENT,
-                           activebackground="#bfe038", fg=BG)
+                           activebackground="#8746c4", fg=BG)
         self._set_status("STOPPED", MUTED)
 
     def open_dashboard(self):
@@ -358,7 +358,7 @@ class SettingsWindow:
             btn.config(text="[X] ON" if val else "[  ] OFF",
                        bg=ACCENT if val else PANEL,
                        fg=BG if val else TEXT,
-                       activebackground="#bfe038" if val else LINE,
+                       activebackground="#8746c4" if val else LINE,
                        activeforeground=BG if val else TEXT)
 
         def flip():

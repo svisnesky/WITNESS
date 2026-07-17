@@ -50,8 +50,8 @@ def _parse_name(fname: str):
     return int(m.group(1)), m.group(2).replace("+", " + ").replace("_", " ").upper()
 
 
-def _ff_color(hex_color: str, default: str = "0xd3f24b") -> str:
-    """'#d3f24b' -> ffmpeg's '0xd3f24b'; anything malformed -> default."""
+def _ff_color(hex_color: str, default: str = "0x9c58da") -> str:
+    """'#9c58da' -> ffmpeg's '0x9c58da'; anything malformed -> default."""
     h = str(hex_color or "").strip().lstrip("#")
     return f"0x{h}" if re.fullmatch(r"[0-9a-fA-F]{6}", h) else default
 
@@ -81,7 +81,7 @@ def _drawtext(tag: str, sub: str, font: str, accent: str) -> str:
 
 
 def build_short(src: str, dest: str, ffmpeg: str, tag: str = "",
-                sub: str = "", accent: str = "0xd3f24b") -> bool:
+                sub: str = "", accent: str = "0x9c58da") -> bool:
     """Render one vertical short. Returns True on success."""
     font = _find_font()
     overlay_chain = "[bgb][fgs]overlay=(W-w)/2:(H-h)/2"

@@ -14,7 +14,7 @@ game: "marathon"
 # reskins the dashboard, on-screen banners, and reel stat cards. To restyle
 # Marathon itself, uncomment and edit (see games/marathon.yaml for the keys):
 # theme:
-#   accent: "#d3f24b"
+#   accent: "#9c58da"
 #   danger: "#ff4d3d"
 
 # =========================================================================
@@ -122,7 +122,9 @@ sound_file: ""      # optional path to a .wav to play instead of the beep, e.g.
 
 # --- On-screen event popup (needs the game in borderless windowed) ---
 show_overlays: true                 # flash an image for special events
-overlay_image: "marathon_skull.png" # the image to flash (in this folder)
+overlay_image: "witness_headshot.png"  # the image to flash (in this folder) —
+                                    # the WITNESS headshot skull. The old
+                                    # marathon_skull.png still works here too.
 overlay_size: 140                   # skull height in pixels. Try 90-200.
 # Position: a named spot, OR "custom:fx,fy" where fx,fy are fractions (0-1) of
 # the screen for the skull's CENTER. Default places it where you photoshopped it.

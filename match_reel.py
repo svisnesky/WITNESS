@@ -48,7 +48,7 @@ def _build_card(out_png: str, title: str, kills, kills_label: str,
         bg, accent = th.get("bg", BG), th.get("accent", ACCENT)
         text, muted = th.get("text", TEXT), th.get("muted", MUTED)
         line_c = th.get("line", LINE)
-        brand = str(th.get("display_name") or "MARATHON").upper()
+        brand = str(th.get("display_name") or "WITNESS").upper()
 
         W, H = 1920, 1080
         img = Image.new("RGB", (W, H), bg)
@@ -61,7 +61,7 @@ def _build_card(out_png: str, title: str, kills, kills_label: str,
         y = pad
         # a themed game gets its name as the brand; the wordmark image is
         # Marathon's and only used when the brand IS Marathon
-        if brand == "MARATHON" and wordmark_path and os.path.exists(wordmark_path):
+        if brand == "WITNESS" and wordmark_path and os.path.exists(wordmark_path):
             try:
                 wm = Image.open(wordmark_path).convert("RGBA")
                 scale = 64 / wm.height
@@ -255,7 +255,7 @@ def build_match_reel(clips, out_path: str, ffmpeg: str,
 
     # End card ("GG") closes the reel.
     end_png = stem + "_end.png"
-    brand = str((theme or {}).get("display_name") or "MARATHON").upper()
+    brand = str((theme or {}).get("display_name") or "WITNESS").upper()
     have_end_card = _build_card(end_png, brand, "GG", "",
                                 ["WITNESSED."], wordmark_path,
                                 theme=theme)

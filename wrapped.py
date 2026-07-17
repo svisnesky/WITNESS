@@ -107,7 +107,7 @@ def build_wrapped(base_dir: str, record_dir: str = "", days: int = 7):
 
     d.rectangle([0, 0, W, 8], fill=ACCENT)
     d.rectangle([0, H - 8, W, H], fill=ACCENT)
-    d.text((pad, 60), "MARATHON", font=_font("black", 40), fill=ACCENT)
+    d.text((pad, 60), "WITNESS", font=_font("black", 40), fill=ACCENT)
     d.text((pad, 120), "WRAPPED", font=_font("black", 110), fill=TEXT)
     end = time.strftime("%b %d, %Y")
     d.text((pad, 250), f"THE LAST {days} DAYS  ·  THROUGH {end.upper()}",

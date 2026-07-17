@@ -15,10 +15,10 @@ def test_parse_name():
 
 
 def test_ff_color():
-    assert _ff_color("#d3f24b") == "0xd3f24b"
+    assert _ff_color("#9c58da") == "0x9c58da"
     assert _ff_color("#FF9D2B") == "0xFF9D2B"
-    assert _ff_color("red;}") == "0xd3f24b"        # malformed -> safe default
-    assert _ff_color("") == "0xd3f24b"
+    assert _ff_color("red;}") == "0x9c58da"        # malformed -> safe default
+    assert _ff_color("") == "0x9c58da"
 
 
 def test_drawtext_badge_layout():

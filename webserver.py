@@ -91,7 +91,7 @@ MODES = [
 THEME_DEFAULTS = {
     "bg": "#0b0f12", "panel": "#12181d", "line": "#232d34",
     "text": "#e8edf0", "muted": "#7d8a94",
-    "accent": "#d3f24b", "danger": "#ff4d3d",
+    "accent": "#9c58da", "danger": "#ff4d3d",
 }
 _HEX = None  # compiled lazily
 
@@ -512,8 +512,8 @@ def local_ip():
 
 
 def start_web(state, port, base_dir, host="0.0.0.0"):
-    imgs = {"/skull.png": "marathon_skull.png",
-            "/wordmark.png": "marathon_wordmark.png"}
+    imgs = {"/skull.png": "witness_logo.png",
+            "/wordmark.png": "witness_wordmark.png"}
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *a):
@@ -666,7 +666,7 @@ ARCHIVE_PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
 <title>Marathon Archive</title>
 <style>
   :root { --bg:#0b0f12; --panel:#12181d; --line:#232d34; --text:#e8edf0;
-          --muted:#7d8a94; --accent:#d3f24b; }
+          --muted:#7d8a94; --accent:#9c58da; }
   * { box-sizing:border-box; }
   body { margin:0; background:var(--bg); color:var(--text);
     font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
@@ -706,7 +706,7 @@ STATS_PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
 <title>Marathon Stats</title>
 <style>
   :root { --bg:#0b0f12; --panel:#12181d; --line:#232d34; --text:#e8edf0;
-          --muted:#7d8a94; --accent:#d3f24b; }
+          --muted:#7d8a94; --accent:#9c58da; }
   * { box-sizing:border-box; }
   body { margin:0; background:var(--bg); color:var(--text);
     font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
@@ -757,7 +757,7 @@ PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
 <title>Marathon Kill Feed</title>
 <style>
   :root { --bg:#0b0f12; --panel:#12181d; --line:#232d34; --text:#e8edf0;
-          --muted:#7d8a94; --accent:#d3f24b; }
+          --muted:#7d8a94; --accent:#9c58da; }
   * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
   html, body { min-height:100%; }
   body { margin:0; background:var(--bg); color:var(--text); text-align:center;

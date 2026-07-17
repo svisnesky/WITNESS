@@ -91,7 +91,7 @@ def _build_html(rows):
 <title>Marathon — Kill Recorder Stats</title>
 <style>
   :root {{ --bg:#0b0f12; --panel:#12181d; --line:#232d34; --text:#e8edf0;
-           --muted:#7d8a94; --accent:#d3f24b; --ink:#0b0f12; }}
+           --muted:#7d8a94; --accent:#9c58da; --ink:#0b0f12; }}
   * {{ box-sizing:border-box; }}
   body {{ margin:0; background:var(--bg); color:var(--text);
     font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace;

@@ -162,7 +162,7 @@ suppress_phrases: []
 #   accent = kill counter / banners / highlights   danger = death-red alerts
 theme:
   display_name: "{name.upper()}"
-  accent: "#d3f24b"
+  accent: "#9c58da"
   danger: "#ff4d3d"
   bg: "#0b0f12"
   panel: "#12181d"

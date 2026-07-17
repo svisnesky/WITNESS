@@ -35,13 +35,13 @@ suppress_phrases:
   - "INVENTORY VALUE"
 
 # Look & feel — dashboard, on-screen banners, and reel stat cards take the
-# active game's colors. These are Marathon's (acid green on dark); they're
-# also the built-in defaults, so this block is reference only. In YOUR
-# profile, change display_name + the hex values and the whole app reskins.
+# active game's colors. These are the WITNESS defaults (brand purple on
+# dark), so this block is reference only. In YOUR profile, change
+# display_name + the hex values and the whole app reskins.
 #   accent = kill counter / banners / highlights   danger = death-red alerts
 theme:
   display_name: "MARATHON"
-  accent: "#d3f24b"
+  accent: "#9c58da"
   danger: "#ff4d3d"
   bg: "#0b0f12"
   panel: "#12181d"

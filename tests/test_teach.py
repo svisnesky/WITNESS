@@ -67,7 +67,7 @@ def test_profile_yaml_is_valid_and_gated():
 def test_apply_theme_reskins_pages():
     import webserver
     html = ('<title>Marathon Kill Feed</title><style>:root { --bg:#0b0f12; '
-            '--accent:#d3f24b; } .nem { background:#ff4d3d; }</style>'
+            '--accent:#9c58da; } .nem { background:#ff4d3d; }</style>'
             '<header><img src="/wordmark.png" alt="MARATHON"></header>')
     themed = webserver.apply_theme(html, {"theme": {
         "display_name": "Arc Raiders", "accent": "#ff9d2b",
@@ -80,7 +80,7 @@ def test_apply_theme_reskins_pages():
 
 def test_apply_theme_marathon_and_bad_values_untouched():
     import webserver
-    html = '<title>Marathon Stats</title>:root { --accent:#d3f24b; }'
+    html = '<title>Marathon Stats</title>:root { --accent:#9c58da; }'
     assert webserver.apply_theme(html, {"theme": {}}) == html
     assert webserver.apply_theme(html, {}) == html
     evil = webserver.apply_theme(html, {"theme": {
