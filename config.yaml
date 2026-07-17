@@ -221,6 +221,10 @@ make_match_reels: true
 # That's it — every call-out and reel voiceover upgrades automatically, and
 # falls back to the built-in voice if the key is missing or out of credits.
 # Call-outs render once and cache, so the free tier is plenty.
+# Which ElevenLabs voice: empty = "Adam" (their classic deep American).
+# Audition voices in their Text to Speech playground, then paste the winner's
+# voice ID here (from the voice's page).
+elevenlabs_voice_id: ""
 
 # Announcer voice for the "(announced)" reel. Human-sounding Microsoft neural
 # voice (needs internet while the reel builds; falls back to the offline

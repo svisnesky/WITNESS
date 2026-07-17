@@ -76,13 +76,15 @@ def _elevenlabs(text: str, out_mp3: str, voice_id: str = "",
 
 
 def synth_to_wav(text: str, out_wav: str, voice: str = DEFAULT_VOICE,
-                 pitch: str = DEFAULT_PITCH) -> str | None:
+                 pitch: str = DEFAULT_PITCH, eleven_voice: str = "") -> str | None:
     """Render `text` to audio near out_wav. Returns the actual file written
     (mp3 for the neural voice, wav for fallbacks) or None.
-    pitch: e.g. "-18Hz" to deepen any voice (neural only)."""
+    pitch: e.g. "-18Hz" to deepen any voice (neural only).
+    eleven_voice: ElevenLabs voice ID override (used when a key is set)."""
     os.makedirs(os.path.dirname(out_wav), exist_ok=True)
 
-    path = _elevenlabs(text, os.path.splitext(out_wav)[0] + ".mp3")
+    path = _elevenlabs(text, os.path.splitext(out_wav)[0] + ".mp3",
+                       voice_id=eleven_voice)
     if path:
         return path
     path = _edge_neural(text, os.path.splitext(out_wav)[0] + ".mp3", voice, pitch)
@@ -175,13 +177,14 @@ _MEDAL_CACHE_VER = "arena1"   # bump to force a re-render of cached medals
 
 
 def ensure_medal_sounds(base_dir: str, voice: str, ffmpeg: str,
-                        pitch: str = DEFAULT_PITCH) -> dict:
+                        pitch: str = DEFAULT_PITCH,
+                        eleven_voice: str = "") -> dict:
     """Pre-render the medal call-outs ('Double kill!' ...) so playback is
     instant mid-game. Cached per voice under cache_medals/ — after the first
     render they work offline forever. Returns {kill_count: wav_path}."""
-    # a present ElevenLabs key changes what renders — separate cache dir so
-    # adding/removing the key re-renders instead of serving the old voice
-    tier = "el_" if _eleven_key() else ""
+    # a present ElevenLabs key (and which of its voices) changes what renders
+    # — separate cache dir so any change re-renders instead of serving stale
+    tier = f"el{(eleven_voice or ELEVEN_DEFAULT_VOICE)[:8]}_" if _eleven_key() else ""
     safe_voice = tier + "".join(c for c in f"{voice}{pitch}{_MEDAL_CACHE_VER}"
                                 if c.isalnum() or c in "-_")
     mdir = os.path.join(base_dir, "cache_medals", safe_voice)
@@ -192,7 +195,8 @@ def ensure_medal_sounds(base_dir: str, voice: str, ffmpeg: str,
         if os.path.exists(wav):
             out[n] = wav
             continue
-        src = _medal_shout(text, os.path.join(mdir, f"{name}_raw.mp3"), voice, pitch)
+        src = _medal_shout(text, os.path.join(mdir, f"{name}_raw.mp3"), voice,
+                           pitch, eleven_voice=eleven_voice)
         if not src:
             # neural unavailable: plain offline synth, still arena-processed
             src = synth_to_wav(text, os.path.join(mdir, f"{name}_raw.wav"), voice, pitch)
@@ -215,11 +219,11 @@ def ensure_medal_sounds(base_dir: str, voice: str, ffmpeg: str,
 
 
 def ensure_callout(base_dir: str, text: str, voice: str, ffmpeg: str,
-                   pitch: str = DEFAULT_PITCH) -> str:
+                   pitch: str = DEFAULT_PITCH, eleven_voice: str = "") -> str:
     """One arbitrary arena-processed call-out (e.g. 'You just killed
     Marshyy!'), rendered on first use and cached beside the medals. Returns
     the wav path, or '' if no synth worked."""
-    tier = "el_" if _eleven_key() else ""
+    tier = f"el{(eleven_voice or ELEVEN_DEFAULT_VOICE)[:8]}_" if _eleven_key() else ""
     safe_voice = tier + "".join(c for c in f"{voice}{pitch}{_MEDAL_CACHE_VER}"
                                 if c.isalnum() or c in "-_")
     mdir = os.path.join(base_dir, "cache_medals", safe_voice)
@@ -228,7 +232,8 @@ def ensure_callout(base_dir: str, text: str, voice: str, ffmpeg: str,
     wav = os.path.join(mdir, f"co_{slug}.wav")
     if os.path.exists(wav):
         return wav
-    src = _medal_shout(text, os.path.join(mdir, f"co_{slug}_raw.mp3"), voice, pitch)
+    src = _medal_shout(text, os.path.join(mdir, f"co_{slug}_raw.mp3"), voice,
+                       pitch, eleven_voice=eleven_voice)
     if not src:
         src = synth_to_wav(text, os.path.join(mdir, f"co_{slug}_raw.wav"), voice, pitch)
     if not src:
@@ -243,9 +248,10 @@ def ensure_callout(base_dir: str, text: str, voice: str, ffmpeg: str,
     return wav if r.returncode == 0 and os.path.exists(wav) else ""
 
 
-def _medal_shout(text: str, out_mp3: str, voice: str, pitch: str) -> str | None:
+def _medal_shout(text: str, out_mp3: str, voice: str, pitch: str,
+                 eleven_voice: str = "") -> str | None:
     """Neural render tuned for a SHOUT: faster and louder than narration."""
-    path = _elevenlabs(text, out_mp3, shout=True)
+    path = _elevenlabs(text, out_mp3, voice_id=eleven_voice, shout=True)
     if path:
         return path
     try:
