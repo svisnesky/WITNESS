@@ -152,6 +152,15 @@ make_shorts: true      # at session end, render each clip as a 1080x1920 vertica
 shorts_labels: true    # bake "KILL #3 - FINISHER" text into each short
 ffmpeg_path: ""        # leave empty to auto-find ffmpeg.exe in this folder / PATH
 
+# --- Kill feed name tracking (the Menace Report) ---
+# Read gamertags off the kill feed: who you downed (scanned right after each
+# kill popup) and who downed you (scanned on the downed screen). Logged with
+# timestamps to stats/encounters.csv; the Stats page shows most-downed
+# opponents with "last downed", plus your nemeses. Set gamertag to your EXACT
+# in-game name so the feed lines can be matched.
+track_names: true
+gamertag: "MRVIZNASTY"
+
 # At match end, when the EXFILTRATED summary screen appears, grab it once and
 # log the real match stats (elims/downs/damage/run time) to stats/match_stats.csv
 # — and print an audit: game's kill count vs what we detected.

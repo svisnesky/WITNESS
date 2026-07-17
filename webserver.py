@@ -34,6 +34,7 @@ SETTINGS = {
     "make_montage": (True, bool),
     "make_card": (True, bool),
     "capture_exfil_stats": (True, bool),
+    "track_names": (True, bool),            # read gamertags off the kill feed
 }
 
 # Human labels for the settings panel, in display order.
@@ -54,6 +55,7 @@ SETTINGS_META = [
     ("make_montage", "Session montage"),
     ("make_card", "Session match card"),
     ("capture_exfil_stats", "Exfil stats capture"),
+    ("track_names", "Name tracking (kill feed)"),
     ("play_sound", "PC beep on kill"),
 ]
 
@@ -371,7 +373,39 @@ def _stats_page(base_dir: str) -> str:
         squad_html = ('<h3>Squad leaderboard</h3><p class="empty2">No squad data yet — '
                       'play a trios match and exfil. Teammate panels are logged automatically.</p>')
 
-    return STATS_PAGE.replace("%%CARDS%%", cards).replace("%%SQUAD%%", squad_html)
+    # Menace Report — gamertags read off the kill feed
+    try:
+        import encounters
+        victims, killers = encounters.boards(base_dir)
+    except Exception:
+        victims, killers = [], []
+
+    def names_table(board, badge_cls, badge_text, last_label):
+        head = (f"<tr><th></th><th>Player</th><th>Times</th>"
+                f"<th>{last_label}</th></tr>")
+        trs = ""
+        for i, (name, cnt, last) in enumerate(board[:15]):
+            badge = (f'<span class="{badge_cls}">{badge_text}</span>'
+                     if i == 0 and cnt >= 2 else "")
+            trs += (f"<tr><td>{badge}</td><td>{_esc(name)}</td><td>{cnt}</td>"
+                    f"<td>{_esc((last or '')[:16])}</td></tr>")
+        return f'<div class="tblwrap"><table>{head}{trs}</table></div>'
+
+    if victims or killers:
+        menace_html = ""
+        if victims:
+            menace_html += ('<h3>Menace report — runners you downed</h3>'
+                            + names_table(victims, "hog", "MENACED", "Last downed"))
+        if killers:
+            menace_html += ('<h3>Downed you</h3>'
+                            + names_table(killers, "nem", "NEMESIS", "Last time"))
+    else:
+        menace_html = ('<h3>Menace report</h3><p class="empty2">No names yet — '
+                       'gamertags are read off the kill feed as downs happen.</p>')
+
+    return (STATS_PAGE.replace("%%CARDS%%", cards)
+            .replace("%%SQUAD%%", squad_html)
+            .replace("%%MENACE%%", menace_html))
 
 
 def local_ip():
@@ -603,6 +637,8 @@ STATS_PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
   th { color:var(--muted); font-size:.6rem; letter-spacing:.1em; text-transform:uppercase; }
   .hog { background:var(--accent); color:#0b0f12; font-size:.55rem; font-weight:700;
     letter-spacing:.08em; padding:2px 7px; border-radius:4px; }
+  .nem { background:#ff4d3d; color:#0b0f12; font-size:.55rem; font-weight:700;
+    letter-spacing:.08em; padding:2px 7px; border-radius:4px; }
   .empty2 { color:var(--muted); font-size:.8rem; }
   .back { display:inline-block; margin-top:26px; color:var(--muted); font-size:.75rem;
     text-decoration:none; border:1px solid var(--line); border-radius:8px; padding:8px 16px; }
@@ -611,6 +647,7 @@ STATS_PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
   <p class="sub">From every exfil screen the app has captured. It only gets deeper from here.</p>
   <div class="tiles">%%CARDS%%</div>
   %%SQUAD%%
+  %%MENACE%%
   <a class="back" href="/">&larr; Back to the kill feed</a>
 </div></body></html>"""
 

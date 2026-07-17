@@ -69,3 +69,34 @@ class OCREngine:
         proc = preprocess(img_bgr, self.upscale, binarize=True)
         text = pytesseract.image_to_string(proc)
         return [ln.strip() for ln in text.splitlines() if ln.strip()]
+
+    def read_rows(self, img_bgr: np.ndarray) -> List[str]:
+        """Like read_lines, but each returned string is ONE visual row: boxes
+        grouped by y-center, joined left-to-right. paragraph=True merges
+        neighboring rows, which is wrong when the row structure IS the data
+        (the kill feed: killer on the left, victim on the right)."""
+        self._ensure_loaded()
+        if self.engine_name != "easyocr":
+            return self.read_lines(img_bgr)
+
+        proc = preprocess(img_bgr, self.upscale, binarize=False)
+        results = self._reader.readtext(proc, detail=1, paragraph=False)
+        items = []
+        for box, text, _conf in results:
+            if not text or not text.strip():
+                continue
+            xs = [p[0] for p in box]
+            ys = [p[1] for p in box]
+            items.append((min(xs), (min(ys) + max(ys)) / 2,
+                          max(ys) - min(ys), text.strip()))
+
+        rows = []  # [y_center, height, [(x, text), ...]]
+        for x, yc, h, text in sorted(items, key=lambda it: it[1]):
+            for row in rows:
+                if abs(row[0] - yc) <= max(row[1], h) * 0.6:
+                    row[2].append((x, text))
+                    row[0] = (row[0] + yc) / 2
+                    break
+            else:
+                rows.append([yc, h, [(x, text)]])
+        return [" ".join(t for _, t in sorted(r[2])) for r in rows]

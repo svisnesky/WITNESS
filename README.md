@@ -22,7 +22,10 @@ announcer voiceover:
 <img src="docs/screenshots/reel_potg_card.png" width="440" alt="Play of the Game card">
 
 **Career + squad stats**, parsed straight off the exfil screens — including
-your teammates. The squad's top extractor wears the crown:
+your teammates. The squad's top extractor wears the crown. The **Menace
+Report** reads gamertags off the kill feed: who you've downed (with a
+"last downed" timestamp for repeat offenders) and who's been downing you —
+set `gamertag` in config.yaml to your exact in-game name:
 
 <img src="docs/screenshots/stats.png" width="440" alt="Career and squad stats">
 

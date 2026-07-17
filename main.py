@@ -734,6 +734,41 @@ def _handle_kill(cfg, ev, s, on_count=None):
         show_overlay(cfg)
 
 
+def _scan_feed_names(cfg, engine, s, expect):
+    """One kill-feed OCR pass to read gamertags before the feed lines expire.
+    expect: 'victim' right after your kill popup, 'killed_by' on the downed
+    screen — only that direction is logged, so a stale line the other way
+    can't misfile."""
+    try:
+        import encounters
+        base = os.path.dirname(os.path.abspath(__file__))
+        for direction, name in encounters.capture(cfg, engine):
+            if direction != expect:
+                continue
+            if not encounters.should_log(s.setdefault("_enc_recent", {}),
+                                         direction, name):
+                continue
+            encounters.log(base, s["session_id"], direction, name)
+            verb = "you downed" if direction == "victim" else "downed by"
+            print(f"  [names] {verb}: {name}")
+    except Exception as e:
+        print(f"  [names] scan error: {e}")
+
+
+def _maybe_capture_killer(cfg, engine, lines, s, now):
+    """On the downed screen (the GIVE UP prompt persists the whole bleed-out),
+    read who downed you off the kill feed — once per down."""
+    if now - s.get("_last_downed_scan", -1e9) < 60:
+        return
+    from detector import _normalize, phrase_matches
+    blob = _normalize(" ".join(lines))
+    if not (phrase_matches("give up", blob, 80)
+            or phrase_matches("self revive", blob, 80)):
+        return
+    s["_last_downed_scan"] = now
+    _scan_feed_names(cfg, engine, s, expect="killed_by")
+
+
 def _maybe_detect_runner(cfg, engine, lines, s):
     """Once per match: when the deployment screen is up, one full-frame scan
     for which runner/shell you're playing."""
@@ -974,10 +1009,17 @@ def _run_live_inner(cfg: dict, dry_run: bool = False, stop_event=None, on_count=
                 for ev in events:
                     _handle_kill(cfg, ev, s, on_count)
 
+                # Right after a kill, read the victim's gamertag off the kill
+                # feed (the feed line expires in seconds — no waiting).
+                if events and cfg.get("track_names", True):
+                    _scan_feed_names(cfg, engine, s, expect="victim")
+
                 _check_coalesce(s)
 
                 if blocked and cfg.get("capture_exfil_stats", True):
                     _maybe_capture_exfil(cfg, engine, lines, s, loop_start)
+                if blocked and cfg.get("track_names", True):
+                    _maybe_capture_killer(cfg, engine, lines, s, loop_start)
 
                 if not blocked:
                     _maybe_detect_runner(cfg, engine, lines, s)
