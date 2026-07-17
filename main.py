@@ -1211,7 +1211,8 @@ def _end_session(cfg, tags, start_monotonic, start_wall, dry_run, obs=None, sess
             import shorts
             base = os.path.dirname(os.path.abspath(__file__))
             shorts.build_shorts(session_dir, montage.find_ffmpeg(base, cfg),
-                                with_labels=cfg.get("shorts_labels", True))
+                                with_labels=cfg.get("shorts_labels", True),
+                                theme=cfg.get("theme"))
         except Exception as e:
             print(f"(shorts error: {e})")
 

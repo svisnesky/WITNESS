@@ -42,31 +42,51 @@ def _has_drawtext(ffmpeg: str) -> bool:
         return False
 
 
-def _label_from_name(fname: str) -> str:
-    """'003_down+finisher_19-27-52.mkv' -> 'KILL #3 - DOWN + FINISHER'."""
+def _parse_name(fname: str):
+    """'003_down+finisher_19-27-52.mkv' -> (3, 'DOWN + FINISHER')."""
     m = re.match(r"(\d+)_([A-Za-z+_]+)_", fname)
     if not m:
-        return ""
-    num = int(m.group(1))
-    tag = m.group(2).replace("+", " + ").replace("_", " ").upper()
-    return f"KILL #{num} - {tag}"
+        return None, ""
+    return int(m.group(1)), m.group(2).replace("+", " + ").replace("_", " ").upper()
 
 
-def _drawtext(label: str, font: str) -> str:
-    # ffmpeg filter escaping: colons in the font path and quotes in text
+def _ff_color(hex_color: str, default: str = "0xd3f24b") -> str:
+    """'#d3f24b' -> ffmpeg's '0xd3f24b'; anything malformed -> default."""
+    h = str(hex_color or "").strip().lstrip("#")
+    return f"0x{h}" if re.fullmatch(r"[0-9a-fA-F]{6}", h) else default
+
+
+def _drawtext(tag: str, sub: str, font: str, accent: str) -> str:
+    """Badge under the centered footage (the platform-UI-safe dead zone —
+    TikTok/Shorts cover the top and bottom of the frame with their own
+    chrome, which is exactly where the old big top label sat):
+      [ FINISHER ]        <- tag chip, accent box, dark text
+      KILL #3 · MARATHON  <- small white sub-line
+    The 16:9 footage spans y 656-1264 in the 1080x1920 frame."""
     fontfile = font.replace(":", r"\:")
-    text = label.replace("'", "").replace(":", r"\:")
-    return (f",drawtext=fontfile='{fontfile}':text='{text}'"
-            f":fontsize=64:fontcolor=white:borderw=5:bordercolor=black"
-            f":x=(w-text_w)/2:y=180")
+
+    def esc(t):
+        return t.replace("'", "").replace(":", r"\:")
+
+    chain = ""
+    if tag:
+        chain += (f",drawtext=fontfile='{fontfile}':text='{esc(tag)}'"
+                  f":fontsize=46:fontcolor=0x0b0f12:box=1:boxcolor={accent}"
+                  f":boxborderw=16:x=(w-text_w)/2:y=1336")
+    if sub:
+        chain += (f",drawtext=fontfile='{fontfile}':text='{esc(sub)}'"
+                  f":fontsize=32:fontcolor=white:borderw=4:bordercolor=black@0.85"
+                  f":x=(w-text_w)/2:y=1442")
+    return chain
 
 
-def build_short(src: str, dest: str, ffmpeg: str, label: str = "") -> bool:
+def build_short(src: str, dest: str, ffmpeg: str, tag: str = "",
+                sub: str = "", accent: str = "0xd3f24b") -> bool:
     """Render one vertical short. Returns True on success."""
     font = _find_font()
     overlay_chain = "[bgb][fgs]overlay=(W-w)/2:(H-h)/2"
-    if label and font:
-        overlay_chain += _drawtext(label, font)
+    if (tag or sub) and font:
+        overlay_chain += _drawtext(tag, sub, font, accent)
     filt = (
         "[0:v]split=2[bg][fg];"
         "[bg]scale=1080:1920:force_original_aspect_ratio=increase,"
@@ -88,7 +108,8 @@ def build_short(src: str, dest: str, ffmpeg: str, label: str = "") -> bool:
     return False
 
 
-def build_shorts(session_dir: str, ffmpeg: str, with_labels: bool = True):
+def build_shorts(session_dir: str, ffmpeg: str, with_labels: bool = True,
+                 theme: dict | None = None):
     """Render a vertical short for every clip in the session folder."""
     if not session_dir or not os.path.isdir(session_dir):
         return
@@ -103,13 +124,20 @@ def build_shorts(session_dir: str, ffmpeg: str, with_labels: bool = True):
     if with_labels and not _has_drawtext(ffmpeg):
         print("  [shorts] this ffmpeg build has no drawtext filter — rendering without labels")
         with_labels = False
+    th = theme or {}
+    accent = _ff_color(th.get("accent"))
+    brand = str(th.get("display_name") or "MARATHON").upper()
     done = 0
     for c in clips:
         dest = os.path.join(out_dir, os.path.splitext(c)[0] + ".mp4")
         if os.path.exists(dest):
             done += 1
             continue
-        label = _label_from_name(c) if with_labels else ""
-        if build_short(os.path.join(session_dir, c), dest, ffmpeg, label):
+        tag, sub = "", ""
+        if with_labels:
+            num, tag = _parse_name(c)
+            sub = f"KILL #{num} · {brand}" if num else brand
+        if build_short(os.path.join(session_dir, c), dest, ffmpeg,
+                       tag=tag, sub=sub, accent=accent):
             done += 1
     print(f"  [shorts] {done}/{len(clips)} vertical clips -> {out_dir}")
