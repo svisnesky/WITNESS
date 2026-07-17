@@ -808,8 +808,10 @@ def main():
             splash.destroy()
         except Exception:
             pass
-        root.deiconify()
-        ControlPanel(root)
+        try:
+            root.quit()          # end the splash loop; the app runs after it
+        except Exception:
+            pass
 
     def leave():
         if phase["leaving"]:
@@ -847,7 +849,84 @@ def main():
     if frames:
         play()
     hold()
-    root.mainloop()
+    root.mainloop()          # returns when the splash calls root.quit()
+    try:
+        root.destroy()
+    except Exception:
+        pass
+
+    # The command center is the HTML dashboard in a native window (webview).
+    # If that engine isn't available, fall back to the tk control panel.
+    if not _run_webview():
+        _run_tk_fallback()
+
+
+class _WebSession:
+    """Bridges the web START/STOP buttons to the detection session."""
+    def __init__(self, cfg):
+        self.cfg = cfg
+        self.thread = None
+        self.stop_event = None
+
+    def start(self):
+        if self.thread and self.thread.is_alive():
+            return
+        self.stop_event = threading.Event()
+
+        def run():
+            try:
+                app.run_live(self.cfg, False, self.stop_event)
+            except Exception as e:
+                print(f"(session error: {e})")
+        self.thread = threading.Thread(target=run, daemon=True)
+        self.thread.start()
+
+    def stop(self):
+        if self.stop_event:
+            self.stop_event.set()
+
+
+def _run_webview():
+    """Serve the dashboard and show it in a native window. run_live reuses the
+    already-running server, so START/STOP inside the HTML drive the session.
+    Returns False (→ tk fallback) if pywebview / the webview engine is absent."""
+    try:
+        import webview
+    except ImportError:
+        try:   # one-time auto-install, then retry
+            subprocess.run([sys.executable, "-m", "pip", "install", "pywebview"],
+                           creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+            import webview
+        except Exception:
+            return False
+    try:
+        import webserver
+        cfg = app.load_config()
+        port = cfg.get("web_port", 8000)
+        host = "0.0.0.0" if cfg.get("web_lan", True) else "127.0.0.1"
+        st = webserver.LiveState()
+        srv = webserver.start_web(st, port, BASE, host=host)
+        # hand the running server to run_live so it reuses it (no 2nd server)
+        app._web_state = st
+        app._web_server = srv
+        st.bind_config(cfg, app.save_setting_overrides)
+        sess = _WebSession(cfg)
+        st.bind_control(sess.start, sess.stop)
+        webview.create_window("WITNESS", f"http://localhost:{port}",
+                              width=960, height=660, min_size=(820, 560),
+                              background_color="#0b0f12")
+        webview.start()          # blocks until the window is closed
+        return True
+    except Exception as e:
+        print(f"(webview unavailable, using the control panel: {e})")
+        return False
+
+
+def _run_tk_fallback():
+    r = tk.Tk()
+    _claim_app_identity()
+    ControlPanel(r)
+    r.mainloop()
 
 
 if __name__ == "__main__":

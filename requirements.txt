@@ -32,3 +32,4 @@ pystray>=0.19
 google-api-python-client>=2.100
 google-auth-oauthlib>=1.2
 google-auth-httplib2>=0.2
+pywebview

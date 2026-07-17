@@ -213,6 +213,28 @@ class LiveState:
             self._cfg = cfg
             self._save_cb = save_cb
 
+    def bind_control(self, start_fn, stop_fn):
+        """Let the web UI start/stop the detection session (webview desktop)."""
+        with self._lock:
+            self._start_fn = start_fn
+            self._stop_fn = stop_fn
+
+    def fire_start(self):
+        f = getattr(self, "_start_fn", None)
+        if f:
+            try:
+                f()
+            except Exception as e:
+                print(f"  [control] start failed: {e}")
+
+    def fire_stop(self):
+        f = getattr(self, "_stop_fn", None)
+        if f:
+            try:
+                f()
+            except Exception as e:
+                print(f"  [control] stop failed: {e}")
+
     def get_settings(self):
         with self._lock:
             if self._cfg is None:
@@ -650,6 +672,12 @@ def start_web(state, port, base_dir, host="0.0.0.0"):
                 elif path == "/addkill":
                     state.request_kill()
                     self._send(b'{"ok":true}', "application/json", cache=False)
+                elif path == "/start":
+                    state.fire_start()
+                    self._send(b'{"ok":true}', "application/json", cache=False)
+                elif path == "/stop":
+                    state.fire_stop()
+                    self._send(b'{"ok":true}', "application/json", cache=False)
                 elif path == "/config":
                     n = int(self.headers.get("Content-Length") or 0)
                     try:
@@ -804,6 +832,12 @@ PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
   .nav a.on { background:#17202b; color:var(--text); }
   .nav a.on .i { background:var(--accent); }
   .railfoot { margin-top:auto; padding:12px 16px 0; display:flex; flex-direction:column; gap:8px; }
+  .runbtn { background:var(--accent); color:#0b0f12; border:none; border-radius:10px;
+    padding:16px; font:inherit; font-size:.95rem; font-weight:800; letter-spacing:.08em;
+    text-transform:uppercase; cursor:pointer; transition:opacity .15s, transform .1s, background .15s; }
+  .runbtn:active { transform:scale(.97); }
+  .runbtn.on { background:#ff4b42; color:#fff; }
+  .runbtn.busy { background:var(--panel2); color:var(--muted); cursor:default; }
   .clipbtn { background:var(--accent); color:#0b0f12; border:none; border-radius:8px;
     padding:13px; font:inherit; font-size:.82rem; font-weight:700; letter-spacing:.06em;
     text-transform:uppercase; cursor:pointer; transition:opacity .15s, transform .1s; }
@@ -910,12 +944,14 @@ PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
     <div class="brand"><img src="/skull.png" alt=""><span class="wm">WITNESS</span></div>
     <nav class="nav">
       <a class="on"><span class="i"></span>Live</a>
+      <a onclick="location.href='/archive'"><span class="i"></span>Reels</a>
       <a onclick="location.href='/stats'"><span class="i"></span>Stats</a>
       <a onclick="location.href='/archive'"><span class="i"></span>Archive</a>
       <a onclick="openSettings()"><span class="i"></span>Settings</a>
       <a onclick="openHelp()"><span class="i"></span>How to use</a>
     </nav>
     <div class="railfoot">
+      <button class="runbtn" id="runbtn" onclick="toggleRun()">START</button>
       <button class="clipbtn" id="clip" onclick="saveClip()">SAVE CLIP</button>
       <button class="clipbtn" id="addk" onclick="addKill()">+1 KILL</button>
       <div class="minirow">
@@ -1002,9 +1038,16 @@ PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
       });
       var st = document.querySelector('.status');
       st.className = 'status' + (d.running ? ' live' : '');
-      document.getElementById('statustext').textContent = d.running ? 'WATCHING' : 'STOPPED';
+      document.getElementById('statustext').textContent = d.running ? 'WATCHING' : 'READY';
       document.getElementById('sub').textContent =
-        d.running && d.elapsed ? 'SESSION  ' + fmtElapsed(d.elapsed) : '\\u00a0';
+        d.running && d.elapsed ? 'SESSION  ' + fmtElapsed(d.elapsed)
+        : (d.running ? 'STARTING\\u2026' : 'Press START to begin watching');
+      var rb = document.getElementById('runbtn');
+      if (!runBusy){
+        rb.className = 'runbtn' + (d.running ? ' on' : '');
+        rb.textContent = d.running ? 'STOP' : 'START';
+      }
+      if (runBusy && d.running === runWant){ runBusy = false; }
       var feed = document.getElementById('feed');
       if(!d.events.length){ feed.innerHTML = '<div class="empty">Waiting for kills...</div>'; }
       else {
@@ -1178,6 +1221,19 @@ PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
       m.classList.add('show');
       setTimeout(function(){ m.classList.remove('show'); }, 1800);
     } catch(e){}
+  }
+
+  var runBusy = false, runWant = false;
+  async function toggleRun(){
+    if (runBusy) return;
+    var rb = document.getElementById('runbtn');
+    var starting = rb.textContent === 'START';
+    runWant = starting; runBusy = true;
+    rb.className = 'runbtn busy';
+    rb.textContent = starting ? 'STARTING\\u2026' : 'STOPPING\\u2026';
+    try { await fetch(starting ? '/start' : '/stop', {method:'POST'}); } catch(e){}
+    // tick() clears runBusy once d.running matches what we asked for
+    setTimeout(function(){ runBusy = false; }, 12000);  // safety release
   }
 
   async function saveClip(){
