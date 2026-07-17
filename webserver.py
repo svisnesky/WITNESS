@@ -38,6 +38,8 @@ SETTINGS = {
     "auto_sweat": (True, bool),             # last-one-standing = flair mutes
     "splash_sound": (True, bool),           # boot-splash boom (Windows)
     "youtube_upload_session_reel": (False, bool),  # auto-upload session reel
+    "youtube_upload_match_reels": (False, bool),   # auto-upload each match reel
+    "youtube_upload_shorts": (False, bool),        # auto-upload each Short
 }
 
 # One-tap MODES: named bundles applied over the toggles above (through the
@@ -144,7 +146,9 @@ SETTINGS_META = [
     ("track_names", "Name tracking (kill feed)"),
     ("auto_sweat", "Auto-sweat (clutch focus)"),
     ("splash_sound", "Boot splash sound"),
-    ("youtube_upload_session_reel", "Auto-upload to YouTube"),
+    ("youtube_upload_session_reel", "YouTube: session reel"),
+    ("youtube_upload_match_reels", "YouTube: match reels"),
+    ("youtube_upload_shorts", "YouTube: Shorts (quota-heavy)"),
     ("play_sound", "PC beep on kill"),
 ]
 

@@ -1101,6 +1101,7 @@ def _build_match_reel_async(cfg, s, session_dir, stats_d):
                 music_tracks=tracks, theme=cfg.get("theme"))
             if ok:
                 print(f"  [reel] match {match_num} highlights -> {out}")
+                best = out          # upload the announced version if we make one
                 if s["web"] is not None:
                     s["web"].add_reel(f"Match {match_num} — {len(clips)} clip"
                                       f"{'s' if len(clips) != 1 else ''}", out)
@@ -1127,12 +1128,18 @@ def _build_match_reel_async(cfg, s, session_dir, stats_d):
                                             f"match_{match_num}_announced.mp4")
                         if match_reel.add_announcer(out, aout, wav, ffmpeg):
                             print(f"  [reel] announced version -> {aout}")
+                            best = aout
                             if s["web"] is not None:
                                 s["web"].add_reel(f"Match {match_num} (announced)", aout)
                         try:
                             os.remove(wav)
                         except OSError:
                             pass
+                if cfg.get("youtube_upload_match_reels", False):
+                    _yt_upload(cfg, base, best,
+                               f"Marathon — Match {match_num} — {total_kills} kills "
+                               f"— {time.strftime('%b %d, %Y')}",
+                               "Auto-uploaded match highlights, made with WITNESS.")
         except Exception as e:
             print(f"  [reel] error: {e}")
 
@@ -1352,6 +1359,14 @@ def _end_session(cfg, tags, start_monotonic, start_wall, dry_run, obs=None,
             shorts.build_shorts(session_dir, montage.find_ffmpeg(base, cfg),
                                 with_labels=cfg.get("shorts_labels", True),
                                 theme=cfg.get("theme"))
+            if cfg.get("youtube_upload_shorts", False):
+                sdir = os.path.join(session_dir, "shorts")
+                if os.path.isdir(sdir):
+                    for f in sorted(os.listdir(sdir)):
+                        if f.lower().endswith(".mp4"):
+                            _yt_upload(cfg, base, os.path.join(sdir, f),
+                                       f"Marathon clip — {time.strftime('%b %d')} #Shorts",
+                                       "Auto-uploaded with WITNESS. #Shorts #Marathon")
         except Exception as e:
             print(f"(shorts error: {e})")
 
@@ -1378,6 +1393,17 @@ def _session_clips_from_dir(session_dir: str):
         kills = len([p for p in tag.split("+") if p]) or 1
         out.append({"path": os.path.join(session_dir, f), "kills": kills, "tag": tag})
     return out
+
+
+def _yt_upload(cfg, base, path, title, desc):
+    """Upload one file to YouTube if the libraries + client_secret are set up.
+    Degrades gracefully (prints why) — never breaks the end-of-session flow."""
+    try:
+        import youtube_upload
+        youtube_upload.upload(path, title, desc, base,
+                              privacy=cfg.get("youtube_privacy", "unlisted"))
+    except Exception as e:
+        print(f"  [youtube] error: {e}")
 
 
 def _build_session_reel_and_upload(cfg, session_dir, tags):

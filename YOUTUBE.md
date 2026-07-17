@@ -45,10 +45,19 @@ In the app folder, run:
 5. Rename that file to exactly **`client_secret.json`** and move it into the
    app folder (same folder as `config.yaml`).
 
-## 6. Turn it on
+## 6. Turn on what you want uploaded
 
-Open the app → **Settings** → flip **Auto-upload to YouTube** on.
-*(Or set `youtube_upload_session_reel: true` in config.yaml.)*
+Open the app → **Settings**. Three separate toggles — flip on whichever you
+want (all off by default):
+
+- **YouTube: session reel** — the one whole-session highlights video. Best
+  starting point (one upload per session).
+- **YouTube: match reels** — each match's highlight reel (a few per session).
+- **YouTube: Shorts** — every vertical clip as a YouTube Short. *Quota-heavy*
+  — a busy session makes many, and Google allows ~6 uploads/day. Leave off
+  unless you post a lot.
+
+*(Or set the matching `youtube_upload_*` flags in config.yaml.)*
 
 ## 7. First run authorizes it — once
 

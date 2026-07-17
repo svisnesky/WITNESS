@@ -251,7 +251,13 @@ make_session_reel: true
 # When true, the session_reel is uploaded to YouTube at session end. Needs
 # client_secret.json in this folder (from Google Cloud) + the google upload
 # libraries installed. Leave false until you've done the setup.
-youtube_upload_session_reel: false
+# Which things auto-upload at session end (all default off). Each is a
+# separate toggle — also in the dashboard Settings. NOTE: YouTube allows
+# ~6 uploads/day by default, so leave "shorts" off unless you post a lot
+# (a busy session makes many).
+youtube_upload_session_reel: false   # the one whole-session highlight reel
+youtube_upload_match_reels: false    # each match's highlight reel
+youtube_upload_shorts: false         # every vertical Short (quota-heavy)
 youtube_privacy: "unlisted"   # unlisted | private | public
 
 # --- Live web dashboard (view on a phone/iPad browser over the LAN) ---
