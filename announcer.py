@@ -27,6 +27,8 @@ DEFAULT_PITCH = "-18Hz"          # deep broadcast voice — Stan-approved
 ELEVEN_DEFAULT_VOICE = "TsHrPyMlNFuIYnbODF01"   # "Alien Master" — ominous,
                                                 # dark and scary. The voice
                                                 # of WITNESS (Stan-cast).
+# The casting bench (swap via elevenlabs_voice_id in config):
+#   "6F5Zhi321D3Oq7v1oNT4"  "Hank" — strong contender, a little less ominous
 ELEVEN_FALLBACK_VOICE = "pNInz6obpgDQGcFmaJgB"  # "Adam" — premade, always
                                                 # available (library voices
                                                 # must be added per-account)
