@@ -33,3 +33,4 @@ cache_medals/
 
 # ElevenLabs API key (optional voice upgrade) — never commit
 elevenlabs_key.txt
+.record_dir

@@ -910,6 +910,10 @@ def _run_webview():
         app._web_state = st
         app._web_server = srv
         st.bind_config(cfg, app.save_setting_overrides)
+        try:                       # so Archive/Reels show past sessions on open
+            st.record_dir = app.cached_record_dir()
+        except Exception:
+            pass
         sess = _WebSession(cfg)
         st.bind_control(sess.start, sess.stop)
         webview.create_window("WITNESS", f"http://localhost:{port}",

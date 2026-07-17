@@ -154,6 +154,28 @@ def _migrate_legacy_voice(cfg, override) -> None:
         pass
 
 
+_RECORD_DIR_CACHE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                 ".record_dir")
+
+
+def cache_record_dir(path: str) -> None:
+    """Remember OBS's recording folder so the Archive can find past sessions
+    on the very next app open (before START is pressed)."""
+    try:
+        with open(_RECORD_DIR_CACHE, "w", encoding="utf-8") as f:
+            f.write(path)
+    except Exception:
+        pass
+
+
+def cached_record_dir() -> str:
+    try:
+        with open(_RECORD_DIR_CACHE, encoding="utf-8") as f:
+            return f.read().strip()
+    except Exception:
+        return ""
+
+
 def save_setting_overrides(changes: dict) -> None:
     """Persist dashboard-changed settings to settings_override.yaml."""
     base = os.path.dirname(os.path.abspath(__file__))
@@ -621,7 +643,10 @@ def _setup_session(cfg, dry_run):
             web.reset()
             web.bind_config(cfg, save_setting_overrides)
             try:
-                web.record_dir = obs.get_record_directory() or ""
+                rd = obs.get_record_directory() or ""
+                web.record_dir = rd
+                if rd:            # remember it so the archive works on next open
+                    cache_record_dir(rd)
             except Exception:
                 pass
             web.set_running(True)
