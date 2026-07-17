@@ -980,8 +980,7 @@ PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
       st.className = 'status' + (d.running ? ' live' : '');
       document.getElementById('statustext').textContent = d.running ? 'WATCHING' : 'STOPPED';
       document.getElementById('sub').textContent =
-        d.running && d.elapsed ? 'session ' + fmtElapsed(d.elapsed) + ' \\u00b7 started ' + d.started
-        : (d.started ? 'started ' + d.started : '\\u00a0');
+        d.running && d.elapsed ? 'SESSION  ' + fmtElapsed(d.elapsed) : '\\u00a0';
       var feed = document.getElementById('feed');
       if(!d.events.length){ feed.innerHTML = '<div class="empty">Waiting for kills...</div>'; }
       else {
