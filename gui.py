@@ -836,11 +836,14 @@ def main():
         if state["relaunch"]:
             os._exit(0)          # replaced by the freshly-updated process
         elapsed = time.monotonic() - born
-        ready = state["done"] and anim["done"] and elapsed >= MIN_HOLD
-        # hard cap: never let a slow update check leave the splash hanging —
-        # show the app after MAX_WAIT regardless (the update thread will still
-        # relaunch if it finishes with new code).
-        if skip["on"] or ready or elapsed >= 9.0:
+        # Once the animation has played and the sound has had time to breathe,
+        # go — don't make the user stare at a frozen last frame waiting on a
+        # network round-trip. The update thread still relaunches independently
+        # if it finds new code. Only hold longer if the update is mid-flight.
+        played = anim["done"] and elapsed >= MIN_HOLD
+        ready = played and (state["done"] or elapsed >= 2.6)
+        # hard cap so a hung update check can never strand the splash.
+        if skip["on"] or ready or elapsed >= 4.0:
             leave()
         else:
             splash.after(80, hold)
