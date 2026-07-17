@@ -18,7 +18,7 @@ import os
 import urllib.parse
 import urllib.request
 
-REPO = "svisnesky/Marathon-OBS"
+REPO = "svisnesky/WITNESS"   # GitHub redirects the old Marathon-OBS name too
 BRANCH = "main"
 API = f"https://api.github.com/repos/{REPO}"
 RAW = f"https://raw.githubusercontent.com/{REPO}"

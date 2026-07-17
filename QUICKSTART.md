@@ -16,7 +16,7 @@ it's "open the app, press START" forever (the app keeps itself updated).
 
 ## Setup (once)
 
-1. **Download this project**: [direct ZIP link](https://github.com/svisnesky/Marathon-OBS/archive/refs/heads/main.zip)
+1. **Download this project**: [direct ZIP link](https://github.com/svisnesky/WITNESS/archive/refs/heads/main.zip)
    (or the green **Code** button above → **Download ZIP**) → unzip anywhere
    (e.g. Documents).
 2. **Set up OBS** (2 minutes):
