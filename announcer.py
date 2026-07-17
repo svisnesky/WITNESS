@@ -20,6 +20,60 @@ import sys
 DEFAULT_VOICE = "en-US-ChristopherNeural"
 DEFAULT_PITCH = "-18Hz"          # deep broadcast voice — Stan-approved
 
+# ElevenLabs (optional, best-in-class delivery): drop your API key into
+# elevenlabs_key.txt in this folder (or the ELEVENLABS_API_KEY env var) and
+# every render upgrades automatically. Call-outs render ONCE and cache, so
+# even the free tier covers the whole medal set with room to spare.
+ELEVEN_DEFAULT_VOICE = "pNInz6obpgDQGcFmaJgB"   # "Adam" — deep American
+
+
+def _eleven_key() -> str:
+    k = os.environ.get("ELEVENLABS_API_KEY", "").strip()
+    if k:
+        return k
+    try:
+        p = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                         "elevenlabs_key.txt")
+        with open(p, encoding="utf-8") as f:
+            return f.read().strip()
+    except OSError:
+        return ""
+
+
+def _elevenlabs(text: str, out_mp3: str, voice_id: str = "",
+                shout: bool = False) -> str | None:
+    """Best-quality render via the ElevenLabs API (needs a key; free tier is
+    plenty for cached call-outs). Quietly returns None without one."""
+    key = _eleven_key()
+    if not key:
+        return None
+    import json
+    import urllib.request
+    vid = voice_id or ELEVEN_DEFAULT_VOICE
+    body = json.dumps({
+        "text": text,
+        "model_id": "eleven_multilingual_v2",
+        # shout: less stability + more style = the hype delivery
+        "voice_settings": {"stability": 0.30 if shout else 0.45,
+                           "similarity_boost": 0.80,
+                           "style": 0.65 if shout else 0.30},
+    }).encode()
+    req = urllib.request.Request(
+        f"https://api.elevenlabs.io/v1/text-to-speech/{vid}",
+        data=body, method="POST",
+        headers={"xi-api-key": key, "Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=30) as r:
+            audio = r.read()
+        if len(audio) > 1000:
+            with open(out_mp3, "wb") as f:
+                f.write(audio)
+            return out_mp3
+    except Exception as e:
+        print(f"  [announcer] ElevenLabs unavailable ({type(e).__name__}) — "
+              "using the neural voice")
+    return None
+
 
 def synth_to_wav(text: str, out_wav: str, voice: str = DEFAULT_VOICE,
                  pitch: str = DEFAULT_PITCH) -> str | None:
@@ -28,6 +82,9 @@ def synth_to_wav(text: str, out_wav: str, voice: str = DEFAULT_VOICE,
     pitch: e.g. "-18Hz" to deepen any voice (neural only)."""
     os.makedirs(os.path.dirname(out_wav), exist_ok=True)
 
+    path = _elevenlabs(text, os.path.splitext(out_wav)[0] + ".mp3")
+    if path:
+        return path
     path = _edge_neural(text, os.path.splitext(out_wav)[0] + ".mp3", voice, pitch)
     if path:
         return path
@@ -122,8 +179,11 @@ def ensure_medal_sounds(base_dir: str, voice: str, ffmpeg: str,
     """Pre-render the medal call-outs ('Double kill!' ...) so playback is
     instant mid-game. Cached per voice under cache_medals/ — after the first
     render they work offline forever. Returns {kill_count: wav_path}."""
-    safe_voice = "".join(c for c in f"{voice}{pitch}{_MEDAL_CACHE_VER}"
-                         if c.isalnum() or c in "-_")
+    # a present ElevenLabs key changes what renders — separate cache dir so
+    # adding/removing the key re-renders instead of serving the old voice
+    tier = "el_" if _eleven_key() else ""
+    safe_voice = tier + "".join(c for c in f"{voice}{pitch}{_MEDAL_CACHE_VER}"
+                                if c.isalnum() or c in "-_")
     mdir = os.path.join(base_dir, "cache_medals", safe_voice)
     os.makedirs(mdir, exist_ok=True)
     out = {}
@@ -159,8 +219,9 @@ def ensure_callout(base_dir: str, text: str, voice: str, ffmpeg: str,
     """One arbitrary arena-processed call-out (e.g. 'You just killed
     Marshyy!'), rendered on first use and cached beside the medals. Returns
     the wav path, or '' if no synth worked."""
-    safe_voice = "".join(c for c in f"{voice}{pitch}{_MEDAL_CACHE_VER}"
-                         if c.isalnum() or c in "-_")
+    tier = "el_" if _eleven_key() else ""
+    safe_voice = tier + "".join(c for c in f"{voice}{pitch}{_MEDAL_CACHE_VER}"
+                                if c.isalnum() or c in "-_")
     mdir = os.path.join(base_dir, "cache_medals", safe_voice)
     os.makedirs(mdir, exist_ok=True)
     slug = "".join(c for c in text.lower() if c.isalnum())[:48]
@@ -184,6 +245,9 @@ def ensure_callout(base_dir: str, text: str, voice: str, ffmpeg: str,
 
 def _medal_shout(text: str, out_mp3: str, voice: str, pitch: str) -> str | None:
     """Neural render tuned for a SHOUT: faster and louder than narration."""
+    path = _elevenlabs(text, out_mp3, shout=True)
+    if path:
+        return path
     try:
         import asyncio
 

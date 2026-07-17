@@ -215,6 +215,13 @@ runner_detection: true
 # dashboard for instant rewatching.
 make_match_reels: true
 
+# --- OPTIONAL VOICE UPGRADE: ElevenLabs (best-in-class hype delivery) ---
+# 1. Make a free account at elevenlabs.io -> Profile -> API key
+# 2. Save the key into a file named  elevenlabs_key.txt  in this folder
+# That's it — every call-out and reel voiceover upgrades automatically, and
+# falls back to the built-in voice if the key is missing or out of credits.
+# Call-outs render once and cache, so the free tier is plenty.
+
 # Announcer voice for the "(announced)" reel. Human-sounding Microsoft neural
 # voice (needs internet while the reel builds; falls back to the offline
 # robotic voice without it). Try en-US-ChristopherNeural, en-GB-RyanNeural...
