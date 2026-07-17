@@ -154,6 +154,15 @@ announcer_medals: false
 team_wipe: true
 team_wipe_size: 3      # deaths that make a wipe (2 for duos)
 
+# AUTO-SWEAT: when the squad panel shows every teammate DOWNED — you're the
+# last one standing — all flair mutes automatically (no banners, no voices,
+# no skull) while clips keep recording. The clutch confirms itself by how it
+# ends: the panel clears (you revived them) or you exfil alive. If you got
+# kills while solo, the announcer celebrates THEN — after the pressure, not
+# during it. Going down just ends it quietly.
+auto_sweat: true
+clutch_callout: "HOLY SHIT!"   # what the announcer yells after a confirmed clutch
+
 # --- Clips + recap ---
 organize_clips: true   # rename each saved clip by event+time and sort into a
                        # per-session folder ("Marathon Sessions/<date_time>/")

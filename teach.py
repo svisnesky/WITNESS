@@ -32,6 +32,7 @@ PROFILE_DEFAULTS = {
     "squad_stats": False,
     "team_wipe": False,
     "track_names": False,
+    "auto_sweat": False,      # reads Marathon's squad panel — needs mapping
 }
 
 

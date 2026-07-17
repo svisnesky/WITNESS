@@ -55,3 +55,4 @@ runner_detection: true
 squad_stats: true
 team_wipe: true
 track_names: true
+auto_sweat: true

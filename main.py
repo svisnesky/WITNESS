@@ -692,7 +692,7 @@ def _flush_coalesce(s):
     # A multikill means multiple DISTINCT downs — a down followed by the
     # finisher on the same runner is ONE kill, not a double.
     n_downs = sum(1 for t in tags if t in ("down", "precision"))
-    if n_downs >= 2:
+    if n_downs >= 2 and not s.get("clutch"):
         if s["cfg"].get("overlay_multikill", True):
             show_text_overlay(s["cfg"],
                               MULTIKILL_NAMES.get(n_downs, "MULTI KILL"),
@@ -727,6 +727,9 @@ def _handle_kill(cfg, ev, s, on_count=None):
     s["session_tags"].append(tag)
     s.setdefault("match_tags", []).append(tag)  # reset each exfil for the audit
     print(f"KILL #{count} [{tag}]: {ev.raw_line!r}")
+    if s.get("clutch"):
+        s["clutch_kills"] = s.get("clutch_kills", 0) + 1
+        print(f"  [clutch] solo kill #{s['clutch_kills']} — staying quiet")
 
     # Team wipe: an enemy DEATH shows an ELIM or FINISHER popup (yours or an
     # assist). Three distinct deaths in a couple of minutes = squad wiped —
@@ -736,7 +739,7 @@ def _handle_kill(cfg, ev, s, on_count=None):
         if register_elim(s.setdefault("elim_times", []), now,
                          wipe_size=int(cfg.get("team_wipe_size", 3))):
             print("  -> TEAM WIPE")
-            if cfg.get("show_overlays", True):
+            if cfg.get("show_overlays", True) and not s.get("clutch"):
                 show_text_overlay(cfg, "TEAM WIPE", size=72,
                                   position="custom:0.5,0.36",
                                   color=_theme_color(cfg, "danger", "#ff4d3d"),
@@ -744,7 +747,8 @@ def _handle_kill(cfg, ev, s, on_count=None):
             if cfg.get("announcer_medals", True):
                 import announcer
                 announcer.play_medal(s["medal_sounds"], "wipe")
-    play_kill_sound(cfg)
+    if not s.get("clutch"):
+        play_kill_sound(cfg)
     s["obs"].set_counter(count)
     if on_count is not None:
         on_count(count)
@@ -759,9 +763,84 @@ def _handle_kill(cfg, ev, s, on_count=None):
     s["_coalesce_pending"].append({"tag": tag, "count": count})
     s["_coalesce_deadline"] = now + coalesce_secs
 
-    if should_overlay(cfg, ev.raw_line):
+    if should_overlay(cfg, ev.raw_line) and not s.get("clutch"):
         print("  -> HEADSHOT (skull popup)")
         show_overlay(cfg)
+
+
+def _check_clutch(cfg, engine, s, now):
+    """Auto-sweat: every ~3s, read the squad panel. All teammates DOWNED =>
+    clutch mode (flair mutes, clips keep rolling). Panel clears => you
+    revived them; if you racked up kills solo, celebrate NOW."""
+    if not cfg.get("auto_sweat", True) or int(cfg.get("team_wipe_size", 3)) < 2:
+        return
+    if now - s.get("_clutch_check", -1e9) < 3.0:
+        return
+    s["_clutch_check"] = now
+    try:
+        import clutch
+        down = clutch.teammates_down(cfg, engine)
+    except Exception:
+        return
+    need = int(cfg.get("team_wipe_size", 3)) - 1
+
+    if not s.get("clutch"):
+        if down >= need:
+            s["clutch"] = True
+            s["clutch_kills"] = 0
+            s["clutch_start"] = now
+            print(f"  [clutch] {down} teammate(s) down — you're the last one "
+                  "standing. Going quiet.")
+            if s["web"] is not None:
+                s["web"].notice("CLUTCH TIME — flair muted", "clutch")
+    elif down == 0:
+        kills = s.get("clutch_kills", 0)
+        s["clutch"] = False
+        if kills >= 1:
+            _clutch_celebrate(cfg, s, kills)
+        else:
+            print("  [clutch] squad's back up.")
+    elif now - s.get("clutch_start", now) > 300:
+        s["clutch"] = False           # stale state safety valve
+        print("  [clutch] stand-down (timeout).")
+
+
+def _end_clutch_quietly(s, reason):
+    """You went down / the match ended some other way — no celebration."""
+    if s.get("clutch"):
+        s["clutch"] = False
+        print(f"  [clutch] {reason}")
+
+
+def _clutch_celebrate(cfg, s, kills):
+    """The squad is back up and you carried — now the flair comes back on
+    with interest."""
+    print(f"  [clutch] CLUTCH PULLED OFF — {kills} kill(s) while solo")
+    if s["web"] is not None:
+        try:
+            s["web"].notice(f"CLUTCH — {kills} solo kill(s)", "clutch")
+        except Exception:
+            pass
+    show_text_overlay(cfg, "CLUTCH", size=84, position="custom:0.5,0.36",
+                      color=_theme_color(cfg, "accent", "#d3f24b"),
+                      duration_ms=2600)
+    if cfg.get("announcer_medals", True):
+        phrase = str(cfg.get("clutch_callout") or "HOLY SHIT!")
+        def speak():
+            try:
+                import announcer
+                import montage
+                base = os.path.dirname(os.path.abspath(__file__))
+                wav = announcer.ensure_callout(
+                    base, phrase,
+                    cfg.get("announcer_voice", announcer.DEFAULT_VOICE),
+                    montage.find_ffmpeg(base, cfg),
+                    pitch=cfg.get("announcer_pitch", announcer.DEFAULT_PITCH))
+                if wav:
+                    announcer.play_medal({"co": wav}, "co")
+            except Exception as e:
+                print(f"  [clutch] call-out failed: {e}")
+        threading.Thread(target=speak, daemon=True).start()
 
 
 def _scan_feed_names(cfg, engine, s, expect):
@@ -794,19 +873,21 @@ def _streamer_alert(cfg, s, direction, watch):
     voiced call-out, and (for deaths) save the clip, because a streamer
     downing you is a moment you'll want on tape."""
     killed = direction == "victim"
+    quiet = s.get("clutch", False)     # mid-clutch: log + clip, no flair
     text = f"YOU KILLED {watch}!" if killed else f"DOWNED BY {watch}"
     print(f"  *** STREAMER ALERT: {text} ***")
-    show_text_overlay(cfg, text, size=64, position="custom:0.5,0.33",
-                      color=_theme_color(cfg, "accent", "#d3f24b") if killed
-                      else _theme_color(cfg, "danger", "#ff4d3d"),
-                      duration_ms=2600)
+    if not quiet:
+        show_text_overlay(cfg, text, size=64, position="custom:0.5,0.33",
+                          color=_theme_color(cfg, "accent", "#d3f24b") if killed
+                          else _theme_color(cfg, "danger", "#ff4d3d"),
+                          duration_ms=2600)
     if s["web"] is not None:
         try:
             s["web"].notice(text, "streamer")
         except Exception:
             pass
 
-    if cfg.get("announcer_medals", True):
+    if cfg.get("announcer_medals", True) and not quiet:
         phrase = (f"You just killed {watch}!" if killed
                   else f"{watch} just downed you.")
         def speak():
@@ -853,6 +934,7 @@ def _maybe_capture_killer(cfg, engine, lines, s, now):
             or phrase_matches("self revive", blob, 80)):
         return
     s["_last_downed_scan"] = now
+    _end_clutch_quietly(s, "you went down — no shame, it was 1vX.")
     _scan_feed_names(cfg, engine, s, expect="killed_by")
 
 
@@ -887,6 +969,14 @@ def _maybe_capture_exfil(cfg, engine, lines, s, now):
         if not exfil_stats.looks_like_exfil(lines):
             return
         s["_last_exfil"] = now
+        # Exfiling AS the last one standing is a clutch by definition.
+        if s.get("clutch"):
+            kills = s.get("clutch_kills", 0)
+            s["clutch"] = False
+            if kills >= 1:
+                _clutch_celebrate(cfg, s, kills)
+            else:
+                print("  [clutch] exfiled solo — the quiet kind of clutch.")
         save_dir = ""
         try:
             rec = s["obs"].get_record_directory()
@@ -1110,8 +1200,9 @@ def _run_live_inner(cfg: dict, dry_run: bool = False, stop_event=None, on_count=
 
                 if not blocked:
                     _maybe_detect_runner(cfg, engine, lines, s)
+                    _check_clutch(cfg, engine, s, loop_start)
 
-                if overlay_det is not None and not blocked:
+                if overlay_det is not None and not blocked and not s.get("clutch"):
                     oev = overlay_det.process_frame(lines, now=loop_start)
                     if oev:
                         print("  -> HEADSHOT (skull popup)")
