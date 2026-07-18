@@ -17,6 +17,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import urllib.error
 import urllib.request
 
 BASE = os.path.dirname(os.path.abspath(__file__))
@@ -84,6 +85,29 @@ def _api(url, key):
         return json.loads(r.read())
 
 
+def _tts_test(key, voice_id):
+    """Actually try to render one short word — the ground-truth test, since a
+    key can be permission-scoped to only TTS (and would 401 on account reads
+    while working fine here). Returns (ok, status_code, detail)."""
+    body = json.dumps({"text": "ok", "model_id": "eleven_multilingual_v2"}).encode()
+    req = urllib.request.Request(
+        f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}",
+        data=body, method="POST",
+        headers={"xi-api-key": key, "Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=20) as r:
+            return (len(r.read()) > 500), 200, ""
+    except urllib.error.HTTPError as e:
+        detail = ""
+        try:
+            detail = e.read().decode()[:200]
+        except Exception:
+            pass
+        return False, e.code, detail
+    except Exception as e:
+        return False, None, type(e).__name__
+
+
 def main():
     print("=" * 58)
     print("  WITNESS voice check")
@@ -122,48 +146,52 @@ def main():
     for note in _sanity(key, want_voice):
         print(f"  [!] {note}")
 
-    # validate the key
-    try:
-        me = _api("https://api.elevenlabs.io/v1/user", key)
-        tier = (me.get("subscription") or {}).get("tier", "?")
-        used = (me.get("subscription") or {}).get("character_count", "?")
-        cap = (me.get("subscription") or {}).get("character_limit", "?")
-        print(f"     Account OK (tier: {tier}, used {used}/{cap} chars).")
-    except Exception as e:
-        code = getattr(e, "code", None)
-        if code == 401:
-            print("[X]  Key was REJECTED (401) — invalid, revoked, or the wrong")
-            print("     string. See the note(s) above. Most often it's a stray")
-            print("     character from Notepad or the voice ID pasted by mistake.")
-            print("     Recopy the key (Profile -> API Keys, starts 'sk_') into")
-            print("     elevenlabs_key.txt and run this again.")
-        else:
-            print(f"[!]  Couldn't reach ElevenLabs ({type(e).__name__}). If you're")
-            print("     online this may be a temporary outage; the app falls back")
-            print(f"     to the neural voice ('{edge_voice}') meanwhile.")
+    # Ground truth: try an actual render on the chosen voice. This is what the
+    # app really does, and it works even if the key is scoped to only TTS.
+    from announcer import ELEVEN_FALLBACK_VOICE
+    ok, code, detail = _tts_test(key, want_voice)
+
+    if ok:
+        print(f"\n[OK] Rendered a test clip with voice id {want_voice}.")
+        print("     Reels and call-outs will use this ElevenLabs voice.")
+        if not _cfg("elevenlabs_voice_id"):
+            print("     (Built-in default 'Alien Master'. Change it with")
+            print("      elevenlabs_voice_id in config.yaml.)")
         print("=" * 58)
         return
 
-    # confirm the chosen voice exists on the account
-    try:
-        v = _api(f"https://api.elevenlabs.io/v1/voices/{want_voice}", key)
-        vname = v.get("name", "(unnamed)")
-        print(f"     Voice OK: '{vname}'  [{want_voice}]")
-        print("\n[OK] Reels and call-outs will use ElevenLabs -> "
-              f"'{vname}'.")
-        if not _cfg("elevenlabs_voice_id"):
-            print("     (This is the built-in default. To use a different one,")
-            print("      set elevenlabs_voice_id in config.yaml.)")
-    except Exception as e:
-        code = getattr(e, "code", None)
-        if code in (400, 404):
-            print(f"[X]  Your key is valid, but voice id {want_voice} is NOT on")
-            print("     this account. Library voices must be ADDED to your")
-            print("     account first (open the voice in ElevenLabs -> Add).")
-            print("     The app will retry with a premade voice, or fall back")
-            print(f"     to the neural voice ('{edge_voice}').")
-        else:
-            print(f"[!]  Voice check failed ({type(e).__name__}).")
+    # The chosen voice failed. Is it the KEY or just the VOICE? Test the key
+    # against a premade voice that every account can use.
+    if code in (400, 404, 422):
+        ok2, code2, _ = _tts_test(key, ELEVEN_FALLBACK_VOICE)
+        if ok2:
+            print(f"\n[X]  Your key WORKS, but voice id {want_voice} isn't on your")
+            print("     account. Library voices (like 'Alien Master') must be")
+            print("     ADDED first: open the voice in ElevenLabs -> 'Add to my")
+            print("     voices'. Then rerun this. Until then the app uses a")
+            print(f"     premade voice or the neural backup ('{edge_voice}').")
+            print("=" * 58)
+            return
+        code = code2 or code   # premade also failed -> it's really the key
+
+    if code in (401, 403):
+        print("\n[X]  Key was REJECTED by the render endpoint (%s)." % code)
+        print("     The key string is well-formed, so this is almost always:")
+        print("       - the key was REVOKED or regenerated (old one pasted), or")
+        print("       - it was created with RESTRICTED permissions that exclude")
+        print("         Text to Speech.")
+        print("     Fix: elevenlabs.io -> Profile -> API Keys -> create a NEW key")
+        print("     with Text to Speech enabled (or 'has access to all'), paste")
+        print("     it into elevenlabs_key.txt, rerun this.")
+    elif code == 429:
+        print("\n[!]  Rate-limited or out of credits (429). The key is fine —")
+        print("     your ElevenLabs quota is used up. Reels/call-outs use the")
+        print(f"     neural backup ('{edge_voice}') until it resets.")
+    elif code is None:
+        print(f"\n[!]  Couldn't reach ElevenLabs ({detail}). If you're online this")
+        print("     may be a brief outage; the app falls back to the neural voice.")
+    else:
+        print(f"\n[!]  Render failed (HTTP {code}). Detail: {detail}")
     print("=" * 58)
 
 
