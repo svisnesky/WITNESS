@@ -34,15 +34,27 @@ ELEVEN_FALLBACK_VOICE = "pNInz6obpgDQGcFmaJgB"  # "Adam" — premade, always
                                                 # must be added per-account)
 
 
+def _clean_key(raw: str) -> str:
+    """Sanitize a pasted API key: drop a UTF-8 BOM, surrounding quotes, and
+    any stray whitespace/newlines. Notepad loves to add a BOM when it saves
+    as UTF-8, and an invisible BOM makes ElevenLabs reject the key (401)."""
+    if not raw:
+        return ""
+    k = raw.lstrip("﻿").strip()          # BOM + outer whitespace
+    k = k.strip('"').strip("'").strip()       # accidental quotes
+    k = k.splitlines()[0].strip() if k else k  # first line only
+    return k
+
+
 def _eleven_key() -> str:
-    k = os.environ.get("ELEVENLABS_API_KEY", "").strip()
+    k = _clean_key(os.environ.get("ELEVENLABS_API_KEY", ""))
     if k:
         return k
     try:
         p = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                          "elevenlabs_key.txt")
-        with open(p, encoding="utf-8") as f:
-            return f.read().strip()
+        with open(p, encoding="utf-8-sig") as f:   # -sig strips a BOM too
+            return _clean_key(f.read())
     except OSError:
         return ""
 

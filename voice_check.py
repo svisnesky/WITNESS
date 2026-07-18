@@ -42,17 +42,40 @@ def _cfg(*keys, default=""):
 
 def _find_key():
     """Returns (key, source) — source is 'env', 'file', or ''."""
-    k = os.environ.get("ELEVENLABS_API_KEY", "").strip()
+    from announcer import _clean_key
+    k = _clean_key(os.environ.get("ELEVENLABS_API_KEY", ""))
     if k:
         return k, "env"
     try:
-        with open(KEY_FILE, encoding="utf-8") as f:
-            k = f.read().strip()
+        with open(KEY_FILE, encoding="utf-8-sig") as f:
+            k = _clean_key(f.read())
         if k:
             return k, "file"
         return "", "empty-file"
     except OSError:
         return "", ""
+
+
+def _mask(k):
+    """Safe preview: length + a few chars, never the whole key."""
+    if len(k) <= 10:
+        return f"{len(k)} chars"
+    return f"{len(k)} chars, looks like: {k[:5]}...{k[-4:]}"
+
+
+def _sanity(k, voice_id):
+    """Cheap heuristics that catch the usual paste mistakes before we even
+    hit the API."""
+    notes = []
+    if k == voice_id:
+        notes.append("This is your VOICE ID, not the API key. The key starts "
+                     "with 'sk_' and comes from Profile -> API Keys.")
+    if " " in k:
+        notes.append("There's a SPACE inside the key — recopy it cleanly.")
+    if not k.startswith("sk_") and len(k) != 32:
+        notes.append("Doesn't look like an ElevenLabs key (those start with "
+                     "'sk_'). Double-check you copied the API key.")
+    return notes
 
 
 def _api(url, key):
@@ -95,6 +118,9 @@ def main():
         return
 
     print(f"\n[OK] ElevenLabs key found (from {source}).")
+    print(f"     Read {_mask(key)}")
+    for note in _sanity(key, want_voice):
+        print(f"  [!] {note}")
 
     # validate the key
     try:
@@ -106,8 +132,11 @@ def main():
     except Exception as e:
         code = getattr(e, "code", None)
         if code == 401:
-            print("[X]  Key was REJECTED (401). It's wrong, revoked, or has a")
-            print("     stray space/newline. Recopy it into elevenlabs_key.txt.")
+            print("[X]  Key was REJECTED (401) — invalid, revoked, or the wrong")
+            print("     string. See the note(s) above. Most often it's a stray")
+            print("     character from Notepad or the voice ID pasted by mistake.")
+            print("     Recopy the key (Profile -> API Keys, starts 'sk_') into")
+            print("     elevenlabs_key.txt and run this again.")
         else:
             print(f"[!]  Couldn't reach ElevenLabs ({type(e).__name__}). If you're")
             print("     online this may be a temporary outage; the app falls back")
