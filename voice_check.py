@@ -183,6 +183,17 @@ def main():
         print("     Fix: elevenlabs.io -> Profile -> API Keys -> create a NEW key")
         print("     with Text to Speech enabled (or 'has access to all'), paste")
         print("     it into elevenlabs_key.txt, rerun this.")
+    elif code == 402:
+        print("\n[!]  Your key WORKS — but voice id %s is a LIBRARY" % want_voice)
+        print("     voice, and ElevenLabs blocks free accounts from using")
+        print("     library voices via the API (that's the 402).")
+        print("     Two ways forward:")
+        print("       - Upgrade to any paid plan (Starter ~$5/mo) to unlock it, OR")
+        print("       - Use a free PREMADE voice: set elevenlabs_voice_id in")
+        print("         config.yaml to a premade voice id. I can set a good")
+        print("         ominous one for you.")
+        print(f"     Meanwhile the app auto-falls back to a premade voice, so")
+        print("     you'll still get an ElevenLabs voice (not Christopher).")
     elif code == 429:
         print("\n[!]  Rate-limited or out of credits (429). The key is fine —")
         print("     your ElevenLabs quota is used up. Reels/call-outs use the")
