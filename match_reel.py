@@ -18,7 +18,19 @@ from __future__ import annotations
 import os
 import subprocess
 
-from matchcard import _font, _text_w, BG, LINE, TEXT, MUTED, ACCENT
+from matchcard import (_font, _text_w, _gradient_text, BG, LINE, TEXT, MUTED,
+                       ACCENT, ACCENT_LIGHT)
+
+
+def _rgb(c):
+    """Accept an (r,g,b) tuple or a '#rrggbb' string -> (r,g,b) tuple."""
+    if isinstance(c, str) and c.startswith("#") and len(c) == 7:
+        return tuple(int(c[i:i + 2], 16) for i in (1, 3, 5))
+    return tuple(c)
+
+
+def _lighten(c, f=0.45):
+    return tuple(int(c[i] + (255 - c[i]) * f) for i in range(3))
 
 CARD_SECONDS = 2.8
 MUSIC_EXTS = (".mp3", ".wav", ".m4a", ".aac", ".ogg", ".flac")
@@ -45,9 +57,12 @@ def _build_card(out_png: str, title: str, kills, kills_label: str,
         return False
     try:
         th = theme or {}
-        bg, accent = th.get("bg", BG), th.get("accent", ACCENT)
-        text, muted = th.get("text", TEXT), th.get("muted", MUTED)
-        line_c = th.get("line", LINE)
+        bg, accent = _rgb(th.get("bg", BG)), _rgb(th.get("accent", ACCENT))
+        text, muted = _rgb(th.get("text", TEXT)), _rgb(th.get("muted", MUTED))
+        line_c = _rgb(th.get("line", LINE))
+        # gradient top colour: a themed accent gets a lightened variant; the
+        # default WITNESS accent uses the exact dashboard accent-light.
+        accent_light = _lighten(accent) if th.get("accent") else ACCENT_LIGHT
         brand = str(th.get("display_name") or "WITNESS").upper()
 
         W, H = 1920, 1080
@@ -76,7 +91,7 @@ def _build_card(out_png: str, title: str, kills, kills_label: str,
 
         kf = _font("black", 380)
         ks = str(kills)
-        d.text((pad - 10, 360), ks, font=kf, fill=accent)
+        _gradient_text(img, (pad - 10, 360), ks, kf, accent_light, accent)
         d.text((pad + _text_w(d, ks, kf) + 40, 640), kills_label,
                font=_font("bold", 64), fill=text)
 

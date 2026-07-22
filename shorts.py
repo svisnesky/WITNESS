@@ -50,8 +50,8 @@ def _parse_name(fname: str):
     return int(m.group(1)), m.group(2).replace("+", " + ").replace("_", " ").upper()
 
 
-def _ff_color(hex_color: str, default: str = "0x9c58da") -> str:
-    """'#9c58da' -> ffmpeg's '0x9c58da'; anything malformed -> default."""
+def _ff_color(hex_color: str, default: str = "0x9184d9") -> str:
+    """'#9184d9' -> ffmpeg's '0x9184d9'; anything malformed -> default."""
     h = str(hex_color or "").strip().lstrip("#")
     return f"0x{h}" if re.fullmatch(r"[0-9a-fA-F]{6}", h) else default
 
@@ -71,7 +71,7 @@ def _drawtext(tag: str, sub: str, font: str, accent: str) -> str:
     chain = ""
     if tag:
         chain += (f",drawtext=fontfile='{fontfile}':text='{esc(tag)}'"
-                  f":fontsize=46:fontcolor=0x0b0f12:box=1:boxcolor={accent}"
+                  f":fontsize=46:fontcolor=0x12121a:box=1:boxcolor={accent}"
                   f":boxborderw=16:x=(w-text_w)/2:y=1336")
     if sub:
         chain += (f",drawtext=fontfile='{fontfile}':text='{esc(sub)}'"
@@ -81,7 +81,7 @@ def _drawtext(tag: str, sub: str, font: str, accent: str) -> str:
 
 
 def build_short(src: str, dest: str, ffmpeg: str, tag: str = "",
-                sub: str = "", accent: str = "0x9c58da") -> bool:
+                sub: str = "", accent: str = "0x9184d9") -> bool:
     """Render one vertical short. Returns True on success."""
     font = _find_font()
     overlay_chain = "[bgb][fgs]overlay=(W-w)/2:(H-h)/2"
