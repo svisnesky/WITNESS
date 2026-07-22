@@ -726,10 +726,11 @@ ARCHIVE_PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
   .top { display:flex; align-items:center; gap:13px; margin-bottom:22px; }
   .top img { height:32px; }
   .top .wm { font-weight:800; letter-spacing:.16em; font-size:15px; }
-  .nav { margin-left:auto; display:flex; gap:14px; }
-  .nav a { font:500 12px var(--ui); color:var(--dim); text-decoration:none; }
-  .nav a.on { font-weight:600; color:var(--accent-light);
-    border-bottom:2px solid var(--accent); padding-bottom:3px; }
+  .nav { margin-left:14px; display:flex; gap:4px; flex-wrap:wrap; }
+  .nav a { font:500 12.5px var(--ui); color:var(--muted); padding:6px 10px;
+    border-radius:7px; text-decoration:none; }
+  .nav a:hover { color:var(--sec); }
+  .nav a.on { color:var(--text); background:var(--surface); }
   .kick { font:600 11px var(--mono); letter-spacing:.22em; color:var(--muted); text-transform:uppercase; }
   h2 { font-weight:900; font-size:34px; letter-spacing:-.02em; margin:4px 0 3px; }
   .sub { color:var(--muted); font:400 13px var(--ui); margin:0 0 22px; max-width:60ch; line-height:1.5; }
@@ -783,10 +784,11 @@ STATS_PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
   .top { display:flex; align-items:center; gap:13px; margin-bottom:22px; }
   .top img { height:32px; }
   .top .wm { font-weight:800; letter-spacing:.16em; font-size:15px; }
-  .nav { margin-left:auto; display:flex; gap:14px; }
-  .nav a { font:500 12px var(--ui); color:var(--dim); text-decoration:none; }
-  .nav a.on { font-weight:600; color:var(--accent-light);
-    border-bottom:2px solid var(--accent); padding-bottom:3px; }
+  .nav { margin-left:14px; display:flex; gap:4px; flex-wrap:wrap; }
+  .nav a { font:500 12.5px var(--ui); color:var(--muted); padding:6px 10px;
+    border-radius:7px; text-decoration:none; }
+  .nav a:hover { color:var(--sec); }
+  .nav a.on { color:var(--text); background:var(--surface); }
   .kick { font:600 11px var(--mono); letter-spacing:.22em; color:var(--muted); text-transform:uppercase; }
   h2 { font-weight:900; font-size:34px; letter-spacing:-.02em; margin:4px 0 3px; }
   .sub { color:var(--muted); font:400 13px var(--ui); margin:0 0 22px; }
