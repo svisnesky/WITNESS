@@ -717,10 +717,11 @@ ARCHIVE_PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
     --ground:radial-gradient(120% 80% at 82% -10%,#20203a 0%,#14141f 46%,#0e0e16 100%);
     --ui:'Inter',system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
     --mono:'JetBrains Mono',ui-monospace,"SF Mono",Menlo,Consolas,monospace; }
+  html { scrollbar-gutter: stable; }
   * { box-sizing:border-box; }
   body { margin:0; background:var(--bg); color:var(--text); font-family:var(--ui);
     -webkit-font-smoothing:antialiased; }
-  .wrap { min-height:100vh; background:var(--ground); max-width:820px; margin:0 auto;
+  .wrap { min-height:100vh; background:var(--ground); max-width:1120px; margin:0 auto;
     padding:calc(24px + env(safe-area-inset-top)) 30px calc(40px + env(safe-area-inset-bottom)); }
   .top { display:flex; align-items:center; gap:13px; margin-bottom:22px; }
   .top img { height:32px; }
@@ -773,10 +774,11 @@ STATS_PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
     --ground:radial-gradient(120% 80% at 82% -10%,#20203a 0%,#14141f 46%,#0e0e16 100%);
     --ui:'Inter',system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
     --mono:'JetBrains Mono',ui-monospace,"SF Mono",Menlo,Consolas,monospace; }
+  html { scrollbar-gutter: stable; }
   * { box-sizing:border-box; }
   body { margin:0; background:var(--bg); color:var(--text); font-family:var(--ui);
     -webkit-font-smoothing:antialiased; }
-  .wrap { min-height:100vh; background:var(--ground); max-width:1000px; margin:0 auto;
+  .wrap { min-height:100vh; background:var(--ground); max-width:1120px; margin:0 auto;
     padding:calc(24px + env(safe-area-inset-top)) 30px calc(40px + env(safe-area-inset-bottom)); }
   .top { display:flex; align-items:center; gap:13px; margin-bottom:22px; }
   .top img { height:32px; }
@@ -855,6 +857,7 @@ PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
     --ui:'Inter',system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
     --mono:'JetBrains Mono',ui-monospace,"SF Mono",Menlo,Consolas,monospace;
   }
+  html { scrollbar-gutter: stable; }
   * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
   html, body { min-height:100%; margin:0; }
   body { background:var(--bg); color:var(--text); user-select:none;
