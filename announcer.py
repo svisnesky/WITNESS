@@ -332,88 +332,91 @@ def _cap(s: str) -> str:
 
 
 def _potg_phrase(tag: str) -> str:
-    """A clean spoken descriptor for the play-of-the-game clip, in the WITNESS
+    """A spoken descriptor for the play-of-the-game clip, in the bloodsport-MC
     voice. tag is the clip's combo tag (e.g. 'down+finisher')."""
     import random
     t = (tag or "").lower()
     if "precision" in t:
         return random.choice([
             "one straight through the skull",
-            "the sharpest of them a precision kill",
-            "one clean, precise, no wasted motion"])
+            "a precision shot you'll be replaying all week",
+            "one clean between the eyes, lights out"])
     if "finisher" in t:
         return random.choice([
-            "the last one finished where they lay",
-            "one put down and finished, no mercy"])
+            "the last one finished right where he knelt",
+            "one put down and finished, no mercy in the arena"])
     if "elim" in t or "kill" in t:
         return random.choice([
-            "one an outright elimination",
-            "one wiped from the record entirely"])
+            "one wiped clean off the board",
+            "one erased from the count entirely"])
     return random.choice([
-        "one cleaner than the rest",
-        "the best of them worth watching twice"])
+        "the pick of them worth the price of admission",
+        "the best of the bunch, one for the replays"])
 
 
 def stat_line(kills: int, stats: dict, potg_tag: str = "",
               player: str = "", runner: str = "") -> str:
-    """WITNESS-persona reel narration — the surveillance AI recounting what it
-    saw. Assembled from pools so no two matches sound the same. Kept to a few
-    short clauses; neural voices breathe at every period, so clauses (commas,
-    dashes) read more naturally than chains of tiny sentences."""
+    """Reel narration — the OMINOUS SPORTSCASTER: a bloodsport MC calling the
+    match with full broadcast showmanship and a menacing undertone. Assembled
+    from pools so no two matches sound alike; kept to a few clauses so neural
+    voices don't breathe it to pieces."""
     import random
 
-    who = player or "your runner"
-    if runner:
-        who = f"{who}, running {runner}"
+    subj = player or "your runner"          # plain name — for possessives
+    who = f"{subj}, running {runner}" if runner else subj
 
     if kills == 0:
         return random.choice([
-            f"No one fell this time — but {who} walked out, and I saw every step. The record stands.",
-            f"A quiet run. Nothing dropped, yet {who} made exfil. I was watching all of it.",
-            f"Not a single down this match. {_cap(who)} survived, and nothing escaped me.",
+            f"No bodies this round, folks — but {who} walked out of the arena breathing, "
+            f"and the house respects a survivor. Roll it back.",
+            f"A quiet night in the pit. Nothing fell, yet {who} made the exit — "
+            f"and the cameras caught every careful step.",
+            f"No kills on the board this time. {_cap(who)} survived the arena, "
+            f"and survival is its own kind of show.",
         ])
 
     k = _spoken_number(kills)
     ks = f"{k} {'runner' if kills == 1 else 'runners'}"
+    Ks = _cap(ks)
 
     openers = [
-        "I saw every second of it.",
-        "You were all being watched.",
-        "Nothing escapes the record.",
-        "I don't miss a thing.",
-        "Every frame, remembered.",
-        "It was all seen, all of it.",
-        "The lens never blinked.",
+        "Ladies and gentlemen, the footage doesn't lie.",
+        "Step right up and witness the carnage.",
+        "The arena's still warm from this one.",
+        "Roll the tape, folks, and mind the blood.",
+        "Here's what the cameras caught tonight.",
+        "The crowd went silent for a reason.",
+        "Another night, another body count.",
     ]
     if potg_tag:
         pot = _potg_phrase(potg_tag)
         reports = [
-            f"{ks.capitalize()} fell to {who} — {pot}.",
-            f"{_cap(who)} put {ks} into the dirt, {pot}.",
-            f"{ks.capitalize()} gone under {who}'s hands, {pot}.",
-            f"{ks.capitalize()} down, {pot}, and {who} never slowed.",
+            f"{ks.capitalize()} stepped into {subj}'s sights, and not one walked away — {pot}.",
+            f"{Ks} fell to {who}, and OH, {pot} — savor it, they didn't get the chance.",
+            f"{_cap(who)} put {ks} in the dirt, {pot}, and the crowd lost it.",
+            f"Count 'em: {ks} down for {who}, the pick of them {pot}.",
         ]
     else:
         dmg = stats.get("runner_damage")
         if dmg:
             reports = [
-                f"{ks.capitalize()} fell to {who}, {dmg} damage carved out and logged.",
-                f"{_cap(who)} put {ks} down and dealt {dmg} damage — I counted every point.",
+                f"{Ks} fell to {who}, {dmg} damage on the tally — and the tally never lies.",
+                f"{_cap(who)} racked up {ks} and {dmg} damage tonight. The house always counts.",
             ]
         else:
             reports = [
-                f"{ks.capitalize()} fell to {who}.",
-                f"{_cap(who)} put {ks} into the dirt.",
-                f"{ks.capitalize()} gone, and {who} barely slowed.",
+                f"{ks.capitalize()} stepped into {subj}'s sights, and not one walked away.",
+                f"{_cap(who)} put {ks} in the dirt tonight.",
+                f"Count 'em: {ks} down for {who}.",
             ]
     closers = [
-        "Roll it back — I don't miss.",
-        "The footage remembers.",
-        "Nothing gets past me.",
-        "It's all on record now.",
-        "Watch it again. I already have.",
-        "Filed, and never forgotten.",
-        "I see everything.",
+        "The tape remembers — it always does.",
+        "Replay it. They can't.",
+        "Another one for the record books, and the record never forgets.",
+        "That's your highlight. Try not to blink.",
+        "The house always wins. Roll it back.",
+        "Savor it, folks. They didn't get to.",
+        "See you in the next one — if you're lucky.",
     ]
     return " ".join([random.choice(openers), random.choice(reports),
                      random.choice(closers)])
