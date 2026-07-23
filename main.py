@@ -1299,6 +1299,22 @@ def _maybe_capture_exfil(cfg, engine, lines, s, now):
                                   f" ({p.get('inventory_value', '?')} loot)"
                                   for p in squad)
                 print(f"  [squad] logged {len(squad)} player(s): {names}")
+            # Crown the match's top looter with a LOOT GOBLIN decal on a
+            # decorated copy of the exfil screenshot.
+            if cfg.get("loot_goblin_decal", True) and squad and save_dir:
+                try:
+                    import glob
+                    import loot_goblin
+                    shots = [p for p in glob.glob(os.path.join(save_dir, "exfil_*.png"))
+                             if "_lootgoblin" not in p]
+                    if shots:
+                        out = loot_goblin.decorate(max(shots, key=os.path.getmtime), squad)
+                        if out:
+                            goblin = max(squad, key=lambda p: p.get("inventory_value") or 0)
+                            print(f"  [loot goblin] crowned {goblin.get('name', '?')} "
+                                  f"-> {os.path.basename(out)}")
+                except Exception as e:
+                    print(f"  [loot goblin] error: {e}")
         s["match_tags"] = []
         s["runner_checked"] = False       # re-detect next match
         s["last_runner"] = s.get("current_runner", "")
@@ -1649,6 +1665,36 @@ def _end_session(cfg, tags, start_monotonic, start_wall, dry_run, obs=None,
                     print(f"  [report] voice failed: {e}")
         except Exception as e:
             print(f"(witness report error: {e})")
+
+    # Play of the Night — the single best clip across the WHOLE session, cut
+    # into its own reel. Scoring is the same pick as per-match POTG (most kills,
+    # ties to the flashier tag, then latest), run over every session clip.
+    if cfg.get("play_of_the_night", True) and session_dir:
+        try:
+            import match_reel
+            import montage
+            base = os.path.dirname(os.path.abspath(__file__))
+            clips = _session_clips_from_dir(session_dir)
+            if clips:
+                best = (match_reel.pick_potg(clips)
+                        or max(clips, key=lambda c: c.get("kills", 1)))
+                ff = montage.find_ffmpeg(base, cfg)
+                out = os.path.join(session_dir, "reels", "play_of_the_night.mp4")
+                tracks = (match_reel.list_music(os.path.join(base, "music"))
+                          if cfg.get("reel_music", True) else [])
+                tagtxt = str(best.get("tag", "")).replace("+", " + ").upper()
+                sub = [f"BEST OF {len(clips)} CLIP{'S' if len(clips) != 1 else ''}"
+                       + (f"  ·  {tagtxt}" if tagtxt else ""),
+                       time.strftime("%Y-%m-%d")]
+                if match_reel.build_match_reel(
+                        [best], out, ff, "PLAY OF THE NIGHT",
+                        best.get("kills", 1), sub,
+                        os.path.join(base, "witness_wordmark.png"),
+                        music_volume=cfg.get("reel_music_volume", 0.08),
+                        music_tracks=tracks, theme=cfg.get("theme")):
+                    print(f"Play of the Night -> {out}")
+        except Exception as e:
+            print(f"(play of the night error: {e})")
 
     # Vertical Shorts render of each clip (needs ffmpeg + organized clips).
     if cfg.get("make_shorts", True) and session_dir:

@@ -107,6 +107,10 @@ heat_streaks: true          # killstreak flair: HOT STREAK/RAMPAGE/MENACE/APEX
 heat_overlays: true         # show the heat toasts on screen (respects show_overlays)
 heat_callouts: true         # voice the heat call-outs (respects announcer_medals)
 heat_precision_streak: 3    # consecutive precision kills -> SHARPSHOOTER
+play_of_the_night: true     # at session end, cut the single best clip of the
+                            # whole night into its own PLAY OF THE NIGHT reel
+loot_goblin_decal: true     # stamp a LOOT GOBLIN decal over the match's top
+                            # looter on a decorated copy of the exfil screenshot
 witness_report: true        # end-of-night WITNESS Report dossier (written case
                             # file saved to the session folder + printed)
 witness_report_voice: true  # also render a spoken dossier (uses the announcer
