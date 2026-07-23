@@ -22,6 +22,17 @@ from matchcard import (_font, _text_w, _gradient_text, BG, LINE, TEXT, MUTED,
                        ACCENT, ACCENT_LIGHT)
 
 
+def _render_flags():
+    """No console window AND below-normal priority so background ffmpeg work
+    yields CPU to the game instead of competing with it (in-match frame drops)."""
+    import subprocess
+    import sys
+    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    if sys.platform == "win32":
+        flags |= 0x00004000  # BELOW_NORMAL_PRIORITY_CLASS
+    return flags
+
+
 def _rgb(c):
     """Accept an (r,g,b) tuple or a '#rrggbb' string -> (r,g,b) tuple."""
     if isinstance(c, str) and c.startswith("#") and len(c) == 7:
@@ -41,7 +52,7 @@ TAG_PRIORITY = ("finisher", "precision", "down", "kill", "assist", "manual")
 
 def _run(cmd) -> subprocess.CompletedProcess:
     return subprocess.run(cmd, capture_output=True, text=True,
-                          creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+                          creationflags=_render_flags())
 
 
 def _build_card(out_png: str, title: str, kills, kills_label: str,

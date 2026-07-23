@@ -12,6 +12,17 @@ import subprocess
 VIDEO_EXTS = (".mkv", ".mp4", ".mov", ".flv", ".ts")
 
 
+def _render_flags():
+    """No console window AND below-normal priority so background ffmpeg work
+    yields CPU to the game instead of competing with it (in-match frame drops)."""
+    import subprocess
+    import sys
+    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    if sys.platform == "win32":
+        flags |= 0x00004000  # BELOW_NORMAL_PRIORITY_CLASS
+    return flags
+
+
 def find_ffmpeg(base_dir, cfg):
     p = (cfg.get("ffmpeg_path") or "").strip()
     if p and os.path.exists(p):
@@ -48,7 +59,7 @@ def build_montage(session_dir, ffmpeg):
            "-i", list_path, "-c", "copy", out]
     try:
         r = subprocess.run(cmd, cwd=session_dir, capture_output=True, text=True,
-                           creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+                           creationflags=_render_flags())
         if r.returncode == 0 and os.path.exists(out):
             print("  [montage] highlight reel -> %s (%d clips)" % (out, len(clips)))
             try:

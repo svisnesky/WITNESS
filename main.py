@@ -399,7 +399,7 @@ def show_overlay(cfg: dict) -> None:
 
 
 def show_text_overlay(cfg, text, size=60, position="custom:0.5,0.42",
-                      color="#9c58da", duration_ms=1600, rise=True):
+                      color="#9184d9", duration_ms=1600, rise=True):
     """Flash click-through text over the game (DOUBLE KILL, CLIP SAVED...).
     Same animation language as the skull; never blocks the capture loop."""
     if not cfg.get("show_overlays", True):
@@ -514,6 +514,18 @@ def run_test_image(cfg: dict, image_path: str):
 
 
 # --- live loop ---------------------------------------------------------------
+
+def _render_flags():
+    """Creation flags for background ffmpeg work: no console window AND
+    below-normal priority so encodes/remuxes yield CPU to the game rather than
+    competing with it mid-match."""
+    import subprocess
+    import sys
+    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    if sys.platform == "win32":
+        flags |= 0x00004000  # BELOW_NORMAL_PRIORITY_CLASS
+    return flags
+
 
 def _tune_performance(cfg):
     """Keep OCR from starving the game of CPU (the usual cause of frame drops):
@@ -724,7 +736,7 @@ def _register_replay_async(s, clip_path, tag, count):
             r = subprocess.run(
                 [ff, "-y", "-i", clip_path, "-c", "copy", "-movflags", "+faststart", mp4],
                 capture_output=True, text=True,
-                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+                creationflags=_render_flags())
             if r.returncode == 0 and os.path.exists(mp4):
                 s["web"].add_replay(tag.replace("+", " + ").upper(), mp4)
                 print(f"  [replay] kill #{count} ready on the iPad")

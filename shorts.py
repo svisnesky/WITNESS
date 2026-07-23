@@ -23,6 +23,17 @@ _WIN_FONTS = (
 )
 
 
+def _render_flags():
+    """No console window AND below-normal priority so background ffmpeg work
+    yields CPU to the game instead of competing with it (in-match frame drops)."""
+    import subprocess
+    import sys
+    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    if sys.platform == "win32":
+        flags |= 0x00004000  # BELOW_NORMAL_PRIORITY_CLASS
+    return flags
+
+
 def _find_font() -> str:
     for f in _WIN_FONTS:
         if os.path.exists(f):
@@ -36,7 +47,7 @@ def _has_drawtext(ffmpeg: str) -> bool:
     try:
         r = subprocess.run([ffmpeg, "-hide_banner", "-filters"],
                            capture_output=True, text=True,
-                           creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+                           creationflags=_render_flags())
         return " drawtext " in r.stdout
     except Exception:
         return False
@@ -100,7 +111,7 @@ def build_short(src: str, dest: str, ffmpeg: str, tag: str = "",
            "-c:a", "aac", "-b:a", "160k", "-movflags", "+faststart",
            dest]
     r = subprocess.run(cmd, capture_output=True, text=True,
-                       creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+                       creationflags=_render_flags())
     if r.returncode == 0 and os.path.exists(dest):
         return True
     tail = (r.stderr.strip().splitlines() or ["(no output)"])[-1]
