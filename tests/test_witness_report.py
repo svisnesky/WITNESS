@@ -30,8 +30,9 @@ def test_report_has_written_and_spoken():
 
 def test_quiet_night_is_handled():
     r = wr.build_report(_session(0, down=0), [], [], player="Viz")
-    assert "no confirmed kills" in "\n".join(r["lines"]).lower()
-    assert r["speech"]  # still produces a line
+    text = "\n".join(r["lines"])
+    assert "CONFIRMED KILLS" in text and "0" in text
+    assert "no kills" in r["speech"].lower()   # quiet-night phrasing in the spoken line
 
 
 def test_no_boards_no_crash():

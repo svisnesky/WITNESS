@@ -993,7 +993,7 @@ def _handle_kill(cfg, ev, s, on_count=None):
 
     # Heat / killstreak: a real kill feeds the streak; fire any tier crossings
     # (HOT STREAK, RAMPAGE, MENACE, APEX), FIRST BLOOD, SHARPSHOOTER.
-    if counts_as_kill and s.get("heat") is not None:
+    if counts_as_kill and s.get("heat") is not None and cfg.get("heat_streaks", True):
         try:
             for hev in s["heat"].on_kill(tag, clutch=bool(s.get("clutch"))):
                 print(f"  [heat] {hev.label} (streak {hev.streak})")

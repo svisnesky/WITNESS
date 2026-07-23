@@ -37,6 +37,10 @@ SETTINGS = {
     "track_names": (True, bool),            # read gamertags off the kill feed
     "auto_sweat": (True, bool),             # last-one-standing = flair mutes
     "splash_sound": (True, bool),           # boot-splash boom (Windows)
+    "heat_streaks": (True, bool),           # killstreak flair (master)
+    "heat_overlays": (True, bool),          # streak toasts on screen
+    "heat_callouts": (True, bool),          # streak call-outs (voice)
+    "witness_report": (True, bool),         # end-of-night WITNESS Report dossier
     "youtube_upload_session_reel": (False, bool),  # auto-upload session reel
     "youtube_upload_match_reels": (False, bool),   # auto-upload each match reel
     "youtube_upload_shorts": (False, bool),        # auto-upload each Short
@@ -54,7 +58,8 @@ MODES = [
              "announcer_medals": False, "team_wipe": False,
              "play_sound": False, "make_match_reels": False,
              "make_shorts": False, "make_montage": False, "make_card": False,
-             "track_names": False, "reel_announcer": False}},
+             "track_names": False, "reel_announcer": False,
+             "heat_overlays": False, "heat_callouts": False}},
     {"key": "standard", "label": "STANDARD",
      "desc": "The shipped defaults: clips, reels, stats, name tracking, "
              "quiet visual chips. No voices.",
@@ -64,7 +69,8 @@ MODES = [
              "play_sound": False, "make_match_reels": True,
              "reel_music": True, "reel_announcer": True,
              "make_shorts": False, "make_montage": False, "make_card": True,
-             "capture_exfil_stats": True, "track_names": True}},
+             "capture_exfil_stats": True, "track_names": True,
+             "heat_overlays": True, "heat_callouts": False}},
     {"key": "showtime", "label": "SHOWTIME",
      "desc": "The full broadcast: medal voices, banners, team wipes, "
              "announced reels. Best with friends watching the dashboard.",
@@ -74,7 +80,8 @@ MODES = [
              "play_sound": False, "make_match_reels": True,
              "reel_music": True, "reel_announcer": True,
              "make_shorts": False, "make_montage": False, "make_card": True,
-             "capture_exfil_stats": True, "track_names": True}},
+             "capture_exfil_stats": True, "track_names": True,
+             "heat_overlays": True, "heat_callouts": True}},
     {"key": "creator", "label": "CREATOR",
      "desc": "Showtime plus every render: vertical Shorts, montage, match "
              "cards. Maximum footage out the other end.",
@@ -85,7 +92,8 @@ MODES = [
              "reel_music": True, "reel_announcer": True,
              "make_shorts": True, "shorts_labels": True,
              "make_montage": True, "make_card": True,
-             "capture_exfil_stats": True, "track_names": True}},
+             "capture_exfil_stats": True, "track_names": True,
+             "heat_overlays": True, "heat_callouts": True}},
 ]
 
 
@@ -146,6 +154,10 @@ SETTINGS_META = [
     ("track_names", "Name tracking (kill feed)"),
     ("auto_sweat", "Auto-sweat (clutch focus)"),
     ("splash_sound", "Boot splash sound"),
+    ("heat_streaks", "Killstreak flair (master)"),
+    ("heat_overlays", "Streak toasts on screen"),
+    ("heat_callouts", "Streak call-outs (voice)"),
+    ("witness_report", "End-of-night WITNESS Report"),
     ("youtube_upload_session_reel", "YouTube: session reel"),
     ("youtube_upload_match_reels", "YouTube: match reels"),
     ("youtube_upload_shorts", "YouTube: Shorts (quota-heavy)"),
