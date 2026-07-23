@@ -366,13 +366,30 @@ def stat_line(kills: int, stats: dict, potg_tag: str = "",
     who = f"{subj}, running {runner}" if runner else subj
 
     if kills == 0:
+        result = (stats or {}).get("outcome", "")
+        if result == "survived":
+            return random.choice([
+                f"No bodies this round, folks — but {who} walked out of the arena breathing, "
+                f"and the house respects a survivor. Roll it back.",
+                f"A quiet night in the pit. Nothing fell, yet {who} made the exit — "
+                f"and the cameras caught every careful step.",
+                f"No kills on the board this time. {_cap(who)} survived the arena, "
+                f"and survival is its own kind of show.",
+            ])
+        if result == "died":
+            return random.choice([
+                f"No kills, and no way out — {who} went down in the arena tonight. "
+                f"The crowd saw it all, and so did the tape.",
+                f"The arena took this one. {_cap(who)} fell with an empty scoreboard — "
+                f"but the cameras never look away.",
+                f"A rough night in the pit — no bodies, and {who} didn't make it out. "
+                f"Roll it back anyway. The tape doesn't flinch.",
+            ])
+        # outcome unknown — don't claim survival OR death
         return random.choice([
-            f"No bodies this round, folks — but {who} walked out of the arena breathing, "
-            f"and the house respects a survivor. Roll it back.",
-            f"A quiet night in the pit. Nothing fell, yet {who} made the exit — "
-            f"and the cameras caught every careful step.",
-            f"No kills on the board this time. {_cap(who)} survived the arena, "
-            f"and survival is its own kind of show.",
+            f"No kills on the board this round for {who}. Here's how the match played out.",
+            f"A quiet one — nothing fell to {who} this time. Roll the tape and see for yourself.",
+            f"Empty scoreboard for {who} this match. The cameras caught it all the same.",
         ])
 
     k = _spoken_number(kills)

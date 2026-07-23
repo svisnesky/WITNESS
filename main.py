@@ -1208,6 +1208,12 @@ def _maybe_capture_exfil(cfg, engine, lines, s, now):
         except Exception:
             pass
         stats_d, squad = exfil_stats.capture_exfil_stats(cfg, engine, save_dir)
+        # Did we EXTRACT or die? Only claim survival when the screen actually
+        # says so — otherwise leave it unknown and the recap stays neutral,
+        # rather than narrating a death as a clean exfil.
+        stats_d = stats_d or {}
+        stats_d["outcome"] = exfil_stats.outcome(lines)
+        print(f"  [exfil] outcome: {stats_d['outcome'] or 'unknown'}")
         # Audit THIS match's detected kills vs the game's count, then reset the
         # per-match tally for the next match.
         match_tags = s.get("match_tags", [])

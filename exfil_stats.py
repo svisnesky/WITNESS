@@ -48,11 +48,36 @@ _DETECT_WORDS = ("runner damage", "crew revives", "inventory value", "exfiltrate
 
 
 def looks_like_exfil(lines) -> bool:
-    """True if the OCR'd detection-crop text looks like the exfil summary."""
+    """True if the OCR'd detection-crop text looks like the end-of-match summary
+    (shown whether you EXTRACTED or DIED — use outcome() to tell them apart)."""
     blob = " ".join(lines).lower()
     if len(blob) < 8:
         return False
     return any(fuzz.partial_ratio(w, blob) >= 85 for w in _DETECT_WORDS)
+
+
+# Words that positively confirm the match OUTCOME on the summary screen. The
+# stat words above appear on both the success and failure screens, so survival
+# must be confirmed separately — otherwise a 0-kill DEATH gets narrated as a
+# clean exfil. (Tune these to Marathon's exact wording.)
+_SURVIVE_WORDS = ("exfiltrated", "extraction secured", "extraction complete",
+                  "secured", "extracted", "you survived")
+_DIED_WORDS = ("eliminated", "killed in action", "mission failed", "you died",
+               "m i a", "mia", "runner lost", "extraction failed", "you were killed")
+
+
+def outcome(lines) -> str:
+    """'survived' | 'died' | '' (unknown) from the summary-screen text. Only
+    returns a verdict it can actually see — unknown stays unknown so the recap
+    never claims a survival it didn't confirm."""
+    blob = " ".join(lines).lower()
+    if not blob:
+        return ""
+    if any(fuzz.partial_ratio(w, blob) >= 88 for w in _SURVIVE_WORDS):
+        return "survived"
+    if any(fuzz.partial_ratio(w, blob) >= 88 for w in _DIED_WORDS):
+        return "died"
+    return ""
 
 
 def _label_text(line: str) -> str:
