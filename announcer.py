@@ -325,44 +325,95 @@ def _spoken_number(n: int) -> str:
     return words[n] if 0 <= n < len(words) else str(n)
 
 
+def _cap(s: str) -> str:
+    """Capitalize only the first character (keeps proper-noun casing,
+    unlike str.capitalize() which lowercases the rest)."""
+    return s[:1].upper() + s[1:] if s else s
+
+
+def _potg_phrase(tag: str) -> str:
+    """A clean spoken descriptor for the play-of-the-game clip, in the WITNESS
+    voice. tag is the clip's combo tag (e.g. 'down+finisher')."""
+    import random
+    t = (tag or "").lower()
+    if "precision" in t:
+        return random.choice([
+            "one straight through the skull",
+            "the sharpest of them a precision kill",
+            "one clean, precise, no wasted motion"])
+    if "finisher" in t:
+        return random.choice([
+            "the last one finished where they lay",
+            "one put down and finished, no mercy"])
+    if "elim" in t or "kill" in t:
+        return random.choice([
+            "one an outright elimination",
+            "one wiped from the record entirely"])
+    return random.choice([
+        "one cleaner than the rest",
+        "the best of them worth watching twice"])
+
+
 def stat_line(kills: int, stats: dict, potg_tag: str = "",
               player: str = "", runner: str = "") -> str:
-    """A short broadcast-style script, varied per match instead of a fixed
-    monotone template. Keeps to ~2 sentences so it lands over the intro."""
+    """WITNESS-persona reel narration — the surveillance AI recounting what it
+    saw. Assembled from pools so no two matches sound the same. Kept to a few
+    short clauses; neural voices breathe at every period, so clauses (commas,
+    dashes) read more naturally than chains of tiny sentences."""
     import random
 
-    k = _spoken_number(kills)
-    who = player or "our runner"
+    who = player or "your runner"
     if runner:
-        who = f"{who} on {runner}"
+        who = f"{who}, running {runner}"
 
-    # One flowing sentence + a short sting. Neural voices take a full breath
-    # at every period, so chains of short sentences sound choppy — clauses
-    # keep the delivery natural.
     if kills == 0:
         return random.choice([
-            f"Quiet one on the kill feed, but {who} made it out alive. Roll the tape.",
-            f"No kills this run, but an exfil is an exfil. Here's how it went down.",
+            f"No one fell this time — but {who} walked out, and I saw every step. The record stands.",
+            f"A quiet run. Nothing dropped, yet {who} made exfil. I was watching all of it.",
+            f"Not a single down this match. {_cap(who)} survived, and nothing escaped me.",
         ])
 
-    ks = f"{k} kill{'s' if kills != 1 else ''}"
+    k = _spoken_number(kills)
+    ks = f"{k} {'runner' if kills == 1 else 'runners'}"
+
+    openers = [
+        "I saw every second of it.",
+        "You were all being watched.",
+        "Nothing escapes the record.",
+        "I don't miss a thing.",
+        "Every frame, remembered.",
+        "It was all seen, all of it.",
+        "The lens never blinked.",
+    ]
     if potg_tag:
-        tag = potg_tag.replace("+", " and ").replace("_", " ").lower()
-        bodies = [
-            f"Match highlights, where {who} drops {ks}, capped by a {tag} for play of the game.",
-            f"{ks.capitalize()} for {who} this run, and the big one was a {tag}.",
-            f"{who.capitalize()} puts {ks} on the board, including a {tag} you'll want to see twice.",
-        ]
-    elif stats.get("runner_damage"):
-        bodies = [
-            f"Match highlights, where {who} drops {ks} and {stats['runner_damage']} runner damage.",
-            f"{ks.capitalize()} and {stats['runner_damage']} damage for {who} this run.",
+        pot = _potg_phrase(potg_tag)
+        reports = [
+            f"{ks.capitalize()} fell to {who} — {pot}.",
+            f"{_cap(who)} put {ks} into the dirt, {pot}.",
+            f"{ks.capitalize()} gone under {who}'s hands, {pot}.",
+            f"{ks.capitalize()} down, {pot}, and {who} never slowed.",
         ]
     else:
-        bodies = [
-            f"Match highlights, where {who} drops {ks}.",
-            f"{ks.capitalize()} for {who} this run.",
-        ]
-
-    sting = random.choice(["Roll the tape.", "Watch this.", "To the footage."])
-    return f"{random.choice(bodies)} {sting}"
+        dmg = stats.get("runner_damage")
+        if dmg:
+            reports = [
+                f"{ks.capitalize()} fell to {who}, {dmg} damage carved out and logged.",
+                f"{_cap(who)} put {ks} down and dealt {dmg} damage — I counted every point.",
+            ]
+        else:
+            reports = [
+                f"{ks.capitalize()} fell to {who}.",
+                f"{_cap(who)} put {ks} into the dirt.",
+                f"{ks.capitalize()} gone, and {who} barely slowed.",
+            ]
+    closers = [
+        "Roll it back — I don't miss.",
+        "The footage remembers.",
+        "Nothing gets past me.",
+        "It's all on record now.",
+        "Watch it again. I already have.",
+        "Filed, and never forgotten.",
+        "I see everything.",
+    ]
+    return " ".join([random.choice(openers), random.choice(reports),
+                     random.choice(closers)])
