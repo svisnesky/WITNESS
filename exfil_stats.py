@@ -56,28 +56,43 @@ def looks_like_exfil(lines) -> bool:
     return any(fuzz.partial_ratio(w, blob) >= 85 for w in _DETECT_WORDS)
 
 
-# Words that positively confirm the match OUTCOME on the summary screen. The
-# stat words above appear on both the success and failure screens, so survival
-# must be confirmed separately — otherwise a 0-kill DEATH gets narrated as a
-# clean exfil. (Tune these to Marathon's exact wording.)
-_SURVIVE_WORDS = ("exfiltrated", "extraction secured", "extraction complete",
-                  "secured", "extracted", "you survived")
-_DIED_WORDS = ("eliminated", "killed in action", "mission failed", "you died",
-               "m i a", "mia", "runner lost", "extraction failed", "you were killed")
+# The panel HEADER is the only reliable outcome signal: green "EXFILTRATED" if
+# you extracted, red "ELIMINATED" if you died. It sits just above the stat rows.
+HEADER_FRAC = {"x": 0.32, "y": 0.37, "w": 0.36, "h": 0.12}
+
+
+def _letters(s: str) -> str:
+    return re.sub(r"[^a-z]", "", s.lower())
 
 
 def outcome(lines) -> str:
-    """'survived' | 'died' | '' (unknown) from the summary-screen text. Only
-    returns a verdict it can actually see — unknown stays unknown so the recap
-    never claims a survival it didn't confirm."""
-    blob = " ".join(lines).lower()
-    if not blob:
-        return ""
-    if any(fuzz.partial_ratio(w, blob) >= 88 for w in _SURVIVE_WORDS):
-        return "survived"
-    if any(fuzz.partial_ratio(w, blob) >= 88 for w in _DIED_WORDS):
-        return "died"
+    """'survived' | 'died' | '' from OCR'd header lines. Matches WHOLE lines,
+    not substrings — critical, because both screens carry 'Combatant
+    Eliminations' / 'Runner Eliminations' rows that would otherwise be mistaken
+    for the 'ELIMINATED' header and narrate every exfil as a death."""
+    for line in lines:
+        if fuzz.ratio("exfiltrated", _letters(line)) >= 82:
+            return "survived"
+    for line in lines:
+        if fuzz.ratio("eliminated", _letters(line)) >= 82:
+            return "died"
     return ""
+
+
+def read_outcome(cfg, engine) -> str:
+    """Grab the screen and read the outcome header strip. Returns 'survived',
+    'died', or '' (unknown -> the recap stays neutral)."""
+    try:
+        frame = _grab_full(cfg)
+        res = outcome(engine.read_lines(_crop(frame, HEADER_FRAC)))
+        if res:
+            return res
+        # header strip mis-calibrated for this resolution? the unambiguous
+        # 'exfiltrated' also only ever appears as the survived header, so a
+        # wider panel read can still catch a survival.
+        return outcome(engine.read_lines(_crop(frame, PANEL_FRAC)))
+    except Exception:
+        return ""
 
 
 def _label_text(line: str) -> str:

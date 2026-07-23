@@ -1212,7 +1212,9 @@ def _maybe_capture_exfil(cfg, engine, lines, s, now):
         # says so — otherwise leave it unknown and the recap stays neutral,
         # rather than narrating a death as a clean exfil.
         stats_d = stats_d or {}
-        stats_d["outcome"] = exfil_stats.outcome(lines)
+        # Read the panel HEADER (EXFILTRATED vs ELIMINATED) — the kill-popup
+        # `lines` here never cover it, so grab the header strip directly.
+        stats_d["outcome"] = exfil_stats.read_outcome(cfg, engine)
         print(f"  [exfil] outcome: {stats_d['outcome'] or 'unknown'}")
         # Audit THIS match's detected kills vs the game's count, then reset the
         # per-match tally for the next match.
