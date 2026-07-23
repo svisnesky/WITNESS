@@ -100,6 +100,13 @@ perf_log: true              # log RAM / GPU mem / OCR loop time / fps every few
                             # seconds to logs/perf_<time>.csv — open it after a
                             # session to see if memory creeps or OCR falls behind
 perf_interval_seconds: 5    # how often the perf sampler writes a row
+heat_streaks: true          # killstreak flair: HOT STREAK/RAMPAGE/MENACE/APEX
+                            # toasts + call-outs as you climb, FIRST BLOOD, a
+                            # SHARPSHOOTER precision streak, and a STREAK ENDED
+                            # beat when you die. Streak persists until you die.
+heat_overlays: true         # show the heat toasts on screen (respects show_overlays)
+heat_callouts: true         # voice the heat call-outs (respects announcer_medals)
+heat_precision_streak: 3    # consecutive precision kills -> SHARPSHOOTER
 witness_report: true        # end-of-night WITNESS Report dossier (written case
                             # file saved to the session folder + printed)
 witness_report_voice: true  # also render a spoken dossier (uses the announcer

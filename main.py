@@ -818,6 +818,13 @@ def _setup_session(cfg, dry_run):
         "cfg": cfg,
         "medal_sounds": {},
     }
+    if cfg.get("heat_streaks", True):
+        try:
+            import heat
+            s["heat"] = heat.HeatTracker(
+                precision_at=cfg.get("heat_precision_streak", 3))
+        except Exception:
+            s["heat"] = None
     if cfg.get("announcer_medals", True) and not dry_run:
         _prepare_medals_async(cfg, s)
     return s
@@ -984,6 +991,16 @@ def _handle_kill(cfg, ev, s, on_count=None):
         s["web"].record(count, tag, ev.raw_line)
     log_kill(cfg, ev, count)
 
+    # Heat / killstreak: a real kill feeds the streak; fire any tier crossings
+    # (HOT STREAK, RAMPAGE, MENACE, APEX), FIRST BLOOD, SHARPSHOOTER.
+    if counts_as_kill and s.get("heat") is not None:
+        try:
+            for hev in s["heat"].on_kill(tag, clutch=bool(s.get("clutch"))):
+                print(f"  [heat] {hev.label} (streak {hev.streak})")
+                _fire_heat(cfg, s, hev)
+        except Exception as e:
+            print(f"  [heat] error: {e}")
+
     coalesce_secs = cfg.get("kill_coalesce_seconds", 8.0)
     if "_coalesce_pending" not in s:
         s["_coalesce_pending"] = []
@@ -1070,6 +1087,40 @@ def _clutch_celebrate(cfg, s, kills):
                     announcer.play_medal({"co": wav}, "co")
             except Exception as e:
                 print(f"  [clutch] call-out failed: {e}")
+        threading.Thread(target=speak, daemon=True).start()
+
+
+def _fire_heat(cfg, s, ev):
+    """Surface a heat/streak event: an on-screen toast + an optional voice
+    call-out. Suppressed during a clutch (the clutch owns that moment)."""
+    if s.get("clutch"):
+        return
+    if s["web"] is not None:
+        try:
+            s["web"].notice(f"{ev.label} · streak {ev.streak}", "clutch")
+        except Exception:
+            pass
+    if cfg.get("heat_overlays", True) and cfg.get("show_overlays", True):
+        show_text_overlay(cfg, ev.label, size=68, position="custom:0.5,0.30",
+                          color=ev.color, duration_ms=1900)
+    if cfg.get("heat_callouts", True) and cfg.get("announcer_medals", True) and ev.callout:
+        callout = ev.callout
+
+        def speak():
+            try:
+                import announcer
+                import montage
+                base = os.path.dirname(os.path.abspath(__file__))
+                wav = announcer.ensure_callout(
+                    base, callout,
+                    cfg.get("announcer_voice", announcer.DEFAULT_VOICE),
+                    montage.find_ffmpeg(base, cfg),
+                    pitch=cfg.get("announcer_pitch", announcer.DEFAULT_PITCH),
+                    eleven_voice=cfg.get("elevenlabs_voice_id", ""))
+                if wav:
+                    announcer.play_medal({"co": wav}, "co")
+            except Exception as e:
+                print(f"  [heat] call-out failed: {e}")
         threading.Thread(target=speak, daemon=True).start()
 
 
@@ -1225,6 +1276,12 @@ def _maybe_capture_exfil(cfg, engine, lines, s, now):
         # `lines` here never cover it, so grab the header strip directly.
         stats_d["outcome"] = exfil_stats.read_outcome(cfg, engine)
         print(f"  [exfil] outcome: {stats_d['outcome'] or 'unknown'}")
+        # Death breaks the killstreak — mourn a real one.
+        if stats_d.get("outcome") == "died" and s.get("heat") is not None:
+            hev = s["heat"].on_death()
+            if hev:
+                print(f"  [heat] {hev.label} (was {hev.streak})")
+                _fire_heat(cfg, s, hev)
         # Audit THIS match's detected kills vs the game's count, then reset the
         # per-match tally for the next match.
         match_tags = s.get("match_tags", [])
