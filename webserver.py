@@ -1588,7 +1588,11 @@ PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
     if (el.requestFullscreen) el.requestFullscreen();
     else if (el.webkitRequestFullscreen) el.webkitRequestFullscreen();
   }
-  if (window.navigator.standalone || window.matchMedia('(display-mode: standalone)').matches){
+  // Hide the Full-screen button + iPad hint where they don't apply: the
+  // desktop app (pywebview injects window.pywebview and has its own maximize
+  // button) and iOS home-screen standalone mode.
+  if (window.pywebview || window.navigator.standalone
+      || window.matchMedia('(display-mode: standalone)').matches){
     document.getElementById('fs').style.display='none';
     document.getElementById('hint').style.display='none';
   }

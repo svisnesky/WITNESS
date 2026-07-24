@@ -13,9 +13,9 @@ def keys(events):
 
 def test_first_blood_then_tiers():
     h = heat.HeatTracker()
-    assert keys(h.on_kill("down")) == ["firstblood"]     # 1st kill
-    assert keys(h.on_kill("down")) == []                 # streak 2, nothing
-    assert keys(h.on_kill("down")) == ["hotstreak"]      # streak 3
+    assert keys(h.on_kill("down")) == ["firstblood"]     # 1st kill (streak 1)
+    assert keys(h.on_kill("down")) == ["heatingup"]      # streak 2
+    assert keys(h.on_kill("down")) == ["onfire"]         # streak 3
     assert keys(h.on_kill("down")) == []                 # 4
     assert keys(h.on_kill("down")) == ["rampage"]        # 5
     for _ in range(1):
@@ -58,4 +58,4 @@ def test_streak_persists_until_death():
     for _ in range(4):
         h.on_kill("down")
     assert h.streak == 4          # no reset between kills
-    assert h.peak_label() == "HOT STREAK"
+    assert h.peak_label() == "ON FIRE"

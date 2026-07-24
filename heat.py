@@ -17,9 +17,12 @@ from collections import namedtuple
 HeatEvent = namedtuple("HeatEvent", "key label color callout streak")
 
 # (streak_threshold, key, label, color, callout). Colors are the app's medal/
-# danger palette. Labels lean arena; MENACE nods to the Menace Report.
+# danger palette. HEATING UP -> ON FIRE is the NBA-Jam bottom of the ladder;
+# RAMPAGE/MENACE/APEX are the WITNESS-flavored escalation (MENACE nods to the
+# Menace Report).
 DEFAULT_TIERS = (
-    (3, "hotstreak", "HOT STREAK", "#f5a623", "He's heating up."),
+    (2, "heatingup", "HEATING UP", "#f5a623", "He's heating up."),
+    (3, "onfire", "ON FIRE", "#ff8c42", "He's on fire!"),
     (5, "rampage", "RAMPAGE", "#ff6a58", "Rampage. The arena can't slow him down."),
     (7, "menace", "MENACE", "#ff4d3d", "A menace on the field now. Nobody's safe."),
     (10, "apex", "APEX WITNESS", "#c7bdff", "Apex. Nothing escapes him tonight."),
