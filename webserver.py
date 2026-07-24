@@ -367,7 +367,7 @@ def _archive_video_path(record_dir: str, sess: str, rel: str):
     path = os.path.realpath(os.path.join(root, sess, *parts))
     if not path.startswith(root + os.sep) or not os.path.isfile(path):
         return None
-    if not path.lower().endswith((".mp4", ".mkv", ".png")):
+    if not path.lower().endswith((".mp4", ".mkv", ".png", ".mp3", ".wav")):
         return None
     return path
 
@@ -423,11 +423,37 @@ def _archive_page(base_dir: str, record_dir: str) -> str:
                 for f in sorted(os.listdir(pdir)):
                     if f.endswith(".mp4") and _SAFE_PART.match(f):
                         media.append((f.replace(".mp4", "").replace("_", " "), f"replays/{f}"))
+            # Session montage (highlights_*.mkv|mp4)
+            for f in sorted(os.listdir(sdir)):
+                if f.startswith("highlights") and f.lower().endswith((".mkv", ".mp4")) \
+                        and _SAFE_PART.match(f):
+                    media.append(("Session montage", f))
+            # Vertical Shorts
+            shdir = os.path.join(sdir, "shorts")
+            if os.path.isdir(shdir):
+                for f in sorted(os.listdir(shdir)):
+                    if f.endswith(".mp4") and _SAFE_PART.match(f):
+                        media.append((f"Short — {f.replace('.mp4','').replace('_',' ')}",
+                                      f"shorts/{f}"))
+            # Spoken WITNESS Report dossier
+            for cand in ("witness_report_tts.mp3", "witness_report_tts.wav"):
+                if os.path.exists(os.path.join(sdir, cand)):
+                    media.append(("WITNESS Report (spoken)", cand))
+                    break
+            # Written WITNESS Report case file
+            report = ""
+            rp = os.path.join(sdir, "witness_report.txt")
+            if os.path.exists(rp):
+                try:
+                    with open(rp, encoding="utf-8") as f:
+                        report = f.read()
+                except OSError:
+                    report = ""
             n_clips = sum(1 for f in os.listdir(sdir)
                           if f.lower().endswith((".mkv", ".mp4"))
                           and not f.startswith(("highlights", "session_reel")))
             sessions.append({"id": name, "media": media, "clips": n_clips,
-                             "recaps": recaps.get(name, [])})
+                             "recaps": recaps.get(name, []), "report": report})
 
     blocks = []
     for s in sessions:
@@ -442,9 +468,11 @@ def _archive_page(base_dir: str, record_dir: str) -> str:
                      f'<a class="dl" href="{u}&dl=1">save</a></div>')
         if not rows:
             rows = '<div class="rc none">no reels/replays kept for this session</div>'
+        report_html = (f'<h4>WITNESS Report</h4><pre class="report">{_esc(s["report"])}</pre>'
+                       if s.get("report") else "")
         blocks.append(f"""<details><summary><b>{_esc(date)}</b>
           <span class="meta">{s['clips']} clip{'s' if s['clips'] != 1 else ''}</span></summary>
-          <h4>Matches</h4>{rec_html}<h4>Watch / share</h4>{rows}</details>""")
+          <h4>Matches</h4>{rec_html}{report_html}<h4>Watch / share</h4>{rows}</details>""")
 
     body = "".join(blocks) or ('<p class="rc none">No sessions found yet'
                                + ("" if record_dir else " — press START once so the app learns your OBS folder")
@@ -657,7 +685,16 @@ def start_web(state, port, base_dir, host="0.0.0.0"):
                                         break
                                     self.wfile.write(chunk)
                         else:
-                            self._send_video(fp)
+                            low = fp.lower()
+                            if low.endswith((".mp3", ".wav")):
+                                with open(fp, "rb") as f:
+                                    self._send(f.read(),
+                                               "audio/mpeg" if low.endswith(".mp3") else "audio/wav")
+                            elif low.endswith(".png"):
+                                with open(fp, "rb") as f:
+                                    self._send(f.read(), "image/png")
+                            else:
+                                self._send_video(fp)
                     else:
                         self.send_error(404)
                 elif path.startswith("/reel/"):
@@ -770,6 +807,9 @@ ARCHIVE_PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
   h4 { color:var(--dim); font:600 10px var(--mono); letter-spacing:.16em; text-transform:uppercase;
     margin:10px 0 8px; }
   .rc { font:500 13px var(--ui); color:var(--sec); padding:9px 0; border-bottom:1px solid rgba(255,255,255,.05); }
+  .report { margin:2px 0 8px; padding:14px 16px; background:#0e0b16;
+    border:1px solid rgba(145,132,217,.28); border-radius:10px; overflow-x:auto;
+    font:500 12px/1.5 var(--mono); color:var(--sec); white-space:pre-wrap; }
   .rc.none { color:var(--muted); background:var(--surface);
     border:1px solid var(--sborder); border-radius:12px; padding:20px; }
   .mrow { display:flex; align-items:center; gap:12px; padding:12px 0;
