@@ -784,7 +784,8 @@ ARCHIVE_PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
 </style></head><body><div class="wrap">
   <div class="top"><img src="/skull.png" alt=""><span class="wm">WITNESS</span>
     <nav class="nav"><a href="/">Live</a><a href="/archive">Reels</a>
-      <a href="/stats">Stats</a><a class="on">Archive</a></nav></div>
+      <a href="/stats">Stats</a><a class="on" href="/archive">Archive</a>
+      <a href="/archive" title="Refresh — new reels finish rendering after you stop">&#8635; Refresh</a></nav></div>
   <div class="kick">Archive</div>
   <h2>Every session, kept</h2>
   <p class="sub">Tap a reel to watch; "save" downloads it for sharing (Files &rarr; share sheet &rarr; group chat).</p>
@@ -853,7 +854,7 @@ STATS_PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
 </style></head><body><div class="wrap">
   <div class="top"><img src="/skull.png" alt=""><span class="wm">WITNESS</span>
     <nav class="nav"><a href="/">Live</a><a href="/archive">Reels</a>
-      <a class="on">Stats</a><a href="/archive">Archive</a></nav></div>
+      <a class="on" href="/stats">Stats</a><a href="/archive">Archive</a></nav></div>
   <div class="kick">Career</div>
   <h2>Career stats</h2>
   <p class="sub">From every exfil screen WITNESS has captured. It only gets deeper from here.</p>
