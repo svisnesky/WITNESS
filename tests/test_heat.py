@@ -26,6 +26,14 @@ def test_first_blood_then_tiers():
     assert keys(h.on_kill("down")) == ["apex"]           # 10
 
 
+def test_first_blood_is_per_match():
+    h = heat.HeatTracker()
+    assert "firstblood" in keys(h.on_kill("down"))       # match 1, first kill
+    assert "firstblood" not in keys(h.on_kill("down"))   # same match, no repeat
+    h.new_match()
+    assert "firstblood" in keys(h.on_kill("down"))       # match 2 re-arms it
+
+
 def test_precision_streak_sharpshooter():
     h = heat.HeatTracker()
     h.on_kill("precision")   # 1 (firstblood + prec1)

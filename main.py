@@ -1319,6 +1319,8 @@ def _maybe_capture_exfil(cfg, engine, lines, s, now):
                     print(f"  [loot goblin] error: {e}")
         s["match_tags"] = []
         s["runner_checked"] = False       # re-detect next match
+        if s.get("heat") is not None:     # re-arm FIRST BLOOD for the next match
+            s["heat"].new_match()
         s["last_runner"] = s.get("current_runner", "")
         s["current_runner"] = ""
         if cfg.get("make_match_reels", True) and save_dir:

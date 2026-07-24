@@ -35,16 +35,23 @@ class HeatTracker:
         self.precision_at = max(2, int(precision_at))
         self.streak = 0        # kills since your last death (persists across matches)
         self.prec = 0          # consecutive precision kills
-        self.total = 0         # kills this session (for FIRST BLOOD)
+        self.total = 0         # kills this session
+        self.first_blood_armed = True   # first kill of each match earns FIRST BLOOD
+
+    def new_match(self):
+        """A new match started — re-arm FIRST BLOOD for its first kill. (Streak
+        is NOT reset here: it persists across matches and only breaks on death.)"""
+        self.first_blood_armed = True
 
     def on_kill(self, tag: str = "", clutch: bool = False) -> list:
         """Feed a confirmed kill (its tag). Returns HeatEvents to surface."""
         events = []
         self.total += 1
         self.streak += 1
-        if self.total == 1:
-            events.append(HeatEvent("firstblood", "FIRST BLOOD", "#c7ccd6",
-                                    "First blood. The night begins.", 1))
+        if self.first_blood_armed:
+            self.first_blood_armed = False
+            events.append(HeatEvent("firstblood", "FIRST BLOOD", "#e63b2e",
+                                    "First blood.", self.streak))
         for thr, key, label, color, callout in self.tiers:
             if self.streak == thr:
                 events.append(HeatEvent(key, label, color, callout, self.streak))
