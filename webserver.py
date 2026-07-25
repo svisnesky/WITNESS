@@ -584,7 +584,30 @@ def _stats_page(base_dir: str) -> str:
         menace_html = ('<h3>Menace report</h3><p class="empty2">No names yet — '
                        'gamertags are read off the kill feed as downs happen.</p>')
 
+    # W/L record from confirmed outcomes (EXFILTRATED vs ELIMINATED headers)
+    try:
+        import exfil_stats
+        rec = exfil_stats.record_summary(base_dir)
+    except Exception:
+        rec = {"exfils": 0, "deaths": 0, "survival_pct": None,
+               "best_streak": 0, "current_streak": 0}
+    if rec["exfils"] or rec["deaths"]:
+        surv = f"{rec['survival_pct']}%" if rec["survival_pct"] is not None else "—"
+        record_html = ('<h3>Record</h3><div class="tiles">'
+                       f'<div class="tile"><div class="tn">{rec["exfils"]}</div>'
+                       f'<div class="tl">Exfils</div></div>'
+                       f'<div class="tile"><div class="tn">{rec["deaths"]}</div>'
+                       f'<div class="tl">Deaths</div></div>'
+                       f'<div class="tile eco"><div class="tn">{surv}</div>'
+                       f'<div class="tl">Survival rate</div></div>'
+                       f'<div class="tile eco"><div class="tn">{rec["best_streak"]}</div>'
+                       f'<div class="tl">Best exfil streak</div></div>'
+                       '</div>')
+    else:
+        record_html = ""
+
     return (STATS_PAGE.replace("%%CARDS%%", cards)
+            .replace("%%RECORD%%", record_html)
             .replace("%%SQUAD%%", squad_html)
             .replace("%%MENACE%%", menace_html))
 
@@ -914,6 +937,7 @@ STATS_PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
   <h2>Career stats</h2>
   <p class="sub">From every exfil screen WITNESS has captured. It only gets deeper from here.</p>
   <div class="tiles">%%CARDS%%</div>
+  %%RECORD%%
   %%SQUAD%%
   %%MENACE%%
 </div></body></html>"""

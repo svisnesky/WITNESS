@@ -243,6 +243,51 @@ def capture_exfil_stats(cfg, engine, save_dir: str = "", retries: int = 3):
     return best, squad, outc
 
 
+def log_outcome(base_dir: str, session_id: str, outcome: str) -> None:
+    """One row per match -> stats/outcomes.csv ('survived'/'died'). Unknowns
+    are logged too ('' outcome) so match counts stay honest, but the record
+    views only score the known ones."""
+    sdir = os.path.join(base_dir, "stats")
+    os.makedirs(sdir, exist_ok=True)
+    path = os.path.join(sdir, "outcomes.csv")
+    new = not os.path.exists(path)
+    with open(path, "a", newline="", encoding="utf-8") as f:
+        w = csv.writer(f)
+        if new:
+            w.writerow(["wall_time", "session", "outcome"])
+        w.writerow([time.strftime("%Y-%m-%d %H:%M:%S"), session_id, outcome])
+
+
+def record_summary(base_dir: str) -> dict:
+    """Career W/L from outcomes.csv: exfils, deaths, survival %, best and
+    current deathless (exfil) streaks. Unknown outcomes are excluded from the
+    rate but counted as 'unknown'."""
+    path = os.path.join(base_dir, "stats", "outcomes.csv")
+    out = {"exfils": 0, "deaths": 0, "unknown": 0,
+           "survival_pct": None, "best_streak": 0, "current_streak": 0}
+    if not os.path.exists(path):
+        return out
+    streak = best = 0
+    with open(path, encoding="utf-8") as f:
+        for r in csv.DictReader(f):
+            o = (r.get("outcome") or "").strip()
+            if o == "survived":
+                out["exfils"] += 1
+                streak += 1
+                best = max(best, streak)
+            elif o == "died":
+                out["deaths"] += 1
+                streak = 0
+            else:
+                out["unknown"] += 1   # doesn't break a streak; we just don't know
+    known = out["exfils"] + out["deaths"]
+    if known:
+        out["survival_pct"] = round(100.0 * out["exfils"] / known)
+    out["best_streak"] = best
+    out["current_streak"] = streak
+    return out
+
+
 def log_squad_stats(base_dir: str, session_id: str, squad: list[dict],
                     your_runner: str = "") -> str:
     """One row per player per match -> stats/squad_stats.csv. Feeds the

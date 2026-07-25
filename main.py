@@ -1092,6 +1092,21 @@ def _clutch_celebrate(cfg, s, kills):
         threading.Thread(target=speak, daemon=True).start()
 
 
+def _reconcile_missed(match_tags, stats_d) -> int:
+    """How many kills the game credited this match that detection missed —
+    the exfil screen's 'Runners Downed' is ground truth. Conservative:
+    requires a good panel read (3+ labels parsed) and sane values, and never
+    subtracts (an OCR misread must not delete real kills)."""
+    game_downs = (stats_d or {}).get("runners_downed")
+    if game_downs is None or not (0 <= game_downs <= 30):
+        return 0
+    if len([k for k in (stats_d or {}) if k != "outcome"]) < 3:
+        return 0                          # weak panel read — don't trust it
+    ours = sum(1 for t in (match_tags or []) if t in ("down", "precision", "kill"))
+    missed = game_downs - ours
+    return missed if 0 < missed <= 10 else 0
+
+
 def _fire_heat(cfg, s, ev, delay: float = 0.0):
     """Surface a heat/streak event: an on-screen toast + an optional voice
     call-out. Suppressed during a clutch (the clutch owns that moment).
@@ -1282,6 +1297,11 @@ def _maybe_capture_exfil(cfg, engine, lines, s, now):
         stats_d = stats_d or {}
         stats_d["outcome"] = outc or exfil_stats.read_outcome(cfg, engine)
         print(f"  [exfil] outcome: {stats_d['outcome'] or 'unknown'}")
+        try:   # W/L record: one row per match, feeds the Stats page
+            base = os.path.dirname(os.path.abspath(__file__))
+            exfil_stats.log_outcome(base, s["session_id"], stats_d["outcome"])
+        except Exception:
+            pass
         # Death breaks the killstreak — mourn a real one.
         if stats_d.get("outcome") == "died" and s.get("heat") is not None:
             hev = s["heat"].on_death()
@@ -1292,6 +1312,32 @@ def _maybe_capture_exfil(cfg, engine, lines, s, now):
         # per-match tally for the next match.
         match_tags = s.get("match_tags", [])
         print(exfil_stats.report(stats_d, Counter(match_tags)))
+
+        # Ground-truth reconciliation: the game's own 'Runners Downed' number
+        # is authoritative — if detection missed kills this match, add them so
+        # the count matches the scoreboard. Clips can't be saved retroactively
+        # (the buffer moved on), but the record is right.
+        if cfg.get("exfil_reconcile", True):
+            missed = _reconcile_missed(match_tags, stats_d)
+            for _ in range(missed):
+                s["count"] += 1
+                s["session_tags"].append("down")
+                if s["web"] is not None:
+                    s["web"].record(s["count"], "down",
+                                    "RECONCILED — exfil screen credit")
+                try:
+                    from detector import KillEvent
+                    log_kill(cfg, KillEvent(now, "RECONCILED (exfil screen)",
+                                            "", "", True), s["count"])
+                except Exception:
+                    pass
+            if missed:
+                try:
+                    s["obs"].set_counter(s["count"])
+                except Exception:
+                    pass
+                print(f"  [reconcile] game credited more downs than detected — "
+                      f"added {missed}, count now {s['count']}")
         if stats_d:
             exfil_stats.accumulate_accuracy(s.setdefault("accuracy", {}),
                                             stats_d, Counter(match_tags))
