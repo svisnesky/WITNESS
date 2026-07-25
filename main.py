@@ -1567,7 +1567,7 @@ def _run_live_inner(cfg: dict, dry_run: bool = False, stop_event=None, on_count=
         print(acc_line)
     _end_session(cfg, s["session_tags"], s["session_start"],
                  s["session_start_wall"], dry_run, s["obs"], s["session_id"],
-                 kills=s["count"])
+                 kills=s["count"], web=s["web"])
 
 
 def exfil_stats_accuracy(s) -> str:
@@ -1579,9 +1579,16 @@ def exfil_stats_accuracy(s) -> str:
 
 
 def _end_session(cfg, tags, start_monotonic, start_wall, dry_run, obs=None,
-                 session_id=None, kills=None):
+                 session_id=None, kills=None, web=None):
     # kills = real kills (a down + its finisher counted once); tags = every
     # detected event, for the type breakdown.
+    def _rc(**kw):   # push build status to the dashboard's recap panel
+        if web is not None:
+            try:
+                web.set_recap(**kw)
+            except Exception:
+                pass
+
     total = kills if kills is not None else len(tags)
     dur_min = max(0.01, (time.monotonic() - start_monotonic) / 60.0)
     c = Counter(tags)
@@ -1592,7 +1599,9 @@ def _end_session(cfg, tags, start_monotonic, start_wall, dry_run, obs=None,
     print(f"Duration: {dur_min:.1f} min  |  {total / dur_min:.2f} kills/min")
 
     if total == 0 or dry_run:
+        _rc(status="ready", note="", report="", kills=total)
         return
+    _rc(status="building", note="building your highlights…", report="", kills=total)
     session = {
         "date": time.strftime("%Y-%m-%d"),
         "start": start_wall,
@@ -1633,6 +1642,7 @@ def _end_session(cfg, tags, start_monotonic, start_wall, dry_run, obs=None,
     if obs is not None and session_id:
         rec = obs.get_record_directory()
         session_dir = os.path.join(rec, "Marathon Sessions", session_id) if rec else ""
+    _rc(note="building session montage…")
     if cfg.get("make_montage", True) and session_dir:
         try:
             import montage
@@ -1656,6 +1666,7 @@ def _end_session(cfg, tags, start_monotonic, start_wall, dry_run, obs=None,
                 session, victims, killers,
                 player=cfg.get("announcer_player_name", ""))
             report_speech = rep["speech"]
+            _rc(report="\n".join(rep["lines"]), note="writing the WITNESS Report…")
             print("\n" + "\n".join(rep["lines"]))
             if session_dir:
                 try:
@@ -1683,6 +1694,7 @@ def _end_session(cfg, tags, start_monotonic, start_wall, dry_run, obs=None,
     # Play of the Night — the single best clip across the WHOLE session, cut
     # into its own reel. Scoring is the same pick as per-match POTG (most kills,
     # ties to the flashier tag, then latest), run over every session clip.
+    _rc(note="cutting Play of the Night…")
     if cfg.get("play_of_the_night", True) and session_dir:
         try:
             import match_reel
@@ -1711,6 +1723,7 @@ def _end_session(cfg, tags, start_monotonic, start_wall, dry_run, obs=None,
             print(f"(play of the night error: {e})")
 
     # Vertical Shorts render of each clip (needs ffmpeg + organized clips).
+    _rc(note="rendering vertical Shorts…")
     if cfg.get("make_shorts", True) and session_dir:
         try:
             import montage
@@ -1732,10 +1745,13 @@ def _end_session(cfg, tags, start_monotonic, start_wall, dry_run, obs=None,
 
     # Session highlight reel (all clips + title card + Play of the Game), and
     # optional unlisted YouTube upload of just that one video.
+    _rc(note="building the session reel (the big one)…")
     if session_dir and (cfg.get("make_session_reel", True)
                         or cfg.get("youtube_upload_session_reel", False)):
         _build_session_reel_and_upload(cfg, session_dir, tags,
                                        report_speech=report_speech)
+
+    _rc(status="ready", note="")   # everything built — safe to close now
 
 
 def _session_clips_from_dir(session_dir: str):

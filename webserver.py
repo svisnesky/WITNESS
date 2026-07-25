@@ -182,6 +182,7 @@ class LiveState:
         self.update_msg = ""  # auto-updater status, shown in the dashboard
         self.version = ""     # current build (short sha), shown bottom-right
         self.detect = {}      # live detection health (fps/device/vram), from perf monitor
+        self.recap = {}       # end-of-session build status ({status, note, report})
         self._cfg = None       # live config dict (bound per session)
         self._save_cb = None   # persists changed settings to disk
 
@@ -295,6 +296,12 @@ class LiveState:
         with self._lock:
             self.detect = dict(info or {})
 
+    def set_recap(self, **kw):
+        """End-of-session build status, so the dashboard can show 'building…' /
+        'ready' and the WITNESS Report instead of relying on a browser popup."""
+        with self._lock:
+            self.recap.update(kw)
+
     def set_running(self, running):
         with self._lock:
             self.running = running
@@ -336,6 +343,7 @@ class LiveState:
                     "started": self.started, "elapsed": elapsed,
                     "update": self.update_msg, "version": self.version,
                     "detect": dict(self.detect),
+                    "recap": dict(self.recap),
                     "tags": dict(self.tag_counts),
                     "events": list(self.events),
                     "reels": [{"i": i, "label": r["label"], "time": r["time"]}
@@ -945,6 +953,23 @@ PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
   .kick { font:600 11px var(--mono); letter-spacing:.2em; color:var(--muted);
     text-transform:uppercase; margin-bottom:6px; }
 
+  /* end-of-session recap banner */
+  .recap { margin-bottom:22px; background:linear-gradient(180deg,rgba(145,132,217,.14),var(--surface));
+    border:1px solid var(--accent); border-radius:14px; padding:16px 18px; }
+  .recap.done { border-color:var(--green); background:linear-gradient(180deg,rgba(91,214,107,.12),var(--surface)); }
+  .rc-hd { display:flex; align-items:center; gap:10px; font:700 15px var(--ui); }
+  .rc-dot { width:11px; height:11px; border-radius:50%; background:var(--accent); flex:none; }
+  .rc-dot.pulse { animation:rcpulse 1s ease-in-out infinite; }
+  .rc-dot.done { background:var(--green); box-shadow:0 0 10px var(--green); animation:none; }
+  @keyframes rcpulse { 0%,100%{ opacity:1; } 50%{ opacity:.3; } }
+  .rc-note { color:var(--sec); font:500 13px var(--ui); margin-top:6px; }
+  .rc-report { margin:12px 0 4px; padding:14px 16px; background:#0e0b16;
+    border:1px solid rgba(145,132,217,.28); border-radius:10px; overflow-x:auto;
+    font:500 12px/1.5 var(--mono); color:var(--sec); white-space:pre-wrap; }
+  .rc-btn { display:inline-block; margin-top:10px; background:var(--accent); color:#12121a;
+    text-decoration:none; border-radius:9px; padding:10px 18px; font:700 12px var(--ui);
+    letter-spacing:.04em; }
+
   /* top bar */
   .bar { display:flex; align-items:center; gap:13px;
     padding-top:env(safe-area-inset-top); margin-bottom:26px; }
@@ -1149,6 +1174,13 @@ PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
     <button class="runbtn" id="runbtn" onclick="toggleRun()">START</button>
   </header>
 
+  <section class="recap" id="recap" style="display:none">
+    <div class="rc-hd"><span class="rc-dot" id="rcdot"></span><span id="rctitle">Building your recap&hellip;</span></div>
+    <div class="rc-note" id="rcnote"></div>
+    <pre class="rc-report" id="rcreport" style="display:none"></pre>
+    <a class="rc-btn" id="rcarchive" href="/archive" style="display:none">Open Archive &rarr;</a>
+  </section>
+
   <section class="hero">
     <div class="heroL">
       <div class="kick">Session kills</div>
@@ -1296,6 +1328,24 @@ PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
           (v.vram_mb ? (v.vram_mb/1024).toFixed(1)+' GB VRAM' : (v.device==='CPU'?'CPU':'')) +
           ' \\u00b7 live';
       }
+      // End-of-session recap status — only when NOT running (a fresh START hides it)
+      var rc = d.recap || {};
+      var rcbox = document.getElementById('recap');
+      if (!d.running && (rc.status === 'building' || rc.status === 'ready')){
+        rcbox.style.display = 'block';
+        var built = rc.status === 'ready';
+        rcbox.className = 'recap' + (built ? ' done' : '');
+        document.getElementById('rcdot').className = 'rc-dot ' + (built ? 'done' : 'pulse');
+        document.getElementById('rctitle').textContent =
+          built ? 'Recap ready' : 'Building your recap\\u2026';
+        document.getElementById('rcnote').textContent = built
+          ? 'Everything built \\u2014 watch your reels in the Archive. Safe to close.'
+          : ((rc.note || 'working\\u2026') + '   \\u2014   keep WITNESS open until this finishes');
+        var rep = document.getElementById('rcreport');
+        if (rc.report){ rep.textContent = rc.report; rep.style.display = 'block'; }
+        else { rep.style.display = 'none'; }
+        document.getElementById('rcarchive').style.display = built ? 'inline-block' : 'none';
+      } else { rcbox.style.display = 'none'; }
       var rb = document.getElementById('runbtn');
       if (!runBusy){
         rb.className = 'runbtn' + (d.running ? ' on' : '');
