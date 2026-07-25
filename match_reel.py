@@ -119,6 +119,60 @@ def _build_card(out_png: str, title: str, kills, kills_label: str,
         return False
 
 
+def _save_time(path: str):
+    """Seconds-of-day parsed from the clip filename's HH-MM-SS suffix
+    (e.g. '003_kill_21-36-32.mkv'), or None."""
+    import re
+    m = re.search(r"(\d{2})-(\d{2})-(\d{2})\.\w+$", os.path.basename(path))
+    if not m:
+        return None
+    h, mi, s = (int(x) for x in m.groups())
+    return h * 3600 + mi * 60 + s
+
+
+def drop_overlapping(clips, ffmpeg) -> list[dict]:
+    """Merge consecutive clips whose Replay-Buffer footage overlaps.
+
+    Every clip is a save of the last ~30s, so two saves a few seconds apart
+    are mostly the SAME footage — in a reel that plays as duplicates ('the
+    clip ends, then the end shows again later'). When the gap between save
+    times is smaller than the later clip's length, the later clip contains
+    everything the earlier one had: drop the earlier clip and credit its
+    kills to the survivor. Clips without a parseable time are kept as-is."""
+    clips = list(clips)
+    if len(clips) < 2:
+        return clips
+    out = []
+    i = 0
+    while i < len(clips):
+        cur = clips[i]
+        t_cur = _save_time(cur.get("path", ""))
+        merged = dict(cur)
+        j = i + 1
+        while j < len(clips):
+            nxt = clips[j]
+            t_nxt = _save_time(nxt.get("path", ""))
+            if t_cur is None or t_nxt is None:
+                break
+            gap = t_nxt - t_cur
+            dur = probe_duration(nxt["path"], ffmpeg) or 30.0
+            if not (0 <= gap < dur - 3):
+                break
+            # nxt's buffer covers `merged` — fold it in and advance
+            print(f"  [reel] overlap: {os.path.basename(merged['path'])} is inside "
+                  f"{os.path.basename(nxt['path'])} (gap {gap:.0f}s) — merged")
+            folded = dict(nxt)
+            folded["kills"] = int(merged.get("kills", 1)) + int(nxt.get("kills", 1))
+            tags = [t for t in (merged.get("tag", ""), nxt.get("tag", "")) if t]
+            folded["tag"] = "+".join(dict.fromkeys("+".join(tags).split("+")))
+            merged = folded
+            t_cur = t_nxt
+            j += 1
+        out.append(merged)
+        i = j if j > i + 1 else i + 1
+    return out
+
+
 def _normalize_clips(clips) -> list[dict]:
     """Accept plain paths or {path, kills, tag} dicts."""
     out = []
@@ -245,7 +299,7 @@ def build_match_reel(clips, out_path: str, ffmpeg: str,
     random point in a random track, fades in/out, and long reels rotate
     through up to three tracks with crossfades. music_path (single file) is
     the legacy fallback."""
-    clips = _normalize_clips(clips)
+    clips = drop_overlapping(_normalize_clips(clips), ffmpeg)
     if not clips:
         print("  [reel] no clips on disk to build a reel from")
         return False

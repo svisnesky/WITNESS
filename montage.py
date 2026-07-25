@@ -46,6 +46,16 @@ def build_montage(session_dir, ffmpeg):
     if not clips:
         print("  [montage] no clips in the session folder to stitch")
         return None
+    # Drop clips whose Replay-Buffer footage is contained in the next save —
+    # back-to-back saves are mostly the same 30s and play as duplicates.
+    try:
+        from match_reel import drop_overlapping
+        deduped = drop_overlapping(
+            [{"path": os.path.join(session_dir, c), "kills": 1, "tag": ""}
+             for c in clips], ffmpeg)
+        clips = [os.path.basename(c["path"]) for c in deduped]
+    except Exception:
+        pass
 
     ext = os.path.splitext(clips[0])[1]
     list_path = os.path.join(session_dir, "_montage_list.txt")
