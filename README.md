@@ -19,14 +19,27 @@ button in the app):
 
 Name the game, alt-tab in, get a kill inside 90 seconds — the wizard reads
 everything on screen, ranks the popup-like lines, asks which one was your
-kill, and writes a ready-to-run profile to `games/<game>.yaml` (trigger
-phrases, screen region, reward marker — all measured automatically). Bot
-matches / practice ranges are perfect for this.
+kill, and measures the trigger phrase, screen region and reward marker.
+Then it **verifies**: get one more kill and it watches the region it just
+measured with the real detector and tells you whether it fired. If it
+didn't, it shows what it actually read there, so you know whether the
+region or the phrase was wrong — you find out in 45 seconds instead of
+after a wasted session. Bot matches / practice ranges are perfect for this.
+
+**Get two or three kills during the watch, not one.** Many games print the
+victim's name in the popup ("KNOCKED DOWN xXTTVGamerXx"); seeing it fire on
+different players is how the wizard knows which words repeat and which are
+just somebody's name. With a single kill it can't tell, and it will say so.
 
 Profiles are pure data. Share yours: PR your `games/<game>.yaml` and
-everyone gets that game. (Game-specific extras — Marathon's exfil stats,
-runner detection, kill-feed names — stay off for taught games until their
-screens get mapped.)
+everyone gets that game.
+
+**What a taught game gets today:** kill detection, auto-clips, the counter,
+the live dashboard, killstreaks, per-match and session reels, Shorts, and
+its own colors. **What it doesn't:** the systems that read Marathon's
+specific screens — exfil stats, W/L outcomes, the Menace Report, runner
+detection — stay off until that game's screens are mapped. The teach wizard
+learns kill popups; it does not yet learn scoreboards.
 
 ## What it looks like
 
