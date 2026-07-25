@@ -1681,6 +1681,19 @@ def _run_live_inner(cfg: dict, dry_run: bool = False, stop_event=None, on_count=
                 _check_manual_kill(cfg, s, on_count)
                 _check_manual_clip(s)
 
+                # Replay Buffer health. If it stops mid-session (OBS restart,
+                # stray hotkey, encoder/disk error) every remaining clip is
+                # silently lost, so check occasionally and restart it BEFORE
+                # the next kill needs it rather than after one is already gone.
+                if loop_start - s.get("_last_rb_check", 0.0) > 60:
+                    s["_last_rb_check"] = loop_start
+                    try:
+                        if s["obs"].recover_replay_buffer() and s["web"] is not None:
+                            s["web"].notice("Replay Buffer had stopped — restarted",
+                                            "alert")
+                    except Exception:
+                        pass
+
                 elapsed = time.monotonic() - loop_start
                 perf["iters"] += 1
                 perf["work_sum"] += elapsed * 1000.0   # ms of grab+OCR+detect
