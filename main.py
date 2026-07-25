@@ -261,7 +261,16 @@ def play_kill_sound(cfg: dict) -> None:
 def is_suppressed(cfg: dict, lines) -> bool:
     """True if the frame shows a state where kills can't happen (you're downed /
     on the self-revive or give-up screen). Prevents false kills from the death
-    UI + lingering kill-feed text."""
+    UI + lingering kill-feed text.
+
+    A frame that matches a KILL TRIGGER at least as well as a suppress phrase is
+    never suppressed. Suppression is a hard block — the frame never reaches the
+    detector — so a fuzzy collision silently destroys a real kill with no trace
+    in the log. And the phrases genuinely collide: OCR reading "RUNNER DOWN" as
+    "RUNNER DAWN" (an O->A slip; O->I slips are already in Stan's logs) scores
+    82 against the "RUNNER DAMAGE" suppress phrase while scoring 91 against the
+    real "RUNNER DOWN" trigger. Whichever the text matches better wins."""
+    from rapidfuzz import fuzz
     from detector import _normalize, phrase_matches
     phrases = cfg.get("suppress_phrases",
                       ["SELF REVIVE", "GIVE UP", "RUNNER DAMAGE",
@@ -269,10 +278,20 @@ def is_suppressed(cfg: dict, lines) -> bool:
     blob = _normalize(" ".join(lines))
     if not blob:
         return False
-    for p in phrases:
-        if phrase_matches(_normalize(p), blob, 80):
-            return True
-    return False
+    hits = [_normalize(p) for p in phrases
+            if phrase_matches(_normalize(p), blob, 80)]
+    if not hits:
+        return False
+    triggers = cfg.get("popup_trigger_phrases",
+                       ["RUNNER DOWN", "PRECISION DOWN", "FINISHER", "RUNNER ELIM"])
+    t_thresh = cfg.get("popup_match_threshold", 85)
+    best_trigger = max((fuzz.partial_ratio(_normalize(t), blob)
+                        for t in triggers if str(t).strip()), default=0)
+    if best_trigger >= t_thresh:
+        best_suppress = max(fuzz.partial_ratio(h, blob) for h in hits)
+        if best_trigger >= best_suppress:
+            return False          # reads more like a kill than a dead screen
+    return True
 
 
 def classify_event(raw_line: str) -> str:
