@@ -602,6 +602,13 @@ def start_web(state, port, base_dir, host="0.0.0.0"):
         state.version = "dev"
 
     class Handler(BaseHTTPRequestHandler):
+        # HTTP/1.1 with keep-alive: iOS Safari's video player streams via
+        # byte-range requests and stalls a couple seconds in over HTTP/1.0
+        # (the default). Every response here sends Content-Length, so keep-alive
+        # is safe. The timeout keeps idle keep-alive sockets from piling up.
+        protocol_version = "HTTP/1.1"
+        timeout = 30
+
         def log_message(self, *a):
             pass  # quiet
 
