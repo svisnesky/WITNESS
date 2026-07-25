@@ -265,7 +265,7 @@ class TeachWizard:
                 h, w = frame.shape[:2]
                 frames += 1
                 now = time.monotonic()
-                for raw, (x0, y0, x1, y1) in engine.read_boxes(frame):
+                for raw, (x0, y0, x1, y1) in engine.read_boxes(frame, max_dim=0):
                     key = teach._norm(raw)
                     if not key:
                         continue

@@ -76,33 +76,44 @@ class OCREngine:
             raise ValueError(f"Unknown ocr_engine: {self.engine_name!r}")
         self._loaded = True
 
-    def read_lines(self, img_bgr: np.ndarray) -> List[str]:
+    def _cap(self, max_dim):
+        """Per-call size cap. None = this engine's default; 0 = uncapped.
+
+        The default cap exists to bound the 5 fps DETECTION loop, where a 3x
+        upscale of the popup crop produced a huge image. One-off reads (the
+        teach wizard's full frame, gamertag/runner/exfil scans) happen rarely
+        and NEED full resolution — capping a 4K frame to 800px turns 34px UI
+        text into 7px and nothing reads at all."""
+        return self.max_dim if max_dim is None else int(max_dim)
+
+    def read_lines(self, img_bgr: np.ndarray, max_dim=None) -> List[str]:
         self._ensure_loaded()
 
         if self.engine_name == "easyocr":
             # neural OCR does better on grayscale than a hard-thresholded image
-            proc = preprocess(img_bgr, self.upscale, binarize=False, max_dim=self.max_dim)
+            proc = preprocess(img_bgr, self.upscale, binarize=False, max_dim=self._cap(max_dim))
             results = self._reader.readtext(proc, detail=0, paragraph=True)
             return [r for r in results if r and r.strip()]
 
         # tesseract needs a clean bilevel image
         import pytesseract
 
-        proc = preprocess(img_bgr, self.upscale, binarize=True, max_dim=self.max_dim)
+        proc = preprocess(img_bgr, self.upscale, binarize=True, max_dim=self._cap(max_dim))
         text = pytesseract.image_to_string(proc)
         return [ln.strip() for ln in text.splitlines() if ln.strip()]
 
-    def read_boxes(self, img_bgr: np.ndarray):
+    def read_boxes(self, img_bgr: np.ndarray, max_dim=None):
         """[(text, (x0, y0, x1, y1))] with coordinates in ORIGINAL-image pixels
         (upscale factored back out). Used by the teach-a-game wizard, which
         needs to know WHERE text appeared, not just what it said."""
         self._ensure_loaded()
         h, w = img_bgr.shape[:2]
         if self.engine_name != "easyocr":
-            return [(ln, (0, 0, w, h)) for ln in self.read_lines(img_bgr)]
+            return [(ln, (0, 0, w, h)) for ln in self.read_lines(img_bgr, max_dim)]
 
-        proc = preprocess(img_bgr, self.upscale, binarize=False, max_dim=self.max_dim)
-        scale = _target_scale(h, w, self.upscale, self.max_dim)  # match preprocess's scale
+        cap = self._cap(max_dim)
+        proc = preprocess(img_bgr, self.upscale, binarize=False, max_dim=cap)
+        scale = _target_scale(h, w, self.upscale, cap)   # match preprocess's scale
         out = []
         for box, text, _conf in self._reader.readtext(proc, detail=1, paragraph=False):
             if not text or not text.strip():
@@ -112,16 +123,16 @@ class OCREngine:
             out.append((text.strip(), (min(xs), min(ys), max(xs), max(ys))))
         return out
 
-    def read_rows(self, img_bgr: np.ndarray) -> List[str]:
+    def read_rows(self, img_bgr: np.ndarray, max_dim=None) -> List[str]:
         """Like read_lines, but each returned string is ONE visual row: boxes
         grouped by y-center, joined left-to-right. paragraph=True merges
         neighboring rows, which is wrong when the row structure IS the data
         (the kill feed: killer on the left, victim on the right)."""
         self._ensure_loaded()
         if self.engine_name != "easyocr":
-            return self.read_lines(img_bgr)
+            return self.read_lines(img_bgr, max_dim)
 
-        proc = preprocess(img_bgr, self.upscale, binarize=False, max_dim=self.max_dim)
+        proc = preprocess(img_bgr, self.upscale, binarize=False, max_dim=self._cap(max_dim))
         results = self._reader.readtext(proc, detail=1, paragraph=False)
         items = []
         for box, text, _conf in results:

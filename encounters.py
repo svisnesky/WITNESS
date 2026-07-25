@@ -137,8 +137,8 @@ def capture(cfg, engine) -> list[tuple[str, str]]:
     r = FEED_REGION
     crop = frame[int(r["y"] * h):int((r["y"] + r["h"]) * h),
                  int(r["x"] * w):int((r["x"] + r["w"]) * w)]
-    rows = (engine.read_rows(crop) if hasattr(engine, "read_rows")
-            else engine.read_lines(crop))
+    rows = (engine.read_rows(crop, max_dim=0) if hasattr(engine, "read_rows")
+            else engine.read_lines(crop, max_dim=0))
     ignore = frozenset(_name_key(x) for x in (cfg.get("name_ignore") or []))
     return extract(rows, cfg.get("gamertag") or DEFAULT_GAMERTAG, ignore=ignore)
 

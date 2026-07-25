@@ -86,7 +86,7 @@ def outcome_from_frame(frame, engine) -> tuple:
     """(outcome, band_name) — scan the outcome bands in order on one frame."""
     for name, frac in OUTCOME_BANDS:
         try:
-            res = outcome(engine.read_lines(_crop(frame, frac)))
+            res = outcome(engine.read_lines(_crop(frame, frac), max_dim=0))
         except Exception:
             continue
         if res:
@@ -193,12 +193,12 @@ def _crop(frame, frac):
 
 
 def _parse_panel(frame, engine) -> dict:
-    return parse_exfil_lines(engine.read_lines(_crop(frame, PANEL_FRAC)))
+    return parse_exfil_lines(engine.read_lines(_crop(frame, PANEL_FRAC), max_dim=0))
 
 
 def _read_player_name(frame, engine, pos: str) -> str:
     """The gamertag from a panel's name plate ('SupremePlays#5291')."""
-    lines = engine.read_lines(_crop(frame, NAME_STRIP[pos]))
+    lines = engine.read_lines(_crop(frame, NAME_STRIP[pos]), max_dim=0)
     for line in lines:
         for tok in line.replace("|", " ").split():
             if "#" in tok and len(tok) > 3:
@@ -213,7 +213,7 @@ def parse_squad(frame, engine) -> list[dict]:
     Returns [{position, name, is_you, **stats}] for panels that parsed."""
     players = []
     for pos, frac in SQUAD_PANELS.items():
-        stats = parse_exfil_lines(engine.read_lines(_crop(frame, frac)))
+        stats = parse_exfil_lines(engine.read_lines(_crop(frame, frac), max_dim=0))
         if len(stats) < 3:      # panel not present (solo/duo) or unreadable
             continue
         players.append({"position": pos,

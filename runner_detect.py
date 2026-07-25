@@ -77,4 +77,7 @@ def capture_runner(cfg, engine) -> str:
     """One full-frame grab + OCR, scanned for the roster. Returns runner name."""
     from exfil_stats import _grab_full
     frame = _grab_full(cfg)
-    return detect_runner(engine.read_lines(frame))
+    # max_dim=0: full resolution. This is a one-off full-frame read; the size
+    # cap that bounds the 5 fps detection loop would shrink a 4K frame to 800px
+    # and the shell name becomes unreadable.
+    return detect_runner(engine.read_lines(frame, max_dim=0))
