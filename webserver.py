@@ -1063,7 +1063,7 @@ PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
   .skull { height:15px; vertical-align:middle; }
   .empty { color:var(--dim); padding:20px 4px; font:500 13px var(--ui); }
 
-  .ctrls { display:flex; gap:8px; margin-top:22px; max-width:260px; }
+  .ctrls { display:flex; gap:8px; margin-top:22px; max-width:400px; flex-wrap:wrap; }
   .mini { flex:1; background:var(--surface); color:var(--muted); border:1px solid var(--sborder);
     border-radius:8px; padding:9px 8px; font:500 11px var(--mono); letter-spacing:.06em; cursor:pointer; }
   .detect { margin-top:22px; background:var(--surface); border:1px solid var(--sborder);
@@ -1210,6 +1210,7 @@ PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
   </div>
   <div class="ctrls">
     <button class="mini" id="snd" onclick="toggleSound()">SOUND: OFF</button>
+    <button class="mini" id="autoplay" onclick="toggleAutoplay()">AUTO-PLAY: ON</button>
     <button class="mini" id="fs" onclick="goFull()">Full screen</button>
   </div>
   <div class="hint" id="updmsg" style="color:var(--dim)"></div>
@@ -1324,7 +1325,7 @@ PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
                    '<span class="t">'+r.time+'</span></div>';
           }).join('');
         }
-        if (reels.length > lastReels && lastReels >= 0) openReel(reels.length-1, reels[reels.length-1].label);
+        if (autoplayOn && reels.length > lastReels && lastReels >= 0) openReel(reels.length-1, reels[reels.length-1].label);
         lastReels = reels.length;
       } else { box.style.display='none'; lastReels = 0; }
       reelSig = sig;
@@ -1382,6 +1383,16 @@ PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
     document.getElementById('snd').textContent = 'SOUND: ' + (soundOn ? 'ON' : 'OFF');
     initAudio();
     if (soundOn) ding();  // audible confirmation it's unlocked + on
+  }
+
+  // Auto-play new match reels in the modal (per device — leave it on for the
+  // iPad, turn it off on the desktop so a reel doesn't pop up mid-session).
+  var autoplayOn = localStorage.getItem('reelAutoplay') !== 'off';
+  document.getElementById('autoplay').textContent = 'AUTO-PLAY: ' + (autoplayOn ? 'ON' : 'OFF');
+  function toggleAutoplay(){
+    autoplayOn = !autoplayOn;
+    localStorage.setItem('reelAutoplay', autoplayOn ? 'on' : 'off');
+    document.getElementById('autoplay').textContent = 'AUTO-PLAY: ' + (autoplayOn ? 'ON' : 'OFF');
   }
 
   function openReel(i, label){
