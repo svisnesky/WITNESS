@@ -65,8 +65,12 @@ def build_montage(session_dir, ffmpeg):
             f.write("file '%s'\n" % c.replace("'", "'\\''"))
 
     out = os.path.join(session_dir, "highlights_%s%s" % (os.path.basename(session_dir), ext))
-    cmd = [ffmpeg, "-y", "-f", "concat", "-safe", "0",
-           "-i", list_path, "-c", "copy", out]
+    # +genpts / make_zero: OBS Replay-Buffer files carry non-zero start
+    # timestamps; naive stream-copy concat inherits them and players cut clips
+    # short / jump ("the clip ends, then the end shows later"). Regenerate
+    # clean, monotonic timestamps while still stream-copying.
+    cmd = [ffmpeg, "-y", "-fflags", "+genpts", "-f", "concat", "-safe", "0",
+           "-i", list_path, "-c", "copy", "-avoid_negative_ts", "make_zero", out]
     try:
         r = subprocess.run(cmd, cwd=session_dir, capture_output=True, text=True,
                            creationflags=_render_flags())

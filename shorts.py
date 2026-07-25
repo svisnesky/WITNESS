@@ -130,6 +130,16 @@ def build_shorts(session_dir: str, ffmpeg: str, with_labels: bool = True,
     )
     if not clips:
         return
+    # Overlapping Replay-Buffer saves would render near-identical Shorts —
+    # keep only the last save of each overlapping cluster.
+    try:
+        from match_reel import drop_overlapping
+        deduped = drop_overlapping(
+            [{"path": os.path.join(session_dir, c), "kills": 1, "tag": ""}
+             for c in clips], ffmpeg)
+        clips = [os.path.basename(c["path"]) for c in deduped]
+    except Exception:
+        pass
     out_dir = os.path.join(session_dir, "shorts")
     os.makedirs(out_dir, exist_ok=True)
     if with_labels and not _has_drawtext(ffmpeg):

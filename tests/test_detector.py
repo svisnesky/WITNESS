@@ -134,3 +134,77 @@ if __name__ == "__main__":
             failed += 1
     print(f"\n{passed} passed, {failed} failed")
     sys.exit(1 if failed else 0)
+
+
+# --- multi-popup (double kill) counting ---------------------------------------
+
+def _mk(threshold=85, cooldown=0.0):
+    from detector import PopupDetector
+    return PopupDetector(trigger_phrases=["RUNNER DOWN", "PRECISION DOWN",
+                                          "FINISHER", "RUNNER ELIM"],
+                         phrase_match_threshold=threshold,
+                         absence_frames=3, confirm_frames=1,
+                         cooldown_seconds=cooldown)
+
+
+def test_double_kill_two_stacked_popups_fires_twice():
+    d = _mk()
+    # frame 1: both popups visible -> first fires immediately
+    evs = d.process_frame_all(["RUNNER DOWN +15 XP RUNNER DOWN +15 XP"], now=1.0)
+    assert len(evs) == 1
+    # frame 2: count of 2 sustained -> the second fires (count_confirm_frames=2)
+    evs2 = d.process_frame_all(["RUNNER DOWN +15 XP RUNNER DOWN +15 XP"], now=1.2)
+    assert len(evs2) == 1
+    # no third event while both linger
+    assert d.process_frame_all(["RUNNER DOWN +15 XP RUNNER DOWN +15 XP"], now=1.4) == []
+
+
+def test_second_popup_joining_later_fires():
+    d = _mk()
+    assert len(d.process_frame_all(["RUNNER DOWN +15 XP"], now=1.0)) == 1
+    assert d.process_frame_all(["RUNNER DOWN +15 XP"], now=1.2) == []
+    # a second down stacks while the first popup is still up
+    assert d.process_frame_all(["RUNNER DOWN +15 XP RUNNER DOWN +15 XP"], now=3.0) == []
+    evs = d.process_frame_all(["RUNNER DOWN +15 XP RUNNER DOWN +15 XP"], now=3.2)
+    assert len(evs) == 1     # sustained -> fires
+
+
+def test_stacked_assist_and_down_classify_separately():
+    import main
+    d = _mk()
+    line = ["RUNNER DOWN [ASSIST] +15 XP RUNNER DOWN +15 XP"]
+    evs = d.process_frame_all(line, now=1.0) + d.process_frame_all(line, now=1.2)
+    assert len(evs) == 2
+    tags = sorted(main.classify_event(e.raw_line) for e in evs)
+    assert tags == ["assist", "down"]
+
+
+def test_single_popup_never_double_fires():
+    d = _mk()
+    for i, t in enumerate([1.0, 1.2, 1.4, 1.6, 1.8, 2.0]):
+        evs = d.process_frame_all(["RUNNER DOWN +15 XP"], now=t)
+        assert len(evs) == (1 if i == 0 else 0)
+
+
+def test_flicker_does_not_double_fire():
+    d = _mk(cooldown=2.0)
+    assert len(d.process_frame_all(["RUNNER DOWN +15 XP"], now=1.0)) == 1
+    assert d.process_frame_all(["RUNNER D§WN garbled"], now=1.2) == []   # bad read
+    assert d.process_frame_all(["RUNNER DOWN +15 XP"], now=1.4) == []   # same popup back
+    assert d.process_frame_all(["RUNNER DOWN +15 XP"], now=1.6) == []
+
+
+def test_ai_elim_next_to_down_is_one_kill():
+    d = _mk()
+    line = ["UESC ELIM +5 XP UESC ELIM +5 XP RUNNER DOWN +15 XP"]
+    evs = d.process_frame_all(line, now=1.0) + d.process_frame_all(line, now=1.2) \
+        + d.process_frame_all(line, now=1.4)
+    assert len(evs) == 1
+
+
+def test_fused_ocr_tokens_still_fire_once():
+    d = _mk()
+    # OCR fuses 'RUNNER DOWN' into one token — token windows can't count it,
+    # but the whole-blob fallback must still fire the single kill
+    evs = d.process_frame_all(["RUNNERDOWN +15 XP"], now=1.0)
+    assert len(evs) == 1

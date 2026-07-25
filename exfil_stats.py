@@ -195,11 +195,15 @@ def parse_squad(frame, engine) -> list[dict]:
 def capture_exfil_stats(cfg, engine, save_dir: str = "", retries: int = 3):
     """Grab the exfil screen and OCR the stat panels. The panel animates in,
     so retry a few times and keep the first good parse. Returns
-    (your_stats, squad) — squad is every readable panel (trios: all three,
-    with gamertags). Saves the screen PNG once if save_dir given."""
+    (your_stats, squad, outcome) — squad is every readable panel (trios: all
+    three, with gamertags); outcome is 'survived'/'died'/'' read from the
+    EXFILTRATED/ELIMINATED header on the SAME frames (several chances beats
+    one later grab, when the screen may already have moved on). Saves the
+    screen PNG once if save_dir given."""
     saved = False
     best = {}
     squad = []
+    outc = ""
     for attempt in range(max(1, retries)):
         frame = _grab_full(cfg)
         if save_dir and not saved:
@@ -212,10 +216,22 @@ def capture_exfil_stats(cfg, engine, save_dir: str = "", retries: int = 3):
                 saved = True
             except Exception as e:
                 print(f"  [exfil] could not save screen: {e}")
+        if not outc:
+            try:
+                outc = outcome(engine.read_lines(_crop(frame, HEADER_FRAC)))
+            except Exception:
+                pass
         stats = _parse_panel(frame, engine)
         if len(stats) > len(best):
             best = stats
         # a good read has most of the labels; stop early once we have them
+        if len(best) >= 4 and outc:
+            pass  # fall through to squad + break below
+        elif len(best) >= 4 and attempt + 1 < max(1, retries):
+            # stats are done but the outcome header hasn't read yet — one more
+            # spin for the header before giving up on it
+            time.sleep(0.4)
+            continue
         if len(best) >= 4:
             if cfg.get("squad_stats", True):
                 try:
@@ -224,7 +240,7 @@ def capture_exfil_stats(cfg, engine, save_dir: str = "", retries: int = 3):
                     print(f"  [exfil] squad parse failed: {e}")
             break
         time.sleep(0.6)  # let the panel finish animating in
-    return best, squad
+    return best, squad, outc
 
 
 def log_squad_stats(base_dir: str, session_id: str, squad: list[dict],

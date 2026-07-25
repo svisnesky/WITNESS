@@ -215,9 +215,9 @@ def build_detector(cfg: dict):
 
 
 def detect_events(det, mode: str, lines, now: float) -> list:
-    """Detector interface -> list of KillEvents for this frame."""
-    ev = det.process_frame(lines, now)
-    return [ev] if ev else []
+    """Detector interface -> list of KillEvents for this frame. Can be more
+    than one: a double kill shows two popups stacked in the same frame."""
+    return det.process_frame_all(lines, now)
 
 
 def play_kill_sound(cfg: dict) -> None:
@@ -997,9 +997,9 @@ def _handle_kill(cfg, ev, s, on_count=None):
     # (HOT STREAK, RAMPAGE, MENACE, APEX), FIRST BLOOD, SHARPSHOOTER.
     if counts_as_kill and s.get("heat") is not None and cfg.get("heat_streaks", True):
         try:
-            for hev in s["heat"].on_kill(tag, clutch=bool(s.get("clutch"))):
+            for i, hev in enumerate(s["heat"].on_kill(tag, clutch=bool(s.get("clutch")))):
                 print(f"  [heat] {hev.label} (streak {hev.streak})")
-                _fire_heat(cfg, s, hev)
+                _fire_heat(cfg, s, hev, delay=i * 2.3)   # stagger stacked events
         except Exception as e:
             print(f"  [heat] error: {e}")
 
@@ -1092,10 +1092,15 @@ def _clutch_celebrate(cfg, s, kills):
         threading.Thread(target=speak, daemon=True).start()
 
 
-def _fire_heat(cfg, s, ev):
+def _fire_heat(cfg, s, ev, delay: float = 0.0):
     """Surface a heat/streak event: an on-screen toast + an optional voice
-    call-out. Suppressed during a clutch (the clutch owns that moment)."""
+    call-out. Suppressed during a clutch (the clutch owns that moment).
+    delay staggers multiple events from one kill (FIRST BLOOD + HEATING UP)
+    so their toasts/call-outs don't land on top of each other."""
     if s.get("clutch"):
+        return
+    if delay > 0:
+        threading.Timer(delay, _fire_heat, args=(cfg, s, ev)).start()
         return
     if s["web"] is not None:
         try:
@@ -1269,14 +1274,13 @@ def _maybe_capture_exfil(cfg, engine, lines, s, now):
                 save_dir = os.path.join(rec, "Marathon Sessions", s["session_id"])
         except Exception:
             pass
-        stats_d, squad = exfil_stats.capture_exfil_stats(cfg, engine, save_dir)
+        stats_d, squad, outc = exfil_stats.capture_exfil_stats(cfg, engine, save_dir)
         # Did we EXTRACT or die? Only claim survival when the screen actually
         # says so — otherwise leave it unknown and the recap stays neutral,
-        # rather than narrating a death as a clean exfil.
+        # rather than narrating a death as a clean exfil. The header is read
+        # from the same frames as the stats; one last fresh grab as fallback.
         stats_d = stats_d or {}
-        # Read the panel HEADER (EXFILTRATED vs ELIMINATED) — the kill-popup
-        # `lines` here never cover it, so grab the header strip directly.
-        stats_d["outcome"] = exfil_stats.read_outcome(cfg, engine)
+        stats_d["outcome"] = outc or exfil_stats.read_outcome(cfg, engine)
         print(f"  [exfil] outcome: {stats_d['outcome'] or 'unknown'}")
         # Death breaks the killstreak — mourn a real one.
         if stats_d.get("outcome") == "died" and s.get("heat") is not None:
@@ -1348,6 +1352,11 @@ def _build_match_reel_async(cfg, s, session_dir, stats_d):
             base = os.path.dirname(os.path.abspath(__file__))
             ffmpeg = montage.find_ffmpeg(base, cfg)
             out = os.path.join(session_dir, "reels", f"match_{match_num}.mp4")
+            # Dedupe overlapping buffer saves HERE so the kill headline, the
+            # announcer's POTG pick, and the reel itself all agree on the
+            # same clip list. (build_match_reel dedupes again — no-op then.)
+            clips = match_reel.drop_overlapping(
+                match_reel._normalize_clips(clips), ffmpeg)
             total_kills = sum(c.get("kills", 1) for c in clips)
             sub = []
             b1 = []
@@ -1659,7 +1668,9 @@ def _end_session(cfg, tags, start_monotonic, start_wall, dry_run, obs=None,
             base = os.path.dirname(os.path.abspath(__file__))
             try:
                 import encounters
-                victims, killers = encounters.boards(base)
+                # tonight's names only — the dossier must not claim last
+                # week's nemesis as tonight's standing threat
+                victims, killers = encounters.boards(base, session=session_id or "")
             except Exception:
                 victims, killers = [], []
             rep = witness_report.build_report(

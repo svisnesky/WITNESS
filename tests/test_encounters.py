@@ -83,3 +83,26 @@ def test_group_merges_ocr_spellings():
     board = _group(rows)
     assert board[0] == ("SOMEDUDE", 2, "2026-07-16 20:44:00")
     assert board[1] == ("OTHERGUY", 1, "2026-07-16 21:00:00")
+
+
+def test_boards_session_filter(tmp_path):
+    import encounters, csv, os
+    sdir = tmp_path / "stats"; sdir.mkdir()
+    with open(sdir / "encounters.csv", "w", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(["wall_time", "session_id", "direction", "name"])
+        w.writerow(["2026-07-23 21:00:00", "old", "victim", "SEARCH AND DESTROY"])
+        w.writerow(["2026-07-23 21:10:00", "old", "victim", "SEARCH AND DESTROY"])
+        w.writerow(["2026-07-24 21:00:00", "tonight", "victim", "KRYPT KING05"])
+        w.writerow(["2026-07-24 21:30:00", "tonight", "killed_by", "PANDORA"])
+    v_all, k_all = encounters.boards(str(tmp_path))
+    v_t, k_t = encounters.boards(str(tmp_path), session="tonight")
+    assert any("SEARCH" in n for n, _, _ in v_all)      # career keeps history
+    assert not any("SEARCH" in n for n, _, _ in v_t)    # tonight's dossier doesn't
+    assert v_t[0][0] == "KRYPT KING05" and k_t[0][0] == "PANDORA"
+
+
+def test_clean_name_drops_icon_scraps():
+    from encounters import _clean_name
+    assert _clean_name(["F4", "LORD", "QUACKS"]) == "LORD QUACKS"
+    assert _clean_name(["KRYPT", "KING05"]) == "KRYPT KING05"   # digits in real tags stay

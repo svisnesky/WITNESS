@@ -94,6 +94,8 @@ def _clean_name(tokens: list[str]) -> str:
             continue
         if tl.rstrip("m").isdigit():      # "10M" distance marker
             continue
+        if len(t) <= 2 and any(c.isdigit() for c in t):
+            continue                      # "F4", "4_" — icon/UI scraps, not tags
         keep.append(t)
     keep = keep[-3:] if keep else []      # tags are at most ~3 tokens
     name = " ".join(keep)
@@ -177,10 +179,11 @@ def log(base_dir: str, session_id: str, direction: str, name: str) -> None:
                     direction, name])
 
 
-def boards(base_dir: str):
-    """(victims, killers) for the Stats page — each a list of
-    (name, times, last_wall_time) sorted most-encountered first. Near-identical
-    OCR spellings merge; the most common spelling is displayed."""
+def boards(base_dir: str, session: str = ""):
+    """(victims, killers) — each a list of (name, times, last_wall_time) sorted
+    most-encountered first. Near-identical OCR spellings merge; the most common
+    spelling is displayed. session: restrict to ONE session's rows (the nightly
+    WITNESS Report must not claim last week's nemesis as tonight's)."""
     path = os.path.join(base_dir, "stats", "encounters.csv")
     if not os.path.exists(path):
         return [], []
@@ -189,6 +192,8 @@ def boards(base_dir: str):
         for r in csv.DictReader(f):
             name = (r.get("name") or "").strip()
             if not name:
+                continue
+            if session and (r.get("session_id") or "") != session:
                 continue
             row = (name, r.get("wall_time") or "")
             (victims if r.get("direction") == "victim" else killers).append(row)
