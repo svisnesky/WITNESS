@@ -1692,19 +1692,10 @@ def _end_session(cfg, tags, start_monotonic, start_wall, dry_run, obs=None,
         except Exception as e:
             print(f"(card error: {e})")
 
-    # Highlight montage of this session's clips (needs ffmpeg + organized clips).
     session_dir = ""
     if obs is not None and session_id:
         rec = obs.get_record_directory()
         session_dir = os.path.join(rec, "Marathon Sessions", session_id) if rec else ""
-    _rc(note="building session montage…")
-    if cfg.get("make_montage", True) and session_dir:
-        try:
-            import montage
-            base = os.path.dirname(os.path.abspath(__file__))
-            montage.build_montage(session_dir, montage.find_ffmpeg(base, cfg))
-        except Exception as e:
-            print(f"(montage error: {e})")
 
     # WITNESS Report — the end-of-night dossier (written case file + spoken).
     report_speech = ""   # narration text, reused as the session reel's voiceover
@@ -1747,6 +1738,32 @@ def _end_session(cfg, tags, start_monotonic, start_wall, dry_run, obs=None,
                     print(f"  [report] voice failed: {e}")
         except Exception as e:
             print(f"(witness report error: {e})")
+
+    _build_session_artifacts(cfg, session_dir, tags, rc=_rc,
+                             report_speech=report_speech)
+    _rc(status="ready", note="")   # everything built — safe to close now
+
+
+def _build_session_artifacts(cfg, session_dir, tags, rc=None, report_speech=""):
+    """The heavy end-of-session renders: montage, Play of the Night, Shorts,
+    and the session reel. Factored out of _end_session so an interrupted
+    build can be RESUMED at next launch (resume_unfinished_recap)."""
+    def _rc(**kw):
+        if rc is not None:
+            try:
+                rc(**kw)
+            except Exception:
+                pass
+
+    # Highlight montage of this session's clips (needs ffmpeg + organized clips).
+    _rc(note="building session montage…")
+    if cfg.get("make_montage", True) and session_dir:
+        try:
+            import montage
+            base = os.path.dirname(os.path.abspath(__file__))
+            montage.build_montage(session_dir, montage.find_ffmpeg(base, cfg))
+        except Exception as e:
+            print(f"(montage error: {e})")
 
     # Play of the Night — the single best clip across the WHOLE session, cut
     # into its own reel. Scoring is the same pick as per-match POTG (most kills,
@@ -1808,7 +1825,64 @@ def _end_session(cfg, tags, start_monotonic, start_wall, dry_run, obs=None,
         _build_session_reel_and_upload(cfg, session_dir, tags,
                                        report_speech=report_speech)
 
-    _rc(status="ready", note="")   # everything built — safe to close now
+
+def find_unfinished_session(record_dir: str) -> str:
+    """The most recent session folder whose recap build was cut off — it has
+    organized clips but no session_reel.mp4. '' when there's nothing to do.
+    Only the NEWEST clip-bearing session is considered: older gaps are treated
+    as deliberate (user may have turned renders off back then)."""
+    import montage
+    root = os.path.join(record_dir or "", "Marathon Sessions")
+    if not os.path.isdir(root):
+        return ""
+    for name in sorted(os.listdir(root), reverse=True):
+        sdir = os.path.join(root, name)
+        if not os.path.isdir(sdir):
+            continue
+        clips = [f for f in os.listdir(sdir)
+                 if f.lower().endswith(montage.VIDEO_EXTS)
+                 and not f.lower().startswith(("highlights", "session"))]
+        if not clips:
+            continue
+        if os.path.exists(os.path.join(sdir, "session_reel.mp4")):
+            return ""          # newest session is complete — nothing to resume
+        return sdir
+    return ""
+
+
+def resume_unfinished_recap(web=None) -> bool:
+    """Called at app launch: if the last session's recap build was interrupted
+    (closed mid-render), finish it in the background. Returns True if a resume
+    ran. Tags are reconstructed from the clip filenames."""
+    try:
+        cfg = load_config()
+        if not cfg.get("resume_recap", True):
+            return False
+        sdir = find_unfinished_session(cached_record_dir())
+        if not sdir:
+            return False
+        name = os.path.basename(sdir)
+        print(f"  [resume] last session's recap was interrupted — finishing {name}")
+
+        def rc(**kw):
+            if web is not None:
+                try:
+                    web.set_recap(**kw)
+                except Exception:
+                    pass
+
+        rc(status="building", report="",
+           note=f"finishing last session's recap ({name})…")
+        tags = []
+        for c in _session_clips_from_dir(sdir):
+            tags += [t for t in str(c.get("tag", "")).split("+") if t]
+        _build_session_artifacts(cfg, sdir, tags, rc=rc)
+        rc(status="ready", note="")
+        print(f"  [resume] {name} recap finished")
+        return True
+    except Exception as e:
+        print(f"  [resume] error: {e}")
+        return False
 
 
 def _session_clips_from_dir(session_dir: str):

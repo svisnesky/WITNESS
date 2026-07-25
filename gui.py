@@ -920,6 +920,10 @@ def _run_webview():
             pass
         sess = _WebSession(cfg)
         st.bind_control(sess.start, sess.stop)
+        # If the last session's recap build was interrupted (app closed while
+        # rendering), finish it now in the background — banner shows progress.
+        threading.Thread(target=lambda: app.resume_unfinished_recap(st),
+                         daemon=True).start()
         webview.create_window("WITNESS", f"http://localhost:{port}",
                               width=960, height=660, min_size=(820, 560),
                               background_color="#0e0e16")

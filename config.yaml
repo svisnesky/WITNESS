@@ -111,6 +111,8 @@ play_of_the_night: true     # at session end, cut the single best clip of the
                             # whole night into its own PLAY OF THE NIGHT reel
 loot_goblin_decal: true     # stamp a LOOT GOBLIN decal over the match's top
                             # looter on a decorated copy of the exfil screenshot
+resume_recap: true          # at launch, finish a recap build that got
+                            # interrupted (app closed while rendering)
 witness_report: true        # end-of-night WITNESS Report dossier (written case
                             # file saved to the session folder + printed)
 witness_report_voice: true  # also render a spoken dossier (uses the announcer
