@@ -60,6 +60,39 @@ def looks_like_exfil(lines) -> bool:
 # you extracted, red "ELIMINATED" if you died. It sits just above the stat rows.
 HEADER_FRAC = {"x": 0.32, "y": 0.37, "w": 0.36, "h": 0.12}
 
+# The header's exact vertical position varies with resolution / aspect / UI
+# scale, and a miss means the recap can't tell survival from death. So sweep a
+# few vertical bands and report which one hit (the log then tells us the right
+# crop for this rig).
+#
+# CRITICAL: every band stays inside YOUR panel's column (x 0.30-0.70). In trios
+# each squad member has their own header, so a band wide enough to reach the
+# left/right panels could read a TEAMMATE's ELIMINATED and report that you died
+# on a match you actually exfiled. Only the vertical extent is uncertain.
+#
+# Whole-line matching keeps the taller bands safe: the panel's 'Combatant
+# Eliminations' / 'Runner Eliminations' rows score ~64 against 'eliminated' as
+# full strings, far below the 82 threshold.
+_OUT_X, _OUT_W = SQUAD_PANELS["center"]["x"], SQUAD_PANELS["center"]["w"]
+OUTCOME_BANDS = (
+    ("header", HEADER_FRAC),                                        # y .37-.49
+    ("above", {"x": _OUT_X, "y": 0.26, "w": _OUT_W, "h": 0.16}),    # y .26-.42
+    ("sweep", {"x": _OUT_X, "y": 0.22, "w": _OUT_W, "h": 0.32}),    # y .22-.54
+    ("panel", PANEL_FRAC),                                          # y .46-.90
+)
+
+
+def outcome_from_frame(frame, engine) -> tuple:
+    """(outcome, band_name) — scan the outcome bands in order on one frame."""
+    for name, frac in OUTCOME_BANDS:
+        try:
+            res = outcome(engine.read_lines(_crop(frame, frac)))
+        except Exception:
+            continue
+        if res:
+            return res, name
+    return "", ""
+
 
 def _letters(s: str) -> str:
     return re.sub(r"[^a-z]", "", s.lower())
@@ -80,17 +113,14 @@ def outcome(lines) -> str:
 
 
 def read_outcome(cfg, engine) -> str:
-    """Grab the screen and read the outcome header strip. Returns 'survived',
-    'died', or '' (unknown -> the recap stays neutral)."""
+    """Grab a fresh frame and scan every outcome band. Returns 'survived',
+    'died', or '' (unknown -> the recap stays neutral). Used as the late
+    fallback when the capture-loop frames didn't yield an outcome."""
     try:
-        frame = _grab_full(cfg)
-        res = outcome(engine.read_lines(_crop(frame, HEADER_FRAC)))
+        res, band = outcome_from_frame(_grab_full(cfg), engine)
         if res:
-            return res
-        # header strip mis-calibrated for this resolution? the unambiguous
-        # 'exfiltrated' also only ever appears as the survived header, so a
-        # wider panel read can still catch a survival.
-        return outcome(engine.read_lines(_crop(frame, PANEL_FRAC)))
+            print(f"  [exfil] outcome '{res}' read from the {band} band (late)")
+        return res
     except Exception:
         return ""
 
@@ -217,10 +247,9 @@ def capture_exfil_stats(cfg, engine, save_dir: str = "", retries: int = 3):
             except Exception as e:
                 print(f"  [exfil] could not save screen: {e}")
         if not outc:
-            try:
-                outc = outcome(engine.read_lines(_crop(frame, HEADER_FRAC)))
-            except Exception:
-                pass
+            outc, band = outcome_from_frame(frame, engine)
+            if outc:
+                print(f"  [exfil] outcome '{outc}' read from the {band} band")
         stats = _parse_panel(frame, engine)
         if len(stats) > len(best):
             best = stats

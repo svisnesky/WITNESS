@@ -1297,15 +1297,30 @@ def _maybe_detect_runner(cfg, engine, lines, s):
         print(f"  [runner] detection error: {e}")
 
 
+EXFIL_REARM_FRAMES = 15   # ~3s of clear frames re-arms the next capture
+
+
 def _maybe_capture_exfil(cfg, engine, lines, s, now):
-    """When the EXFILTRATED summary screen is up, grab it once and log the
-    match stats + a kill-count audit. Re-arms after 3 minutes (next match)."""
-    if now - s.get("_last_exfil", -1e9) < 180:
-        return
+    """When the EXFILTRATED/ELIMINATED summary screen appears, grab it once and
+    log the match stats, outcome, W/L row, and kill-count audit.
+
+    EDGE-TRIGGERED on the screen appearing, re-armed once it's been gone for
+    EXFIL_REARM_FRAMES. It used to be a flat 180s timeout, which silently
+    skipped the whole end-of-match pass for any match that ended within three
+    minutes of the previous one (an early death — Marathon run times of 3:25
+    happen). A skipped pass lost that match's stats, outcome/W/L row, kill
+    reconciliation, match reel, match_tags reset, and FIRST BLOOD re-arm."""
     try:
         import exfil_stats
         if not exfil_stats.looks_like_exfil(lines):
+            s["_exfil_away"] = s.get("_exfil_away", 0) + 1
+            if s["_exfil_away"] >= EXFIL_REARM_FRAMES:
+                s["_exfil_seen"] = False      # screen gone — arm the next match
             return
+        s["_exfil_away"] = 0
+        if s.get("_exfil_seen"):
+            return                            # same appearance, already captured
+        s["_exfil_seen"] = True
         s["_last_exfil"] = now
         # Exfiling AS the last one standing is a clutch by definition.
         if s.get("clutch"):
@@ -1423,7 +1438,11 @@ def _build_match_reel_async(cfg, s, session_dir, stats_d):
 
     def work():
         time.sleep(30)
-        clips, s["match_clips"] = s["match_clips"][:], []
+        # Hand off the list BY REFERENCE, don't copy: clip-organize threads
+        # append here concurrently, and a copy-then-clear loses any clip that
+        # lands between the two steps (a last-second kill missing from a reel).
+        # Rebinding keeps late appends attached to the list we're about to use.
+        clips, s["match_clips"] = s["match_clips"], []
         if not clips:
             print(f"  [reel] match {match_num}: no clips this match, skipping reel")
             return
@@ -1623,7 +1642,9 @@ def _run_live_inner(cfg: dict, dry_run: bool = False, stop_event=None, on_count=
 
                 _check_coalesce(s)
 
-                if blocked and cfg.get("capture_exfil_stats", True):
+                # Every frame (not just suppressed ones): the handler is
+                # edge-triggered and needs the clear frames to re-arm.
+                if cfg.get("capture_exfil_stats", True):
                     _maybe_capture_exfil(cfg, engine, lines, s, loop_start)
                 if blocked and cfg.get("track_names", True):
                     _maybe_capture_killer(cfg, engine, lines, s, loop_start)
