@@ -55,6 +55,62 @@ def stable_phrase(raw: str) -> str:
     return " ".join(x for x in keep if x).upper().strip()
 
 
+def variant_group(raw: str, raws, threshold: int = 62) -> list:
+    """Every sighting that looks like the SAME popup as `raw`.
+
+    Many games print the victim's name in the kill popup ("KNOCKED DOWN
+    xXTTVGamerXx"). Each kill then reads as a different line, so the wizard sees
+    them as unrelated candidates — and a phrase derived from one of them matches
+    that one player and nobody else, which is a profile that silently detects
+    nothing. Grouping the variants is what exposes the part that actually
+    repeats."""
+    from rapidfuzz import fuzz
+    base = _norm(raw)
+    out = []
+    for other in raws:
+        o = _norm(other)
+        if not o:
+            continue
+        if o == base or fuzz.ratio(base, o) >= threshold or fuzz.partial_ratio(base, o) >= 88:
+            out.append(other)
+    return out or [raw]
+
+
+def common_phrase(raws) -> str:
+    """The trigger phrase shared by every variant, in order — per-kill text
+    (victim names) drops out because it isn't in all of them."""
+    seqs = [stable_phrase(r).split() for r in raws if stable_phrase(r)]
+    seqs = [s for s in seqs if s]
+    if not seqs:
+        return ""
+    if len(seqs) == 1:
+        return " ".join(seqs[0])
+    common = set(seqs[0])
+    for s in seqs[1:]:
+        common &= set(s)
+    if not common:
+        return ""
+    # keep the first variant's ordering
+    return " ".join(t for t in seqs[0] if t in common).strip()
+
+
+def looks_name_bearing(phrase: str, variants_seen: int) -> bool:
+    """True when a single-sighting phrase probably still carries a victim name,
+    so the wizard can say so instead of writing a profile that never matches."""
+    if variants_seen > 1:
+        return False          # variants already removed anything per-kill
+    toks = phrase.split()
+    if len(toks) < 2:
+        return False
+    tail = toks[-1]
+    # A trailing token that isn't a short common kill word is suspect: real
+    # triggers read "RUNNER DOWN" / "KNOCKED DOWN" / "YOU KILLED".
+    KILLWORDS = {"DOWN", "DOWNED", "KILLED", "KILL", "ELIMINATED", "ELIM",
+                 "FINISHER", "HEADSHOT", "KNOCKED", "TAKEDOWN", "NEUTRALIZED",
+                 "DEFEATED", "YOU", "ENEMY", "TARGET", "PRECISION", "ASSIST"}
+    return tail.upper() not in KILLWORDS
+
+
 def has_reward(raw: str) -> bool:
     t = raw.lower()
     return ("xp" in t) or (re.search(r"\+\s*\d", t) is not None)
@@ -176,6 +232,56 @@ theme:
 """
 
 
+def verify_profile(cfg, phrases, region, reward, seconds: int = 45,
+                   engine=None, grab=None, on_tick=None) -> dict:
+    """Prove the profile before the user trusts it: watch the REAL detect region
+    with the REAL detector and count kills.
+
+    Without this the wizard's promise is unfalsifiable — you'd only find out a
+    profile was wrong after playing a whole session that recorded nothing, which
+    is exactly how a feature like this earns a reputation for empty promises.
+    Returns {'fired': n, 'reads': [...], 'frames': n}."""
+    from detector import PopupDetector
+    if engine is None:
+        from ocr import OCREngine
+        engine = OCREngine(cfg.get("ocr_engine", "easyocr"),
+                           cfg.get("ocr_upscale", 3),
+                           max_dim=cfg.get("ocr_max_dim", 800))
+    if grab is None:
+        from exfil_stats import _grab_full, _crop
+        def grab(c):
+            return _crop(_grab_full(c), region)
+
+    det = PopupDetector(
+        trigger_phrases=phrases,
+        phrase_match_threshold=cfg.get("popup_match_threshold", 85),
+        absence_frames=cfg.get("popup_absence_frames", 3),
+        confirm_frames=cfg.get("popup_confirm_frames", 1),
+        require_reward=reward,
+        cooldown_seconds=cfg.get("popup_cooldown_seconds", 2.0),
+    )
+    fired, reads, frames = 0, [], 0
+    interval = 1.0 / max(1, int(cfg.get("poll_fps", 5)))
+    t_end = time.monotonic() + seconds
+    while time.monotonic() < t_end:
+        start = time.monotonic()
+        try:
+            lines = engine.read_lines(grab(cfg))
+        except Exception:
+            lines = []
+        frames += 1
+        if lines:
+            reads.append(" | ".join(lines))
+        got = det.process_frame_all(lines, now=start)
+        fired += len(got)
+        if got and on_tick:
+            on_tick(fired)
+        rest = interval - (time.monotonic() - start)
+        if rest > 0:
+            time.sleep(rest)
+    return {"fired": fired, "reads": reads[-8:], "frames": frames}
+
+
 def slugify(name: str) -> str:
     return re.sub(r"[^a-z0-9]+", "_", name.lower()).strip("_") or "game"
 
@@ -241,15 +347,68 @@ def run(cfg) -> None:
         return
     chosen = [cands[i] for i in idx]
 
-    phrases = sorted({stable_phrase(c["raw"]) for c in chosen if stable_phrase(c["raw"])})
+    # Derive each phrase from ALL sightings of the same popup, not just the one
+    # line picked: if the game prints the victim's name, only the invariant part
+    # survives. (A phrase with a name in it matches one player and nobody else.)
+    all_raws = [e["raw"] for e in seen.values()]
+    phrases, group_bboxes, name_risk = [], [], []
+    for c in chosen:
+        variants = variant_group(c["raw"], all_raws)
+        ph = common_phrase(variants) or stable_phrase(c["raw"])
+        if not ph:
+            continue
+        phrases.append(ph)
+        if len(variants) > 1:
+            print(f"  saw this popup {len(variants)}x with differing text "
+                  f"— the repeating part is {ph!r}")
+            for v in variants:                # widen the region over variants
+                e = seen.get(_norm(v))
+                if e:
+                    group_bboxes.append(e["bbox"])
+        if looks_name_bearing(ph, len(variants)):
+            name_risk.append(ph)
+    phrases = sorted(set(phrases))
     print(f"\nTrigger phrase(s) I derived: {phrases}")
+    if name_risk:
+        print("  NOTE: I only saw that popup once, so I can't tell a victim's")
+        print("  name from the words that always appear. If any of these ends")
+        print("  in a player's name, retype just the part that never changes")
+        print(f"  (e.g. 'KNOCKED DOWN Someguy' -> 'KNOCKED DOWN'): {name_risk}")
     extra = _ask("Look right? (Enter = yes, or type corrected phrases "
                  "separated by commas): ")
     if extra:
         phrases = sorted({p.strip().upper() for p in extra.split(",") if p.strip()})
 
-    region = region_around([c["bbox"] for c in chosen])
+    region = region_around([c["bbox"] for c in chosen] + group_bboxes)
     reward = all(has_reward(c["raw"]) for c in chosen)
+
+    # PROVE IT before writing anything. A profile that looks plausible but
+    # never fires is worse than no profile — the user finds out after a wasted
+    # session, and the feature reads as an empty promise.
+    print()
+    print("Let's prove it works before you rely on it.")
+    print(f"Press Enter, alt-tab back in, and get ONE more kill. I'll watch the")
+    print(f"region I just measured with the real detector for 45 seconds.")
+    if _ask("Press Enter to verify (or type 'skip'): ").lower() != "skip":
+        res = verify_profile(cfg, phrases, region, reward, seconds=45)
+        if res["fired"]:
+            print(f"\n  CONFIRMED — detected {res['fired']} kill(s). "
+                  "This profile works.")
+        else:
+            print(f"\n  NOTHING DETECTED in {res['frames']} frames.")
+            if res["reads"]:
+                print("  What I could read in that region:")
+                for r in res["reads"]:
+                    print(f"    {r!r}")
+                print("  The popup is in the region but the phrase didn't match —")
+                print("  re-run the wizard and correct the phrase when asked.")
+            else:
+                print("  The region read NOTHING, so the popup is probably")
+                print("  outside it (or no kill happened in the window).")
+                print("  Re-run the wizard and pick the kill line again.")
+            if _ask("  Save this profile anyway? [y/N]: ").lower() not in ("y", "yes"):
+                print("  Nothing written. Run the wizard again when ready.")
+                return
 
     os.makedirs(os.path.join(BASE, "games"), exist_ok=True)
     path = os.path.join(BASE, "games", f"{slug}.yaml")
