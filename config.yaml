@@ -111,6 +111,12 @@ play_of_the_night: true     # at session end, cut the single best clip of the
                             # whole night into its own PLAY OF THE NIGHT reel
 loot_goblin_decal: true     # stamp a LOOT GOBLIN decal over the match's top
                             # looter on a decorated copy of the exfil screenshot
+reel_tight_cuts: true       # reels start ~8s before each clip's first kill
+                            # instead of playing the whole 30s buffer (kill
+                            # timing recorded per clip at save time)
+reel_preroll_seconds: 8     # how much lead-in to keep before the kill
+reel_manual_preroll_seconds: 18  # lead-in for manual +1 kills (the button
+                            # press lands well after the actual kill)
 resume_recap: true          # at launch, finish a recap build that got
                             # interrupted (app closed while rendering)
 witness_report: true        # end-of-night WITNESS Report dossier (written case

@@ -848,10 +848,18 @@ def _prepare_medals_async(cfg, s):
     threading.Thread(target=work, daemon=True).start()
 
 
-def _clip_ready_callback(s, tag, count, kills=1):
+def _clip_ready_callback(s, tag, count, kills=1, kill_epochs=None,
+                         saved_epoch=0.0):
     """Callback for rename_clip_async: collect the clip (with its kill count,
-    for Play of the Game) and put it on the iPad as an instant replay."""
+    for Play of the Game), record WHEN its kills happened (sidecar, for tight
+    reel cuts), and put it on the iPad as an instant replay."""
     def on_done(dest):
+        if saved_epoch and kill_epochs:
+            try:
+                import match_reel
+                match_reel.write_kill_sidecar(dest, saved_epoch, kill_epochs)
+            except Exception:
+                pass
         s["match_clips"].append({"path": dest, "kills": kills, "tag": tag})
         _register_replay_async(s, dest, tag, count)
         # Manual saves already flashed a prominent chip on the button press —
@@ -928,10 +936,15 @@ def _flush_coalesce(s):
             announcer.play_medal(s["medal_sounds"], n_downs)
     if s["obs"].save_replay():
         s["last_save"] = time.monotonic()
+        saved_epoch = time.time()   # the buffer ends ~here; kills sit earlier
         if s["organize"]:
             rename_clip_async(s["obs"], s["session_id"], combo_tag, counts[0],
-                              on_done=_clip_ready_callback(s, combo_tag, counts[0],
-                                                           kills=clip_kills))
+                              on_done=_clip_ready_callback(
+                                  s, combo_tag, counts[0], kills=clip_kills,
+                                  kill_epochs=[{"epoch": p.get("epoch", 0),
+                                                "manual": p.get("manual", False)}
+                                               for p in pending],
+                                  saved_epoch=saved_epoch))
     s["_coalesce_pending"] = []
     s["_coalesce_deadline"] = 0.0
 
@@ -1007,7 +1020,11 @@ def _handle_kill(cfg, ev, s, on_count=None):
     if "_coalesce_pending" not in s:
         s["_coalesce_pending"] = []
         s["_coalesce_deadline"] = 0.0
-    s["_coalesce_pending"].append({"tag": tag, "count": count})
+    s["_coalesce_pending"].append({
+        "tag": tag, "count": count,
+        "epoch": time.time(),                              # when the kill landed
+        "manual": ev.raw_line.startswith("MANUAL"),        # +1 presses lag the kill
+    })
     s["_coalesce_deadline"] = now + coalesce_secs
 
     if should_overlay(cfg, ev.raw_line) and not s.get("clutch"):
@@ -1090,6 +1107,13 @@ def _clutch_celebrate(cfg, s, kills):
             except Exception as e:
                 print(f"  [clutch] call-out failed: {e}")
         threading.Thread(target=speak, daemon=True).start()
+
+
+def _reel_cut_kwargs(cfg) -> dict:
+    """Tight-cut settings for build_match_reel, from config."""
+    return {"tight_cuts": bool(cfg.get("reel_tight_cuts", True)),
+            "preroll": float(cfg.get("reel_preroll_seconds", 8.0)),
+            "manual_preroll": float(cfg.get("reel_manual_preroll_seconds", 18.0))}
 
 
 def _reconcile_missed(match_tags, stats_d) -> int:
@@ -1427,7 +1451,8 @@ def _build_match_reel_async(cfg, s, session_dir, stats_d):
                 "MATCH HIGHLIGHTS", total_kills, sub,
                 os.path.join(base, "witness_wordmark.png"),
                 music_volume=cfg.get("reel_music_volume", 0.08),
-                music_tracks=tracks, theme=cfg.get("theme"))
+                music_tracks=tracks, theme=cfg.get("theme"),
+                **_reel_cut_kwargs(cfg))
             if ok:
                 print(f"  [reel] match {match_num} highlights -> {out}")
                 best = out          # upload the announced version if we make one
@@ -1791,7 +1816,8 @@ def _build_session_artifacts(cfg, session_dir, tags, rc=None, report_speech=""):
                         best.get("kills", 1), sub,
                         os.path.join(base, "witness_wordmark.png"),
                         music_volume=cfg.get("reel_music_volume", 0.08),
-                        music_tracks=tracks, theme=cfg.get("theme")):
+                        music_tracks=tracks, theme=cfg.get("theme"),
+                        **_reel_cut_kwargs(cfg)):
                     print(f"Play of the Night -> {out}")
         except Exception as e:
             print(f"(play of the night error: {e})")
@@ -1937,7 +1963,8 @@ def _build_session_reel_and_upload(cfg, session_dir, tags, report_speech=""):
             clips, out, ffmpeg, "SESSION HIGHLIGHTS", total, sub,
             os.path.join(base, "witness_wordmark.png"),
             music_volume=cfg.get("reel_music_volume", 0.08),
-            music_tracks=tracks, theme=cfg.get("theme"))
+            music_tracks=tracks, theme=cfg.get("theme"),
+            **_reel_cut_kwargs(cfg))
         if not ok:
             print("  [session reel] build failed")
             return

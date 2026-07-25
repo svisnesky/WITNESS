@@ -130,6 +130,67 @@ def _save_time(path: str):
     return h * 3600 + mi * 60 + s
 
 
+def write_kill_sidecar(clip_path: str, saved_epoch: float, kills: list) -> None:
+    """Record WHEN the kills inside a clip happened: <clip>.json with the save
+    moment and each kill's wall-clock epoch (+ whether it was a manual +1).
+    Reels use this to cut straight to the action instead of playing the whole
+    30s buffer. Best-effort — a reel without a sidecar just isn't trimmed."""
+    import json
+    try:
+        with open(clip_path + ".json", "w", encoding="utf-8") as f:
+            json.dump({"saved_epoch": float(saved_epoch),
+                       "kills": [{"epoch": float(k.get("epoch", 0)),
+                                  "manual": bool(k.get("manual", False))}
+                                 for k in (kills or []) if k.get("epoch")]}, f)
+    except OSError:
+        pass
+
+
+def _load_sidecar(clip_path: str):
+    import json
+    try:
+        with open(clip_path + ".json", encoding="utf-8") as f:
+            d = json.load(f)
+        return float(d.get("saved_epoch", 0)), list(d.get("kills", []))
+    except Exception:
+        return 0.0, []
+
+
+def _trim_start(dur, offsets_from_end, preroll: float,
+                min_len: float = 6.0) -> float:
+    """In-point (seconds) that starts a clip ~preroll before its EARLIEST kill.
+    0.0 = don't trim. offsets_from_end: seconds between each kill and the end
+    of the clip (save moment)."""
+    if not dur or not offsets_from_end:
+        return 0.0
+    sane = [o for o in offsets_from_end if 0 <= o <= dur + 30]
+    if not sane:
+        return 0.0
+    start = dur - max(sane) - preroll
+    start = min(start, dur - min_len)   # never leave less than min_len
+    if start < 1.0:                     # not worth a cut
+        return 0.0
+    return round(start, 2)
+
+
+def clip_trim_start(clip: dict, dur, ffmpeg, preroll: float = 8.0,
+                    manual_preroll: float = 18.0) -> float:
+    """Trim in-point for a reel clip from its sidecar (plus the sidecars of any
+    clips merged into it by drop_overlapping). Manual +1 kills get a longer
+    preroll — the button press lands well after the actual kill."""
+    saved, kills = _load_sidecar(clip.get("path", ""))
+    if not saved:
+        return 0.0
+    for fp in clip.get("_folded_paths", []) or []:
+        _s, more = _load_sidecar(fp)
+        kills += more
+    if not kills:
+        return 0.0
+    offsets = [saved - k.get("epoch", 0) for k in kills]
+    pre = manual_preroll if any(k.get("manual") for k in kills) else preroll
+    return _trim_start(dur, offsets, pre)
+
+
 def drop_overlapping(clips, ffmpeg) -> list[dict]:
     """Merge consecutive clips whose Replay-Buffer footage overlaps.
 
@@ -165,6 +226,10 @@ def drop_overlapping(clips, ffmpeg) -> list[dict]:
             folded["kills"] = int(merged.get("kills", 1)) + int(nxt.get("kills", 1))
             tags = [t for t in (merged.get("tag", ""), nxt.get("tag", "")) if t]
             folded["tag"] = "+".join(dict.fromkeys("+".join(tags).split("+")))
+            # keep the swallowed clip's path so its kill-timing sidecar still
+            # informs the survivor's trim point
+            folded["_folded_paths"] = (merged.get("_folded_paths", [])
+                                       + [merged["path"]])
             merged = folded
             t_cur = t_nxt
             j += 1
@@ -291,7 +356,8 @@ def build_match_reel(clips, out_path: str, ffmpeg: str,
                      music_volume: float = 0.08,
                      music_tracks: list[str] | None = None,
                      transitions: bool = True, chyrons: bool = True,
-                     theme: dict | None = None) -> bool:
+                     theme: dict | None = None, tight_cuts: bool = True,
+                     preroll: float = 8.0, manual_preroll: float = 18.0) -> bool:
     """Title card [+ POTG card] + clips [+ music bed] -> one mp4.
 
     music_volume is 0-1 (0.08 = quiet bed under the game audio).
@@ -351,8 +417,17 @@ def build_match_reel(clips, out_path: str, ffmpeg: str,
         tag_txt = c["tag"].replace("+", " + ").replace("_", " ").upper()
         label = (f"PLAY OF THE GAME - {tag_txt}" if c is potg
                  else f"KILL {c.get('n', '?')} - {tag_txt}")
-        segments.append({"kind": "clip", "path": c["path"],
-                         "dur": probe_duration(c["path"], ffmpeg), "label": label})
+        dur = probe_duration(c["path"], ffmpeg)
+        # Tight cuts: start ~preroll before the earliest kill instead of
+        # playing the whole 30s buffer (kill timing from the clip's sidecar).
+        ss = (clip_trim_start(c, dur, ffmpeg, preroll, manual_preroll)
+              if tight_cuts else 0.0)
+        if ss and dur:
+            print(f"  [reel] tight cut: {os.path.basename(c['path'])} "
+                  f"starts at {ss:.0f}s (was {dur:.0f}s long)")
+            dur = dur - ss
+        segments.append({"kind": "clip", "path": c["path"], "ss": ss,
+                         "dur": dur, "label": label})
     if have_end_card:
         segments.append({"kind": "card", "path": end_png, "dur": END_SECONDS})
 
@@ -375,6 +450,8 @@ def build_match_reel(clips, out_path: str, ffmpeg: str,
         if seg["kind"] == "card":
             cmd += ["-loop", "1", "-framerate", "60", "-t", str(seg["dur"]), "-i", seg["path"],
                     "-f", "lavfi", "-t", str(seg["dur"]), "-i", "anullsrc=r=48000:cl=stereo"]
+        elif seg.get("ss"):
+            cmd += ["-ss", str(seg["ss"]), "-i", seg["path"]]
         else:
             cmd += ["-i", seg["path"]]
 
