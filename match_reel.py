@@ -451,7 +451,14 @@ def build_match_reel(clips, out_path: str, ffmpeg: str,
             cmd += ["-loop", "1", "-framerate", "60", "-t", str(seg["dur"]), "-i", seg["path"],
                     "-f", "lavfi", "-t", str(seg["dur"]), "-i", "anullsrc=r=48000:cl=stereo"]
         elif seg.get("ss"):
-            cmd += ["-ss", str(seg["ss"]), "-i", seg["path"]]
+            # -t pins the segment to EXACTLY the duration the xfade offsets
+            # below were computed from (full - ss). Without it, input seeking
+            # can land a little off that mark and every later transition drifts,
+            # which reads as clips cutting early / jumping.
+            trim = ["-ss", f"{seg['ss']:.3f}"]
+            if seg.get("dur"):
+                trim += ["-t", f"{seg['dur']:.3f}"]
+            cmd += trim + ["-i", seg["path"]]
         else:
             cmd += ["-i", seg["path"]]
 
