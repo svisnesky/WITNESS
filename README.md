@@ -85,8 +85,26 @@ screen -> OCR -> detector -> OBS replay save -> clips, reels, shorts, dashboard
   to what was detected. The screen itself is saved as a PNG.
 - **Vertical Shorts** — each clip also renders as a 1080x1920 short (blurred
   background, centered gameplay, "KILL #3 - FINISHER" label), upload-ready.
-- **Session recap** — montage, shareable match-card PNG, and an HTML recap at
-  session end.
+- **Session recap** — montage, shareable match-card PNG, Play of the Night
+  (the single best clip of the session, cut into its own reel), and an HTML
+  recap at session end. Closed the app mid-build? It finishes at next launch.
+- **Tight cuts** — reels start seconds before each kill, not 30 seconds of
+  buffer lead-in. Kill timing is recorded with every clip.
+- **Scoreboard-accurate counting** — the exfil screen's own numbers reconcile
+  the kill count every match; a missed detection self-corrects. Double kills
+  count as two (stacked popups are counted, not just seen).
+- **Killstreaks** — FIRST BLOOD, HEATING UP, ON FIRE, RAMPAGE, MENACE, APEX,
+  plus SHARPSHOOTER for precision chains: on-screen toasts, voiced call-outs,
+  and a live streak chip on the dashboard. Streaks persist until you die.
+- **The WITNESS Report** — an end-of-night dossier in the app's ominous
+  narrator voice: confirmed kills, prime target, standing threat, verdict.
+  Shown in the Archive and spoken over the session reel's intro.
+- **W/L record** — EXFILTRATED vs ELIMINATED is read off the summary screen:
+  survival rate, deaths, and your best exfil streak on the Stats page.
+- **Menace Report** — who you've downed and who keeps downing you, gamertags
+  read straight off the kill feed, with MENACED / NEMESIS callouts.
+- **Detection health** — a live fps/VRAM readout and a one-click Benchmark
+  that measures OCR speed on your machine and tells you the headroom.
 
 ## Console players?
 
