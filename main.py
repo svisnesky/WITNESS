@@ -158,6 +158,53 @@ _RECORD_DIR_CACHE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                  ".record_dir")
 
 
+def free_gb(path: str):
+    """Free space in GB on the drive holding `path`, or None if unknown."""
+    try:
+        import shutil as _sh
+        probe = path
+        while probe and not os.path.isdir(probe):
+            parent = os.path.dirname(probe)
+            if parent == probe:
+                return None
+            probe = parent
+        if not probe:
+            return None
+        return _sh.disk_usage(probe).free / (1024 ** 3)
+    except Exception:
+        return None
+
+
+def check_disk_space(cfg, record_dir: str, web=None, state=None) -> None:
+    """Warn when the clip drive is running out. A session is 1-2 GB of clips,
+    reels and Shorts, and a full drive fails SILENTLY in the worst way: OBS
+    can't write clips, every render dies, and the night is lost with only
+    scattered ffmpeg errors to show for it. Warns once per session per level."""
+    if not record_dir:
+        return
+    gb = free_gb(record_dir)
+    if gb is None:
+        return
+    low = float(cfg.get("disk_warn_gb", 10))
+    crit = float(cfg.get("disk_critical_gb", 3))
+    level = "critical" if gb < crit else ("low" if gb < low else "")
+    if not level:
+        return
+    seen = state.setdefault("_disk_warned", set()) if state is not None else set()
+    if level in seen:
+        return
+    seen.add(level)
+    msg = (f"only {gb:.1f} GB free on the clip drive"
+           + (" — clips and reels WILL start failing" if level == "critical"
+              else " (a session runs 1-2 GB)"))
+    print(f"  [disk] {'CRITICAL' if level == 'critical' else 'WARNING'}: {msg}")
+    if web is not None:
+        try:
+            web.notice(f"LOW DISK — {gb:.1f} GB free", "alert")
+        except Exception:
+            pass
+
+
 def cache_record_dir(path: str) -> None:
     """Remember OBS's recording folder so the Archive can find past sessions
     on the very next app open (before START is pressed)."""
@@ -813,6 +860,9 @@ def _setup_session(cfg, dry_run):
                 web.record_dir = rd
                 if rd:            # remember it so the archive works on next open
                     cache_record_dir(rd)
+                    gb = free_gb(rd)
+                    if gb is not None:
+                        print(f"Clip drive: {gb:.1f} GB free")
             except Exception:
                 pass
             web.set_running(True)
@@ -824,6 +874,9 @@ def _setup_session(cfg, dry_run):
     s = {
         "obs": obs,
         "web": web,
+        # OBS's output folder — where clips land (used for the disk-space guard).
+        # cached_record_dir() covers the case where the web dashboard is off.
+        "record_dir": (getattr(web, "record_dir", "") or cached_record_dir()),
         "count": 0,
         "last_save": 0.0,
         "organize": cfg.get("organize_clips", True) and not dry_run,
@@ -1693,6 +1746,10 @@ def _run_live_inner(cfg: dict, dry_run: bool = False, stop_event=None, on_count=
                                             "alert")
                     except Exception:
                         pass
+                    # Clips + reels + Shorts run 1-2 GB a session; a full drive
+                    # fails silently and costs the whole night.
+                    check_disk_space(cfg, s.get("record_dir", ""),
+                                     web=s["web"], state=s)
 
                 elapsed = time.monotonic() - loop_start
                 perf["iters"] += 1

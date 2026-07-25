@@ -117,6 +117,10 @@ reel_tight_cuts: true       # reels start ~8s before each clip's first kill
 reel_preroll_seconds: 8     # how much lead-in to keep before the kill
 reel_manual_preroll_seconds: 18  # lead-in for manual +1 kills (the button
                             # press lands well after the actual kill)
+disk_warn_gb: 10            # warn when the clip drive drops below this (GB).
+                            # A session is 1-2 GB of clips/reels/Shorts and a
+                            # full drive fails silently — no clips, no renders.
+disk_critical_gb: 3         # louder warning: saves are about to start failing
 resume_recap: true          # at launch, finish a recap build that got
                             # interrupted (app closed while rendering)
 witness_report: true        # end-of-night WITNESS Report dossier (written case
