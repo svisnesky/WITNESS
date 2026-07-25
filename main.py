@@ -1765,7 +1765,7 @@ def _end_session(cfg, tags, start_monotonic, start_wall, dry_run, obs=None,
             print(f"(witness report error: {e})")
 
     _build_session_artifacts(cfg, session_dir, tags, rc=_rc,
-                             report_speech=report_speech)
+                             report_speech=report_speech)   # writes .recap_done
     _rc(status="ready", note="")   # everything built — safe to close now
 
 
@@ -1851,6 +1851,16 @@ def _build_session_artifacts(cfg, session_dir, tags, rc=None, report_speech=""):
         _build_session_reel_and_upload(cfg, session_dir, tags,
                                        report_speech=report_speech)
 
+    # Completion marker: tells the launch-time resume check this session's
+    # recap finished (covers configs where the session reel itself is off,
+    # and stops a failed reel build from re-rendering on every boot).
+    if session_dir:
+        try:
+            with open(os.path.join(session_dir, ".recap_done"), "w") as f:
+                f.write(time.strftime("%Y-%m-%d %H:%M:%S"))
+        except OSError:
+            pass
+
 
 def find_unfinished_session(record_dir: str) -> str:
     """The most recent session folder whose recap build was cut off — it has
@@ -1870,7 +1880,8 @@ def find_unfinished_session(record_dir: str) -> str:
                  and not f.lower().startswith(("highlights", "session"))]
         if not clips:
             continue
-        if os.path.exists(os.path.join(sdir, "session_reel.mp4")):
+        if (os.path.exists(os.path.join(sdir, ".recap_done"))
+                or os.path.exists(os.path.join(sdir, "session_reel.mp4"))):
             return ""          # newest session is complete — nothing to resume
         return sdir
     return ""
@@ -1902,7 +1913,7 @@ def resume_unfinished_recap(web=None) -> bool:
         tags = []
         for c in _session_clips_from_dir(sdir):
             tags += [t for t in str(c.get("tag", "")).split("+") if t]
-        _build_session_artifacts(cfg, sdir, tags, rc=rc)
+        _build_session_artifacts(cfg, sdir, tags, rc=rc)   # writes .recap_done
         rc(status="ready", note="")
         print(f"  [resume] {name} recap finished")
         return True
