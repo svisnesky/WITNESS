@@ -903,12 +903,12 @@ def _register_replay_async(s, clip_path, tag, count):
 def _kill_count(tags) -> int:
     """How many REAL kills a list of event tags represents. Downs/precision are
     kills; a standalone finisher/elim (not landing on one of those downs) is a
-    kill; a manual +1 is a kill. Assists are NOT kills (someone else's), and a
-    finisher on your own down is the same kill, not a new one."""
+    kill; a +1 KILL press is a kill (it arrives tagged 'kill'). Assists are
+    NOT kills (someone else's), a finisher on your own down is the same kill,
+    and a SAVE CLIP 'manual' save is a kept moment — not a kill at all."""
     n_downs = sum(1 for t in tags if t in ("down", "precision"))
     n_finish = sum(1 for t in tags if t in ("finisher", "elim", "kill"))
-    n_manual = sum(1 for t in tags if t == "manual")
-    return n_downs + max(0, n_finish - n_downs) + n_manual
+    return n_downs + max(0, n_finish - n_downs)
 
 
 def _flush_coalesce(s):
@@ -1532,7 +1532,8 @@ def _check_manual_clip(s):
                 if s["organize"]:
                     rename_clip_async(s["obs"], s["session_id"], "manual",
                                       s["count"],
-                                      on_done=_clip_ready_callback(s, "manual", s["count"]))
+                                      on_done=_clip_ready_callback(s, "manual", s["count"],
+                                                                   kills=0))
             else:
                 print("  [manual clip: replay save FAILED — is OBS's Replay "
                       "Buffer running?]")

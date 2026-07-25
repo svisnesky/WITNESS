@@ -16,7 +16,8 @@ def test_kill_count_excludes_assists_and_own_finisher():
     assert main._kill_count(["down", "finisher"]) == 1  # own finisher = same kill
     assert main._kill_count(["down", "down"]) == 2      # a real double
     assert main._kill_count(["finisher"]) == 1          # standalone finisher counts
-    assert main._kill_count(["manual"]) == 1
+    assert main._kill_count(["manual"]) == 0   # SAVE CLIP = kept moment, not a kill
+    assert main._kill_count(["kill"]) == 1     # +1 KILL button arrives as 'kill'
     # the reported regression: 2 downs + 2 assists is 2 kills, not 4
     assert main._kill_count(["down", "down", "assist", "assist"]) == 2
 
