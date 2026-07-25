@@ -183,6 +183,7 @@ class LiveState:
         self.version = ""     # current build (short sha), shown bottom-right
         self.detect = {}      # live detection health (fps/device/vram), from perf monitor
         self.recap = {}       # end-of-session build status ({status, note, report})
+        self.heat = {}        # live killstreak ({streak, label, color})
         self._cfg = None       # live config dict (bound per session)
         self._save_cb = None   # persists changed settings to disk
 
@@ -196,6 +197,7 @@ class LiveState:
             self.reels.clear()
             self.replays.clear()
             self.tag_counts = {}
+            self.heat = {}
 
     def request_kill(self):
         with self._lock:
@@ -296,6 +298,11 @@ class LiveState:
         with self._lock:
             self.detect = dict(info or {})
 
+    def set_heat(self, info: dict):
+        """Live killstreak state for the dashboard chip ({} = no streak)."""
+        with self._lock:
+            self.heat = dict(info or {})
+
     def set_recap(self, **kw):
         """End-of-session build status, so the dashboard can show 'building…' /
         'ready' and the WITNESS Report instead of relying on a browser popup."""
@@ -315,6 +322,19 @@ class LiveState:
             self.tag_counts[tag] = self.tag_counts.get(tag, 0) + 1
             self.events.appendleft(
                 {"time": time.strftime("%H:%M:%S"), "tag": tag, "text": (text or "")[:60]})
+
+    def annotate_last_kill(self, name: str):
+        """Append the victim's gamertag to the newest kill row in the feed
+        ('RUNNER DOWN +15 XP  ·  KRYPT KING05'). The name arrives a beat after
+        the kill (separate feed OCR pass), so it's stitched on afterwards."""
+        if not name:
+            return
+        with self._lock:
+            for e in self.events:                     # newest first
+                if e.get("tag") in ("down", "precision", "finisher", "kill"):
+                    if "·" not in e.get("text", ""):
+                        e["text"] = f"{e['text']}  ·  {name}"[:80]
+                    return
 
     def notice(self, text, tag="alert"):
         """A feed-only line (streamer alerts etc.) — shows in the kill feed
@@ -344,6 +364,7 @@ class LiveState:
                     "update": self.update_msg, "version": self.version,
                     "detect": dict(self.detect),
                     "recap": dict(self.recap),
+                    "heat": dict(self.heat),
                     "tags": dict(self.tag_counts),
                     "events": list(self.events),
                     "reels": [{"i": i, "label": r["label"], "time": r["time"]}
@@ -407,6 +428,25 @@ def _session_recaps(base_dir: str):
     return out
 
 
+def _dir_size(path: str) -> int:
+    total = 0
+    for root, _dirs, files in os.walk(path):
+        for f in files:
+            try:
+                total += os.path.getsize(os.path.join(root, f))
+            except OSError:
+                pass
+    return total
+
+
+def _fmt_size(n: float) -> str:
+    for unit in ("B", "KB", "MB", "GB", "TB"):
+        if n < 1024 or unit == "TB":
+            return f"{n:.0f} {unit}" if unit in ("B", "KB") else f"{n:.1f} {unit}"
+        n /= 1024.0
+    return ""
+
+
 def _archive_page(base_dir: str, record_dir: str) -> str:
     root = os.path.join(record_dir, "Marathon Sessions") if record_dir else ""
     sessions = []
@@ -461,7 +501,8 @@ def _archive_page(base_dir: str, record_dir: str) -> str:
                           if f.lower().endswith((".mkv", ".mp4"))
                           and not f.startswith(("highlights", "session_reel")))
             sessions.append({"id": name, "media": media, "clips": n_clips,
-                             "recaps": recaps.get(name, []), "report": report})
+                             "recaps": recaps.get(name, []), "report": report,
+                             "size": _dir_size(sdir)})
 
     blocks = []
     for s in sessions:
@@ -479,12 +520,18 @@ def _archive_page(base_dir: str, record_dir: str) -> str:
         report_html = (f'<h4>WITNESS Report</h4><pre class="report">{_esc(s["report"])}</pre>'
                        if s.get("report") else "")
         blocks.append(f"""<details><summary><b>{_esc(date)}</b>
-          <span class="meta">{s['clips']} clip{'s' if s['clips'] != 1 else ''}</span></summary>
+          <span class="meta">{s['clips']} clip{'s' if s['clips'] != 1 else ''}
+          &middot; {_fmt_size(s['size'])}</span></summary>
           <h4>Matches</h4>{rec_html}{report_html}<h4>Watch / share</h4>{rows}</details>""")
 
     body = "".join(blocks) or ('<p class="rc none">No sessions found yet'
                                + ("" if record_dir else " — press START once so the app learns your OBS folder")
                                + ".</p>")
+    if sessions:
+        total = sum(s["size"] for s in sessions)
+        body += (f'<p class="sub" style="margin-top:14px">{len(sessions)} '
+                 f'session{"s" if len(sessions) != 1 else ""} &middot; '
+                 f'{_fmt_size(total)} on disk</p>')
     return ARCHIVE_PAGE.replace("%%BODY%%", body)
 
 
@@ -1037,6 +1084,9 @@ PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
     background:var(--muted); }
   .status.live .dot { background:var(--green); box-shadow:0 0 10px var(--green); }
   .sub { color:var(--dim); font:500 13px var(--ui); margin-top:5px; }
+  .heatchip { display:inline-block; margin-top:9px; padding:5px 11px;
+    border:1px solid; border-radius:7px; font:700 11px var(--mono);
+    letter-spacing:.08em; }
   @media (prefers-reduced-motion: no-preference){
     .big.pop { animation:pop .5s ease-out; }
     @keyframes pop { 0%{ transform:scale(1);} 30%{ transform:scale(1.12);
@@ -1213,6 +1263,7 @@ PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
         <div class="killmeta">
           <div class="status" id="status"><span class="dot"></span><span id="statustext">CONNECTING</span></div>
           <div class="sub" id="sub">&nbsp;</div>
+          <div class="heatchip" id="heatchip" style="display:none"></div>
         </div>
       </div>
       <svg class="spark" id="spark" viewBox="0 0 460 90" preserveAspectRatio="none" aria-hidden="true">
@@ -1336,6 +1387,13 @@ PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
       var st = document.querySelector('.status');
       st.className = 'status' + (d.running ? ' live' : '');
       document.getElementById('livepill').className = 'livepill' + (d.running ? ' on' : '');
+      var hc = document.getElementById('heatchip'), h = d.heat || {};
+      if (d.running && h.streak >= 2){
+        hc.style.display = 'inline-block';
+        var hcol = h.color || '#f5a623';
+        hc.style.color = hcol; hc.style.borderColor = hcol;
+        hc.textContent = 'STREAK ' + h.streak + (h.label ? ' \u00b7 ' + h.label : '');
+      } else { hc.style.display = 'none'; }
       document.getElementById('statustext').textContent = d.running ? 'WATCHING' : 'READY';
       document.getElementById('sub').textContent =
         d.running && d.elapsed ? 'SESSION  ' + fmtElapsed(d.elapsed)

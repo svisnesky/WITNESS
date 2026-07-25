@@ -79,8 +79,13 @@ class HeatTracker:
 
     def peak_label(self) -> str:
         """The highest tier the CURRENT streak has reached (for status/UI)."""
-        label = ""
-        for thr, _key, tier_label, _c, _co in self.tiers:
+        return self.peak()[0]
+
+    def peak(self) -> tuple:
+        """(label, color) of the highest tier the current streak has reached,
+        or ('', '') below the first tier — feeds the dashboard streak chip."""
+        label, color = "", ""
+        for thr, _key, tier_label, tier_color, _co in self.tiers:
             if self.streak >= thr:
-                label = tier_label
-        return label
+                label, color = tier_label, tier_color
+        return label, color

@@ -1013,6 +1013,10 @@ def _handle_kill(cfg, ev, s, on_count=None):
             for i, hev in enumerate(s["heat"].on_kill(tag, clutch=bool(s.get("clutch")))):
                 print(f"  [heat] {hev.label} (streak {hev.streak})")
                 _fire_heat(cfg, s, hev, delay=i * 2.3)   # stagger stacked events
+            if s["web"] is not None:                     # live streak chip
+                label, color = s["heat"].peak()
+                s["web"].set_heat({"streak": s["heat"].streak,
+                                   "label": label, "color": color})
         except Exception as e:
             print(f"  [heat] error: {e}")
 
@@ -1187,6 +1191,11 @@ def _scan_feed_names(cfg, engine, s, expect):
             encounters.log(base, s["session_id"], direction, name)
             verb = "you downed" if direction == "victim" else "downed by"
             print(f"  [names] {verb}: {name}")
+            if direction == "victim" and s["web"] is not None:
+                try:   # stitch the victim's tag onto the kill row on the dashboard
+                    s["web"].annotate_last_kill(name)
+                except Exception:
+                    pass
             watch = encounters.watch_hit(
                 name, cfg.get("streamer_watchlist", encounters.DEFAULT_WATCHLIST))
             if watch:
@@ -1332,6 +1341,8 @@ def _maybe_capture_exfil(cfg, engine, lines, s, now):
             if hev:
                 print(f"  [heat] {hev.label} (was {hev.streak})")
                 _fire_heat(cfg, s, hev)
+            if s["web"] is not None:
+                s["web"].set_heat({})     # chip off — the streak is gone
         # Audit THIS match's detected kills vs the game's count, then reset the
         # per-match tally for the next match.
         match_tags = s.get("match_tags", [])
