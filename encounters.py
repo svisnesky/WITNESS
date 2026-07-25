@@ -39,6 +39,23 @@ FEED_REGION = {"x": 0.0, "y": 0.52, "w": 0.34, "h": 0.22}
 # Feed/UI words that are never part of a gamertag.
 _JUNK = {"pinged", "downed", "give", "up", "xp", "self", "revive", "you"}
 
+# Feed text that reads like a gamertag but isn't a player — Marathon abilities/
+# ultimates and objective labels that print in the kill feed (e.g. the Destroyer
+# ult "SEARCH AND DESTROY"). Normalized to letters-only, upper. config's
+# name_ignore adds to this at runtime.
+_NOT_NAMES = {"SEARCHANDDESTROY"}
+
+
+def _name_key(name: str) -> str:
+    return "".join(c for c in name.upper() if c.isalpha())
+
+
+def _is_player(name: str, ignore=frozenset()) -> bool:
+    """False for known ability/game-text strings so they don't pollute the
+    Menace Report / prime target."""
+    key = _name_key(name)
+    return bool(key) and key not in _NOT_NAMES and key not in ignore
+
 _DEDUP_SECONDS = 45.0   # same name+direction within this window = same event
 
 
@@ -83,20 +100,22 @@ def _clean_name(tokens: list[str]) -> str:
     return name if len(name.replace(" ", "")) >= 3 else ""
 
 
-def extract(rows, gamertag: str) -> list[tuple[str, str]]:
+def extract(rows, gamertag: str, ignore=frozenset()) -> list[tuple[str, str]]:
     """Scan feed rows for lines containing your tag. Returns
     [('victim'|'killed_by', name)] — victim when your tag leads the line
-    (you were the killer), killed_by when it ends it."""
+    (you were the killer), killed_by when it ends it. Ability/game-text
+    strings (see _is_player) are dropped."""
     out = []
     for row in rows:
         toks = _tokens(row)
         s, e = _find_tag_span(toks, gamertag)
         if s < 0:
             continue
-        before = _clean_name(toks[:s])
+        before = _clean_name(toks[:s]) if _is_player(_clean_name(toks[:s]), ignore) else ""
         # names read closest-first on each side; before-side wants the
         # NEAREST tokens too, so re-clean only the tail
         after = _clean_name(toks[e:e + 4])
+        after = after if _is_player(after, ignore) else ""
         if after and not before:
             out.append(("victim", after))
         elif before and not after:
@@ -118,7 +137,8 @@ def capture(cfg, engine) -> list[tuple[str, str]]:
                  int(r["x"] * w):int((r["x"] + r["w"]) * w)]
     rows = (engine.read_rows(crop) if hasattr(engine, "read_rows")
             else engine.read_lines(crop))
-    return extract(rows, cfg.get("gamertag") or DEFAULT_GAMERTAG)
+    ignore = frozenset(_name_key(x) for x in (cfg.get("name_ignore") or []))
+    return extract(rows, cfg.get("gamertag") or DEFAULT_GAMERTAG, ignore=ignore)
 
 
 def watch_hit(name: str, watchlist) -> str:
