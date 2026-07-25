@@ -290,6 +290,9 @@ class TeachWizard:
     def step_pick(self, seen, frames):
         self._clear()
         self._set_step(3)
+        # Keep every sighting, not just the ranked shortlist: _confirm() groups
+        # variants of the chosen popup across ALL of them to strip victim names.
+        self.seen = seen
         self.candidates = teach.rank_candidates(seen, frames)[:12]
         self.selected = set()
         if not self.candidates:
@@ -365,9 +368,27 @@ class TeachWizard:
         if not chosen:
             return
         self.chosen = chosen
-        self.phrases = sorted({teach.stable_phrase(c["raw"])
-                               for c in chosen if teach.stable_phrase(c["raw"])})
-        self.region = teach.region_around([c["bbox"] for c in chosen])
+        # Derive each trigger from ALL sightings of the same popup, so a victim
+        # name printed in it ("KNOCKED DOWN xXTTVGamerXx") drops out — keeping it
+        # would match one player and silently never fire again. Shares teach.py's
+        # logic so the GUI and console wizards can't drift apart.
+        all_raws = [e["raw"] for e in (self.seen or {}).values()] or \
+                   [c["raw"] for c in self.candidates]
+        phrases, bboxes, self.name_risk = [], [], []
+        for c in chosen:
+            variants = teach.variant_group(c["raw"], all_raws)
+            ph = teach.common_phrase(variants) or teach.stable_phrase(c["raw"])
+            if not ph:
+                continue
+            phrases.append(ph)
+            for v in variants:                    # widen region over variants
+                e = (self.seen or {}).get(teach._norm(v))
+                if e:
+                    bboxes.append(e["bbox"])
+            if teach.looks_name_bearing(ph, len(variants)):
+                self.name_risk.append(ph)
+        self.phrases = sorted(set(phrases))
+        self.region = teach.region_around([c["bbox"] for c in chosen] + bboxes)
         self.reward = all(teach.has_reward(c["raw"]) for c in chosen)
         self.step_review()
 
@@ -390,7 +411,20 @@ class TeachWizard:
                       bg=PANEL, fg=TEXT, insertbackground=ACCENT, relief="flat",
                       highlightthickness=1, highlightbackground=LINE,
                       highlightcolor=ACCENT)
-        pe.pack(fill="x", ipady=9, pady=(6, 18))
+        pe.pack(fill="x", ipady=9, pady=(6, 6))
+        # Only one sighting of the popup: we can't tell a victim's name from the
+        # words that always appear, and a name here means the profile matches
+        # that one player and nothing else. Say so plainly.
+        if getattr(self, "name_risk", None):
+            tk.Label(self.body,
+                     text="Heads up: I only saw that popup once. If it ends in a "
+                          "player's name, delete the name and keep only the words "
+                          "that appear on EVERY kill "
+                          "(e.g. \"KNOCKED DOWN Someguy\" → \"KNOCKED DOWN\").",
+                     bg=BG, fg=RED, font=SUB, wraplength=470, justify="left",
+                     anchor="w").pack(anchor="w", pady=(0, 12))
+        else:
+            tk.Frame(self.body, bg=BG, height=6).pack()
 
         info = tk.Frame(self.body, bg=PANEL, highlightbackground=LINE,
                         highlightthickness=1)

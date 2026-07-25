@@ -62,3 +62,16 @@ def test_region_widens_over_variants():
     wide = (0.36, 0.70, 0.64, 0.74)
     r = teach.region_around([narrow, wide])
     assert r["x"] <= 0.36 and r["x"] + r["w"] >= 0.64
+
+
+def test_gui_shares_the_name_stripping_logic():
+    """Stan uses the GUI button, not the console wizard. The GUI had its own
+    derivation, so a fix applied only to teach.run() would never reach him."""
+    import os
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    with open(os.path.join(root, "teach_gui.py"), encoding="utf-8") as f:
+        src = f.read()
+    assert "teach.variant_group(" in src, "GUI still derives from one sighting"
+    assert "teach.common_phrase(" in src
+    assert "looks_name_bearing(" in src, "GUI never warns about a baked-in name"
+    assert "self.seen = seen" in src, "GUI drops the sightings it needs"
