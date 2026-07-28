@@ -38,6 +38,40 @@ SKIP = {"settings_override.yaml", "session_log.csv"}
 SKIP_IF_EXISTS = {"config.yaml"}
 
 
+def _why(exc) -> str:
+    """Plain-English reason a fetch failed, so the log points at the real cause.
+
+    'offline?' used to cover every failure, which is actively misleading: the
+    most likely cause is the repo being PRIVATE. The updater fetches
+    anonymously on purpose (that is what lets it work on any user's machine),
+    and GitHub answers 404 for a private repo rather than 403, so it looks
+    identical to a missing repo."""
+    import urllib.error
+    if isinstance(exc, urllib.error.HTTPError):
+        code = exc.code
+        if code == 404:
+            return (f"GitHub returned 404 for {REPO}. The repo is PRIVATE or the "
+                    "name changed. The updater fetches anonymously, so the repo "
+                    "must be public for auto-update to work.")
+        if code in (403, 429):
+            reset = ""
+            try:
+                import time as _t
+                epoch = int(exc.headers.get("X-RateLimit-Reset", "0"))
+                if epoch:
+                    reset = (" Resets at "
+                             + _t.strftime('%H:%M', _t.localtime(epoch)) + ".")
+            except Exception:
+                pass
+            if str(exc.headers.get("X-RateLimit-Remaining", "")) == "0":
+                return f"GitHub API rate limit reached (60/hour).{reset}"
+            return f"GitHub refused the request (HTTP {code}).{reset}"
+        return f"GitHub returned HTTP {code}."
+    if isinstance(exc, urllib.error.URLError):
+        return f"no connection to GitHub ({exc.reason})."
+    return f"{type(exc).__name__}: {exc}"
+
+
 def _get(url: str, timeout: float = 10) -> bytes:
     req = urllib.request.Request(url, headers={"User-Agent": "Marathon-Kill-Recorder"})
     with urllib.request.urlopen(req, timeout=timeout) as r:
@@ -63,7 +97,7 @@ def check_and_update(base_dir: str) -> tuple[bool, str]:
     try:
         latest = json.loads(_get(f"{API}/commits/{BRANCH}", timeout=6))["sha"]
     except Exception as e:
-        return False, f"Update check skipped (offline?): {type(e).__name__}"
+        return False, f"Update check skipped — {_why(e)}"
 
     ver_path = os.path.join(base_dir, VERSION_FILE)
     local = ""
