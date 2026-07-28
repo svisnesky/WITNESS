@@ -15,8 +15,28 @@ def test_missed_kills_added():
     assert main._reconcile_missed(["down", "assist"], GOOD) == 2
 
 
-def test_manual_counts_toward_detected():
-    assert main._reconcile_missed(["down", "kill", "precision"], GOOD) == 0
+def test_precision_and_elims_do_not_count_as_downs():
+    """The game's "Runners Downed" must be compared against DOWN events only.
+    Counting precision (a modifier on the same runner) and kill (an elim) on our
+    side inflated us past the game's number, so `missed` was always negative and
+    this whole function was dead code — it could never credit a real miss."""
+    # 1 down detected, game says 3 downs -> 2 genuinely missed.
+    assert main._reconcile_missed(["down", "kill", "precision"], GOOD) == 2
+
+
+def test_manual_plus_one_is_not_credited_twice():
+    """Tapping +1 KILL exists to fix a down the OCR missed. It arrives tagged
+    'manual_kill' (NOT 'kill', which is a RUNNER ELIM) so it counts on the down
+    side. Otherwise reconciliation would still see a missing down and add the
+    same kill again."""
+    # Game says 3 downs. OCR got 1, Stan pressed +1 twice for the other two.
+    assert main._reconcile_missed(
+        ["down", "manual_kill", "manual_kill"], GOOD) == 0
+    # And a manual press is classified apart from a real elim popup.
+    assert main.classify_event("MANUAL +1 (added from iPad)") == "manual_kill"
+    assert main.classify_event("RUNNER ELIM +10 XP") == "kill"
+    # It still counts as a real kill.
+    assert main._kill_count(["manual_kill"]) == 1
 
 
 def test_never_subtracts():

@@ -347,6 +347,13 @@ def classify_event(raw_line: str) -> str:
     from detector import _normalize, phrase_matches
     b = _normalize(raw_line)  # brackets stripped, so "[ASSIST]" -> "assist"
 
+    # A manual "+1 KILL" press is you correcting a DOWN the OCR missed, so it
+    # must be distinguishable from a real RUNNER ELIM popup: both used to tag
+    # 'kill', which meant _reconcile_missed counted the press as an elim, still
+    # saw a missing down, and credited the same kill a SECOND time.
+    if raw_line.startswith("MANUAL"):
+        return "manual_kill"
+
     def has(p):
         return phrase_matches(p, b, 78)
 
@@ -1008,7 +1015,10 @@ def _kill_counts(tags) -> tuple:
     downs == count of 'down' popups (precision excluded, it is a modifier),
     elims == count of 'kill'/'elim'/'finisher' popups. Assists count for
     nothing."""
-    downs = sum(1 for t in tags if t == "down")
+    # A manual +1 press counts on the DOWN side: it exists to credit a down the
+    # OCR missed, so it has to satisfy the same ground-truth comparison the game's
+    # "Runners Downed" drives — otherwise reconciliation adds it a second time.
+    downs = sum(1 for t in tags if t in ("down", "manual_kill"))
     elims = sum(1 for t in tags if t in ELIM_TAGS)
     return downs, elims
 
@@ -1090,7 +1100,7 @@ def _handle_kill(cfg, ev, s, on_count=None):
     # The two numbers the game's exfil panel reports, tracked separately so they
     # can be audited against it (precision excluded — it is a modifier).
     if not is_assist:
-        if tag == "down":
+        if tag in ("down", "manual_kill"):
             s["downs"] = s.get("downs", 0) + 1
         elif tag in ELIM_TAGS:
             s["elims"] = s.get("elims", 0) + 1
@@ -1280,7 +1290,12 @@ def _reconcile_missed(match_tags, stats_d) -> int:
         return 0
     if len([k for k in (stats_d or {}) if k != "outcome"]) < 3:
         return 0                          # weak panel read — don't trust it
-    ours = sum(1 for t in (match_tags or []) if t in ("down", "precision", "kill"))
+    # Compare LIKE WITH LIKE: the game's "Runners Downed" against our DOWN
+    # events. This used to count down+precision+kill, so our side was inflated
+    # past the game's number and `missed` was always negative — the function was
+    # dead code that could never credit a genuinely missed kill. Shares
+    # _kill_counts so it can't drift from the audit again.
+    ours, _elims = _kill_counts(match_tags or [])
     missed = game_downs - ours
     return missed if 0 < missed <= 10 else 0
 
@@ -1535,6 +1550,7 @@ def _maybe_capture_exfil(cfg, engine, lines, s, now):
             missed = _reconcile_missed(match_tags, stats_d)
             for _ in range(missed):
                 s["count"] += 1
+                s["downs"] = s.get("downs", 0) + 1   # keep the split total honest
                 s["session_tags"].append("down")
                 if s["web"] is not None:
                     s["web"].record(s["count"], "down",

@@ -222,7 +222,8 @@ def parse_squad(frame, engine) -> list[dict]:
     return players
 
 
-def capture_exfil_stats(cfg, engine, save_dir: str = "", retries: int = 3):
+def capture_exfil_stats(cfg, engine, save_dir: str = "", retries: int = 3,
+                        empty_retries: int = 7, settle: float = 0.8):
     """Grab the exfil screen and OCR the stat panels. The panel animates in,
     so retry a few times and keep the first good parse. Returns
     (your_stats, squad, outcome) — squad is every readable panel (trios: all
@@ -234,7 +235,18 @@ def capture_exfil_stats(cfg, engine, save_dir: str = "", retries: int = 3):
     best = {}
     squad = []
     outc = ""
-    for attempt in range(max(1, retries)):
+    # The trigger fires on the EXFILTRATED/ELIMINATED header, which appears
+    # BEFORE the stats panel is populated. On 2026-07-27 two of six matches came
+    # back with a completely EMPTY panel — not a partial read — so all three
+    # attempts landed before it existed, and those matches lost their
+    # ground-truth audit entirely. So: settle briefly first, and if the panel is
+    # still empty keep spinning up to empty_retries (the match is over by then,
+    # nothing is being missed). A partial read still stops at `retries`.
+    if settle > 0:
+        time.sleep(settle)
+    limit = max(1, retries)
+    attempt = 0
+    while attempt < limit:
         frame = _grab_full(cfg)
         if save_dir and not saved:
             try:
@@ -268,7 +280,17 @@ def capture_exfil_stats(cfg, engine, save_dir: str = "", retries: int = 3):
                 except Exception as e:
                     print(f"  [exfil] squad parse failed: {e}")
             break
-        time.sleep(0.6)  # let the panel finish animating in
+        attempt += 1
+        if not best and attempt >= limit and limit < max(retries, empty_retries):
+            # Nothing at all yet — the panel hasn't rendered. Keep waiting.
+            limit = max(retries, empty_retries)
+            print(f"  [exfil] stats panel not up yet — waiting "
+                  f"(attempt {attempt}/{limit})")
+        if attempt < limit:
+            time.sleep(0.6)  # let the panel finish animating in
+    if not best:
+        print("  [exfil] stats panel never read — no ground-truth audit for "
+              "this match")
     return best, squad, outc
 
 
