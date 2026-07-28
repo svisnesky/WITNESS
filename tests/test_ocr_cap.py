@@ -19,16 +19,31 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
 def test_cap_resolution():
-    e = ocr.OCREngine(max_dim=800)
-    assert e._cap(None) == 800     # engine default (detection loop)
-    assert e._cap(0) == 0          # explicit uncapped
-    assert e._cap(1600) == 1600
+    e = ocr.OCREngine(max_dim=800, oneoff_max_dim=1600)
+    assert e._cap(None) == 800      # engine default (detection loop)
+    assert e._cap(0) == 1600        # one-off reads: bigger, still BOUNDED
+    assert e._cap(2400) == 2400     # explicit
 
 
-def test_uncapped_keeps_full_resolution():
+def test_one_off_reads_are_bounded_not_unlimited():
+    """A 4K one-off read must stay readable AND bounded. Truly uncapped drove
+    torch's reserved VRAM to ~11-12 GB on a 16 GB card, exhausting it alongside
+    the game/OBS and tanking frame rate (measured 11,992 MB vs 1,394 MB)."""
+    e = ocr.OCREngine()
+    cap = e._cap(0)
+    assert 1200 <= cap <= 2000, "one-off cap outside the readable/bounded window"
     img = np.zeros((2160, 3840, 3), np.uint8)
-    assert ocr.preprocess(img, 1, False, 0).shape[:2] == (2160, 3840)
-    assert ocr.preprocess(img, 1, False, 800).shape[:2] == (450, 800)
+    out = ocr.preprocess(img, 1, False, cap)
+    assert max(out.shape[:2]) == cap
+    # 4K popup text ~34px must survive the downscale enough to read
+    assert 34 * (out.shape[1] / 3840) >= 12
+    # and cost a fraction of a full frame
+    assert out.shape[0] * out.shape[1] < 0.3 * (3840 * 2160)
+
+
+def test_vram_helpers_are_safe_without_cuda():
+    assert ocr.reserved_vram_mb() >= 0
+    assert ocr.release_vram() >= 0
 
 
 def test_detection_loop_still_capped():

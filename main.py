@@ -662,10 +662,14 @@ def _start_perf_monitor(cfg, perf, mon_stop, get_kills, web=None):
     if not cfg.get("perf_log", True):
         return
     every = max(2, int(cfg.get("perf_interval_seconds", 5)))
-    # Off by default: EasyOCR's CUDA cache is bounded, not leaking, so forcing
-    # empty_cache() just makes torch re-allocate (cudaMalloc) and can SLOW the
-    # next OCR. Only turn on if a perf log actually shows GPU memory climbing.
+    # Blind periodic release is off (it just makes torch re-allocate), but a
+    # CEILING is not optional: torch's caching allocator never shrinks, so one
+    # burst of large one-off reads keeps its peak reserved for the whole session.
+    # Measured 11-12 GB reserved on a 16 GB card, which exhausted VRAM alongside
+    # the game/OBS/Discord and made the driver spill to system RAM — that is what
+    # "awful frames" actually was. Over the ceiling, hand the cache back.
     release_gpu = bool(cfg.get("perf_release_gpu", False))
+    vram_ceiling = float(cfg.get("vram_ceiling_mb", 2500))
 
     def run():
         import csv
@@ -710,7 +714,18 @@ def _start_perf_monitor(cfg, perf, mon_stop, get_kills, web=None):
             if t % 30 < every:
                 grew = f" (+{rss - base_rss:.0f}MB)" if rss - base_rss > 50 else ""
                 print(f"  [perf] RAM {rss/1024:.1f}GB{grew} · OCR {avg_ms:.0f}ms · {fps:.1f} fps")
-            # periodically hand unused CUDA cache back so RAM/VRAM doesn't creep
+            # Ceiling: reserved VRAM this high starves the game.
+            if vram_ceiling and gpu > vram_ceiling:
+                try:
+                    import ocr as _ocr
+                    freed = _ocr.release_vram()
+                    if freed > 50:
+                        print(f"  [perf] VRAM was {gpu:.0f}MB (over the "
+                              f"{vram_ceiling:.0f}MB ceiling) — released "
+                              f"{freed:.0f}MB back to the driver")
+                except Exception:
+                    pass
+            # optional blind periodic release (off by default)
             if release_gpu and time.monotonic() - last_gpu_release > 60:
                 last_gpu_release = time.monotonic()
                 try:
@@ -1410,6 +1425,12 @@ def _maybe_capture_exfil(cfg, engine, lines, s, now):
         except Exception:
             pass
         stats_d, squad, outc = exfil_stats.capture_exfil_stats(cfg, engine, save_dir)
+        try:   # that burst (outcome bands x retries + panels + name plates) is
+               # the biggest allocator spike of a match — give the cache back
+            import ocr as _ocr
+            _ocr.release_vram()
+        except Exception:
+            pass
         # Did we EXTRACT or die? Only claim survival when the screen actually
         # says so — otherwise leave it unknown and the recap stays neutral,
         # rather than narrating a death as a clean exfil. The header is read

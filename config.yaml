@@ -130,6 +130,11 @@ witness_report_voice: true  # also render a spoken dossier (uses the announcer
 witness_report_on_reel: true  # narrate the SESSION REEL with the spoken dossier
                             # (that's where it's actually useful — mixed over the
                             # reel's intro so watching the recap plays the report)
+vram_ceiling_mb: 2500      # hand torch's cached VRAM back when it exceeds this.
+                            # The allocator never shrinks on its own, so one burst
+                            # of big reads keeps its peak reserved all session —
+                            # measured 11-12GB on a 16GB card, which starves the
+                            # game (that WAS the 'awful frames' bug). 0 disables.
 perf_release_gpu: false     # force-release CUDA cache every ~60s. OFF by default:
                             # EasyOCR's cache is bounded, not leaking, so releasing
                             # just makes torch re-allocate and can slow OCR. Only turn

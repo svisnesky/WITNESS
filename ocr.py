@@ -18,6 +18,19 @@ import numpy as np
 # large, so ~800px is plenty; this bounds OCR cost regardless of resolution.
 OCR_MAX_DIM = 800
 
+# Cap for ONE-OFF reads (teach wizard full frame, gamertag / runner / exfil
+# scans). These need far more detail than the detection crop — 800px turns 4K
+# UI text into ~7px and nothing reads — but they must still be BOUNDED.
+#
+# Truly uncapped is not offered, and that is deliberate: EasyOCR's tensors scale
+# with pixel count and torch's caching allocator keeps the peak reserved. Full
+# 4K reads drove reserved VRAM to ~11-12 GB on a 16 GB card, which exhausted it
+# alongside the game/OBS/Discord and made the driver spill to system RAM — the
+# real cause of the "awful frames" sessions (measured: 11,992 MB uncapped vs
+# 1,394 MB capped). 1600px keeps 4K text at ~half size (readable) for a quarter
+# of the pixels of a full frame.
+OCR_ONEOFF_MAX_DIM = 1600
+
 
 def _target_scale(h: int, w: int, upscale, max_dim: int = OCR_MAX_DIM) -> float:
     """Scale factor to apply: the requested upscale, but clamped so the long
@@ -54,10 +67,12 @@ class OCREngine:
     """Wrapper that lazily loads whichever backend is configured."""
 
     def __init__(self, engine: str = "easyocr", upscale: int = 3, languages=("en",),
-                 max_dim: int = OCR_MAX_DIM):
+                 max_dim: int = OCR_MAX_DIM,
+                 oneoff_max_dim: int = OCR_ONEOFF_MAX_DIM):
         self.engine_name = engine
         self.upscale = upscale
         self.max_dim = int(max_dim or OCR_MAX_DIM)
+        self.oneoff_max_dim = int(oneoff_max_dim or OCR_ONEOFF_MAX_DIM)
         self.languages = list(languages)
         self._reader = None      # easyocr
         self._loaded = False
@@ -77,14 +92,17 @@ class OCREngine:
         self._loaded = True
 
     def _cap(self, max_dim):
-        """Per-call size cap. None = this engine's default; 0 = uncapped.
+        """Per-call size cap.
 
-        The default cap exists to bound the 5 fps DETECTION loop, where a 3x
-        upscale of the popup crop produced a huge image. One-off reads (the
-        teach wizard's full frame, gamertag/runner/exfil scans) happen rarely
-        and NEED full resolution — capping a 4K frame to 800px turns 34px UI
-        text into 7px and nothing reads at all."""
-        return self.max_dim if max_dim is None else int(max_dim)
+        None -> this engine's default (the 5 fps DETECTION loop, where a 3x
+                upscale of the popup crop produced a huge image).
+        0    -> the ONE-OFF cap: bigger, for full-frame / large-crop reads that
+                need detail. NOT uncapped — see OCR_ONEOFF_MAX_DIM for why
+                (unbounded reads exhaust VRAM and tank the game's frame rate).
+        n    -> exactly n."""
+        if max_dim is None:
+            return self.max_dim
+        return self.oneoff_max_dim if int(max_dim) == 0 else int(max_dim)
 
     def read_lines(self, img_bgr: np.ndarray, max_dim=None) -> List[str]:
         self._ensure_loaded()
@@ -153,3 +171,31 @@ class OCREngine:
             else:
                 rows.append([yc, h, [(x, text)]])
         return [" ".join(t for _, t in sorted(r[2])) for r in rows]
+
+
+def reserved_vram_mb() -> float:
+    """VRAM torch is holding (reserved, incl. its cache), 0 if not on GPU."""
+    try:
+        import torch
+        if torch.cuda.is_available():
+            return torch.cuda.memory_reserved() / (1024 * 1024)
+    except Exception:
+        pass
+    return 0.0
+
+
+def release_vram() -> float:
+    """Hand torch's cached VRAM back to the driver. Returns MB freed.
+
+    The caching allocator never shrinks on its own, so one burst of large reads
+    keeps its peak reserved for the rest of the session — which is what starves
+    the game. Called after one-off read bursts and by the perf monitor's ceiling.
+    """
+    before = reserved_vram_mb()
+    try:
+        import torch
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    except Exception:
+        return 0.0
+    return max(0.0, before - reserved_vram_mb())
