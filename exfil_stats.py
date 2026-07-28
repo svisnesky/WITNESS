@@ -389,12 +389,8 @@ def report(stats: dict, tag_counts: dict) -> str:
         bits.append(f"run {stats['run_time']}")
     lines = [f"  [exfil] match stats: {', '.join(bits) or stats}"]
 
-    audits = [
-        # (game stat key, matching detected tags, label)
-        ("runners_downed", ("down", "precision", "kill"), "downs"),
-        ("runner_elims", ("finisher", "assist"), "elims"),
-    ]
-    for key, tags, label in audits:
+    audits = list(AUDIT_PAIRS)
+    for label, key, tags in audits:
         game = stats.get(key)
         if game is None:
             continue
@@ -410,11 +406,23 @@ def report(stats: dict, tag_counts: dict) -> str:
     return "\n".join(lines)
 
 
+# (label, game stat key, detected tags that map to it). The single source of
+# truth for the audit — it USED to file "kill" (a RUNNER ELIM popup) under downs
+# and "assist" under elims, so both sides were wrong and the audit's own
+# false-positive counts were noise. Verified exact on three ground-truth matches
+# in tests/test_audit_mapping.py.
+#
+# 'precision' appears in NEITHER list on purpose: it is a modifier printed
+# alongside a down for the same runner, not a separate event.
+AUDIT_PAIRS = (
+    ("downs", "runners_downed", ("down",)),
+    ("elims", "runner_elims", ("kill", "elim", "finisher")),
+)
+
+
 def accumulate_accuracy(acc: dict, stats: dict, tag_counts: dict) -> None:
     """Roll one match's audit into the session accuracy tally (mutates acc)."""
-    pairs = [("downs", "runners_downed", ("down", "precision", "kill")),
-             ("elims", "runner_elims", ("finisher", "assist"))]
-    for name, key, tags in pairs:
+    for name, key, tags in AUDIT_PAIRS:
         game = stats.get(key)
         if game is None:
             continue
@@ -433,8 +441,18 @@ def accuracy_summary(acc: dict) -> str:
         d = acc.get(name)
         if not d or not d["matches"]:
             continue
-        pct = 100.0 * min(d["detected"], d["game"]) / d["game"] if d["game"] else 100.0
-        bits.append(f"{name}: detected {d['detected']}/{d['game']} ({pct:.0f}%)")
+        # Penalise BOTH directions. min(detected, game)/game used to cap at
+        # 100%, so a run that detected 13 downs against the game's 7 printed a
+        # reassuring "100%" — the exact failure it existed to catch.
+        game, det = d["game"], d["detected"]
+        err = abs(det - game)
+        pct = 100.0 * max(0.0, 1.0 - err / game) if game else (100.0 if not det else 0.0)
+        flag = ""
+        if det > game:
+            flag = f", {det - game} over"
+        elif det < game:
+            flag = f", {game - det} missed"
+        bits.append(f"{name}: detected {det}/{game} ({pct:.0f}%{flag})")
     if not bits:
         return ""
     n = max(d["matches"] for d in acc.values())

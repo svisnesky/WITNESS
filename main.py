@@ -987,15 +987,38 @@ def _register_replay_async(s, clip_path, tag, count):
     threading.Thread(target=work, daemon=True).start()
 
 
+# Popups that MODIFY another event rather than being an event of their own.
+# Marathon prints several popups for ONE enemy: downing a runner with a headshot
+# shows "RUNNER DOWNED +15 XP" *and* "PRECISION DOWNED +25". Counting the
+# modifier as its own kill inflated every headshot into a double — which also
+# tripped false DOUBLE KILL overlays and ran the heat ladder up twice as fast.
+MODIFIER_TAGS = ("precision",)
+# Tags that mean "an enemy died" (your elim / your finisher).
+ELIM_TAGS = ("kill", "elim", "finisher")
+# Never a kill of yours: an assist is someone else's, a manual SAVE CLIP press
+# is just a kept moment.
+NON_KILL_TAGS = ("assist", "manual") + MODIFIER_TAGS
+
+
+def _kill_counts(tags) -> tuple:
+    """(downs, elims) for a batch of popups — deliberately the SAME two numbers
+    the game's own exfil panel reports, so they can be audited against it.
+
+    Verified exact on three ground-truth matches (tests/test_kill_count.py):
+    downs == count of 'down' popups (precision excluded, it is a modifier),
+    elims == count of 'kill'/'elim'/'finisher' popups. Assists count for
+    nothing."""
+    downs = sum(1 for t in tags if t == "down")
+    elims = sum(1 for t in tags if t in ELIM_TAGS)
+    return downs, elims
+
+
 def _kill_count(tags) -> int:
-    """How many REAL kills a list of event tags represents. Downs/precision are
-    kills; a standalone finisher/elim (not landing on one of those downs) is a
-    kill; a +1 KILL press is a kill (it arrives tagged 'kill'). Assists are
-    NOT kills (someone else's), a finisher on your own down is the same kill,
-    and a SAVE CLIP 'manual' save is a kept moment — not a kill at all."""
-    n_downs = sum(1 for t in tags if t in ("down", "precision"))
-    n_finish = sum(1 for t in tags if t in ("finisher", "elim", "kill"))
-    return n_downs + max(0, n_finish - n_downs)
+    """Distinct enemies a batch of popups represents. An elim landing on one of
+    YOUR downs in the same window is that runner being finished — the same kill,
+    not a new one — so only unattributed elims add on top of the downs."""
+    downs, elims = _kill_counts(tags)
+    return downs + max(0, elims - downs)
 
 
 def _flush_coalesce(s):
@@ -1008,9 +1031,10 @@ def _flush_coalesce(s):
     combo_tag = "+".join(dict.fromkeys(tags))  # e.g. "down+finisher", deduped, order-preserving
     label = ",".join(str(c) for c in counts)
     print(f"  [coalesce] saving clip for kill(s) #{label} [{combo_tag}]")
-    # A multikill means multiple DISTINCT downs — a down followed by the
-    # finisher on the same runner is ONE kill, not a double.
-    n_downs = sum(1 for t in tags if t in ("down", "precision"))
+    # A multikill means multiple DISTINCT downs. A down followed by the finisher
+    # on the same runner is ONE kill, and a PRECISION popup is a modifier on a
+    # down (same runner) — counting it here fired DOUBLE KILL on every headshot.
+    n_downs = sum(1 for t in tags if t == "down")
     clip_kills = _kill_count(tags)   # assists excluded; own-finisher not doubled
     if n_downs >= 2 and not s.get("clutch"):
         if s["cfg"].get("overlay_multikill", True):
@@ -1050,20 +1074,51 @@ def _handle_kill(cfg, ev, s, on_count=None):
     # A finisher on YOUR OWN down is the same kill, not a new one — the clip
     # coalescer already knows this; the headline counter now agrees. (A
     # standalone finisher — finishing a teammate's down — still counts.)
-    own_finisher = (tag == "finisher"
-                    and any(p["tag"] in ("down", "precision")
+    own_finisher = (tag in ELIM_TAGS
+                    and any(p["tag"] == "down"
                             for p in s.get("_coalesce_pending", [])))
-    # An assist is someone ELSE's kill — it belongs in the breakdown, not the
-    # kill count. An own-finisher is the same kill as your down. Neither bumps
-    # the headline counter; both are still recorded for the breakdown.
-    counts_as_kill = (tag != "assist") and not own_finisher
+    # An assist is someone ELSE's kill: Stan's rule is "for those I just want the
+    # recordings — they shouldn't count toward anything else". So an assist gets
+    # a clip and NOTHING else: no counter, no sound, no gamertag scan, no
+    # team-wipe vote, no dashboard row, no heat. PRECISION is a modifier on a
+    # down (same runner), so it must not bump the counter either. An
+    # own-finisher is the same kill as the down it lands on.
+    is_assist = (tag == "assist")
+    counts_as_kill = tag not in NON_KILL_TAGS and not own_finisher
     if counts_as_kill:
         s["count"] += 1
+    # The two numbers the game's exfil panel reports, tracked separately so they
+    # can be audited against it (precision excluded — it is a modifier).
+    if not is_assist:
+        if tag == "down":
+            s["downs"] = s.get("downs", 0) + 1
+        elif tag in ELIM_TAGS:
+            s["elims"] = s.get("elims", 0) + 1
     count = s["count"]
     s["session_tags"].append(tag)
     s.setdefault("match_tags", []).append(tag)  # reset each exfil for the audit
     print((f"KILL #{count}" if counts_as_kill else f"(not a kill: {tag})")
           + f" [{tag}]: {ev.raw_line!r}")
+    if is_assist:
+        # Clip only. Fall straight through to the coalescer.
+        _queue_coalesce(cfg, s, tag, count, now)
+        return
+    if tag == "precision":
+        # Modifier on the down we just counted (same runner): no kill, but it
+        # still feeds the SHARPSHOOTER streak, and it still earns the skull
+        # overlay + a clip.
+        if s.get("heat") is not None and cfg.get("heat_streaks", True):
+            try:
+                for i, hev in enumerate(s["heat"].mark_precision()):
+                    print(f"  [heat] {hev.label} (streak {hev.streak})")
+                    _fire_heat(cfg, s, hev, delay=i * 2.3)
+            except Exception as e:
+                print(f"  [heat] error: {e}")
+        if should_overlay(cfg, ev.raw_line) and not s.get("clutch"):
+            print("  -> HEADSHOT (skull popup)")
+            show_overlay(cfg)
+        _queue_coalesce(cfg, s, tag, count, now, raw_line=ev.raw_line)
+        return
     if s.get("clutch") and counts_as_kill:
         s["clutch_kills"] = s.get("clutch_kills", 0) + 1
         print(f"  [clutch] solo kill #{s['clutch_kills']} — staying quiet")
@@ -1107,20 +1162,28 @@ def _handle_kill(cfg, ev, s, on_count=None):
         except Exception as e:
             print(f"  [heat] error: {e}")
 
+    _queue_coalesce(cfg, s, tag, count, now, raw_line=ev.raw_line)
+
+    if should_overlay(cfg, ev.raw_line) and not s.get("clutch"):
+        print("  -> HEADSHOT (skull popup)")
+        show_overlay(cfg)
+
+
+def _queue_coalesce(cfg, s, tag, count, now, raw_line: str = "") -> None:
+    """Add an event to the clip-coalesce buffer and (re)arm its deadline.
+
+    Split out of _handle_kill so the assist path can reach it directly: an
+    assist earns a recording and nothing else."""
     coalesce_secs = cfg.get("kill_coalesce_seconds", 8.0)
     if "_coalesce_pending" not in s:
         s["_coalesce_pending"] = []
         s["_coalesce_deadline"] = 0.0
     s["_coalesce_pending"].append({
         "tag": tag, "count": count,
-        "epoch": time.time(),                              # when the kill landed
-        "manual": ev.raw_line.startswith("MANUAL"),        # +1 presses lag the kill
+        "epoch": time.time(),                          # when the kill landed
+        "manual": raw_line.startswith("MANUAL"),       # +1 presses lag the kill
     })
     s["_coalesce_deadline"] = now + coalesce_secs
-
-    if should_overlay(cfg, ev.raw_line) and not s.get("clutch"):
-        print("  -> HEADSHOT (skull popup)")
-        show_overlay(cfg)
 
 
 def _check_clutch(cfg, engine, s, now):
@@ -1730,7 +1793,11 @@ def _run_live_inner(cfg: dict, dry_run: bool = False, stop_event=None, on_count=
 
                 # Right after a kill, read the victim's gamertag off the kill
                 # feed (the feed line expires in seconds — no waiting).
-                if events and cfg.get("track_names", True):
+                # ONLY for a real kill of yours: an assist popup would otherwise
+                # log a teammate's victim as "you downed", which is how a name
+                # you never killed ended up as the report's PRIME TARGET.
+                if cfg.get("track_names", True) and any(
+                        classify_event(e.raw_line) == "down" for e in events):
                     _scan_feed_names(cfg, engine, s, expect="victim")
 
                 _check_coalesce(s)
@@ -1816,9 +1883,13 @@ def _end_session(cfg, tags, start_monotonic, start_wall, dry_run, obs=None,
     dur_min = max(0.01, (time.monotonic() - start_monotonic) / 60.0)
     c = Counter(tags)
     print("\n" + "-" * 44)
-    print(f"Session over. Kills: {total}  |  precision {c.get('precision', 0)}  "
-          f"finisher {c.get('finisher', 0)}  assist {c.get('assist', 0)}  "
-          f"downs {c.get('down', 0) + c.get('kill', 0)}")
+    # Report the SAME two numbers the game's exfil panel shows, so the summary is
+    # checkable against what Stan saw on screen. 'downs' used to lump elims in
+    # with downs and precision was double-counted into the headline.
+    s_downs, s_elims = _kill_counts(tags)
+    print(f"Session over. Kills: {total}  |  downs {s_downs}  elims {s_elims}"
+          f"  (precision {c.get('precision', 0)}, finisher {c.get('finisher', 0)})")
+    print(f"Assists (clips only, not counted): {c.get('assist', 0)}")
     print(f"Duration: {dur_min:.1f} min  |  {total / dur_min:.2f} kills/min")
 
     if total == 0 or dry_run:
