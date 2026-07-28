@@ -45,16 +45,98 @@ _JUNK = {"pinged", "downed", "give", "up", "xp", "self", "revive", "you"}
 # name_ignore adds to this at runtime.
 _NOT_NAMES = {"SEARCHANDDESTROY"}
 
+# Named locations (POIs) on Marathon's maps. Zone banners and objective text
+# print these on screen, and they get read as gamertags: on 2026-07-27 both bad
+# names of the night were Dire Marsh POIs — "ALGAE PONDS" (which became the
+# WITNESS Report's PRIME TARGET) and "QUARANTINE MM".
+#
+# Deliberately data, not code: a player CAN name themselves ANOMALY or CONTROL,
+# so suppression is logged rather than silent (see location_hit), only fires on a
+# close match, and can be switched off with ignore_map_locations: false.
+MAP_LOCATIONS = {
+    "Perimeter": ["North Relay", "South Relay", "Station", "Overflow", "Hauler",
+                  "Tunnels", "Ravine", "Data Wall", "Twin Relays", "Command Hub",
+                  "Industrial Docks"],
+    "Dire Marsh": ["Maintenance", "AI Uplink", "Complex", "Quarantine",
+                   "Algae Ponds", "Bio-Research", "Greenhouse", "Intersection",
+                   "West Gate", "East Gate", "Canal", "Anomaly", "Lockdown"],
+    "Outpost": ["The Pinwheel", "Drone Wing", "Command Wing", "Destroyed Wing",
+                "Conveyance Request"],
+    "Cryo Archive": ["Cargo", "Control", "Index"],
+}
+
+# Short POI names are matched EXACTLY only — fuzzy-matching a 5-letter word like
+# INDEX or CARGO would eat real gamertags. Longer, distinctive ones tolerate OCR
+# slips.
+_FUZZY_MIN_LEN = 8
+_LOCATION_FUZZ = 90
+
 
 def _name_key(name: str) -> str:
     return "".join(c for c in name.upper() if c.isalpha())
 
 
-def _is_player(name: str, ignore=frozenset()) -> bool:
-    """False for known ability/game-text strings so they don't pollute the
-    Menace Report / prime target."""
+def _location_keys() -> dict:
+    """{normalized key: "Map · POI"} for every known location."""
+    out = {}
+    for map_name, pois in MAP_LOCATIONS.items():
+        for poi in pois:
+            out[_name_key(poi)] = f"{map_name} · {poi}"
+    return out
+
+
+_LOCATION_KEYS = _location_keys()
+
+
+def location_hit(name: str):
+    """The map location `name` is really printing, or None if it looks like a
+    player. Returns e.g. 'Dire Marsh · Algae Ponds' so the caller can LOG what
+    it dropped — a silent filter here would hide a mis-set gamertag.
+
+    Handles the OCR scraps that ride along with a banner: the observed string was
+    "QUARANTINE MM", not "QUARANTINE"."""
+    # Any digit means it's a player. No Marathon POI has one, while gamertags are
+    # full of them — and _name_key() strips digits, so without this "CARGO99"
+    # would collapse to the Cryo Archive POI "Cargo" and be thrown away.
+    if any(c.isdigit() for c in name):
+        return None
     key = _name_key(name)
-    return bool(key) and key not in _NOT_NAMES and key not in ignore
+    if not key:
+        return None
+    if key in _LOCATION_KEYS:
+        return _LOCATION_KEYS[key]
+
+    # Drop trailing 1-2 character token scraps ("QUARANTINE MM") and retry.
+    toks = [t for t in name.split() if t]
+    while len(toks) > 1 and len(_name_key(toks[-1])) <= 2:
+        toks.pop()
+        k = _name_key(" ".join(toks))
+        if k in _LOCATION_KEYS:
+            return _LOCATION_KEYS[k]
+
+    # Fuzzy, for long distinctive names only ("ALGAE PONOS" -> Algae Ponds).
+    if len(key) >= _FUZZY_MIN_LEN:
+        best, hit = 0, None
+        for lk, label in _LOCATION_KEYS.items():
+            if len(lk) < _FUZZY_MIN_LEN:
+                continue
+            score = fuzz.ratio(key, lk)
+            if score > best:
+                best, hit = score, label
+        if best >= _LOCATION_FUZZ:
+            return hit
+    return None
+
+
+def _is_player(name: str, ignore=frozenset(), skip_locations: bool = True) -> bool:
+    """False for known ability/game-text strings and map location banners, so
+    they don't pollute the Menace Report / prime target."""
+    key = _name_key(name)
+    if not key or key in _NOT_NAMES or key in ignore:
+        return False
+    if skip_locations and location_hit(name):
+        return False
+    return True
 
 _DEDUP_SECONDS = 45.0   # same name+direction within this window = same event
 

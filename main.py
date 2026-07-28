@@ -1335,6 +1335,14 @@ def _scan_feed_names(cfg, engine, s, expect):
         for direction, name in encounters.capture(cfg, engine):
             if direction != expect:
                 continue
+            # Never silently drop a name: if it reads as a map location, say so.
+            # A silent filter would hide a wrong player_name just as well.
+            if cfg.get("ignore_map_locations", True):
+                where = encounters.location_hit(name)
+                if where:
+                    print(f"  [names] ignored {name!r} — that's a map location "
+                          f"({where}), not a player")
+                    continue
             if not encounters.should_log(s.setdefault("_enc_recent", {}),
                                          direction, name):
                 continue
@@ -2139,9 +2147,10 @@ def resume_unfinished_recap(web=None) -> bool:
 def _session_clips_from_dir(session_dir: str):
     """List this session's organized clips (top level only) as reel dicts,
     inferring the kill count from the filename tag (e.g. down+finisher = 2)."""
+    import match_reel
     import montage
     out = []
-    for f in sorted(os.listdir(session_dir)):
+    for f in os.listdir(session_dir):
         if not f.lower().endswith(montage.VIDEO_EXTS):
             continue
         if f.lower().startswith("highlights") or f.lower().startswith("session"):
@@ -2149,9 +2158,14 @@ def _session_clips_from_dir(session_dir: str):
         # NNN_tag_time.ext  ->  tag
         parts = f.split("_")
         tag = parts[1] if len(parts) >= 3 else "kill"
-        kills = _kill_count([p for p in tag.split("+") if p])
-        out.append({"path": os.path.join(session_dir, f), "kills": kills, "tag": tag})
-    return out
+        tags = [p for p in tag.split("+") if p]
+        out.append({"path": os.path.join(session_dir, f),
+                    "kills": _kill_count(tags),
+                    "downs": sum(1 for t in tags if t == "down"),
+                    "tag": tag})
+    # Chronological — the filename's leading number is the kill count and now
+    # repeats, so sorting by name cut back to earlier moments mid-reel.
+    return match_reel.sort_chronologically(out)
 
 
 def _yt_upload(cfg, base, path, title, desc):

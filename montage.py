@@ -39,10 +39,18 @@ def build_montage(session_dir, ffmpeg):
         print("  [montage] no session folder to stitch")
         return None
 
-    clips = sorted(
-        f for f in os.listdir(session_dir)
-        if f.lower().endswith(VIDEO_EXTS) and not f.lower().startswith("highlights")
-    )
+    # CHRONOLOGICAL, not alphabetical: the filename's leading number is the kill
+    # count, which repeats now that assists don't bump it, so a plain sort cut
+    # back to an earlier moment mid-montage.
+    names = [f for f in os.listdir(session_dir)
+             if f.lower().endswith(VIDEO_EXTS)
+             and not f.lower().startswith("highlights")]
+    try:
+        from match_reel import sort_chronologically
+        clips = [os.path.basename(p) for p in sort_chronologically(
+            [os.path.join(session_dir, f) for f in names])]
+    except Exception:
+        clips = sorted(names)
     if not clips:
         print("  [montage] no clips in the session folder to stitch")
         return None

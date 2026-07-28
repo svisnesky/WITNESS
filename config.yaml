@@ -238,6 +238,15 @@ ffmpeg_path: ""        # leave empty to auto-find ffmpeg.exe in this folder / PA
 track_names: true
 gamertag: "MRVIZNASTY"
 
+# Marathon prints MAP LOCATION names on screen (zone banners, objective text),
+# and they get read as gamertags: "ALGAE PONDS" and "QUARANTINE" are Dire Marsh
+# POIs, not runners — and ALGAE PONDS was once promoted to PRIME TARGET in the
+# WITNESS Report. With this on, a name matching a known POI is skipped and the
+# reason is PRINTED, never dropped silently (a silent filter would hide a wrong
+# gamertag above just as well). The POI list lives in encounters.MAP_LOCATIONS.
+# Names containing a digit are always treated as players, since no POI has one.
+ignore_map_locations: true
+
 # Streamer watchlist: gamertags that get the BIG alert when they show up in
 # your kill feed — on-screen banner, voiced call-out, and if one of them
 # downs YOU the clip is saved automatically (your kills are clipped anyway).

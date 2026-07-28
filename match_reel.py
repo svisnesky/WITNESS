@@ -130,6 +130,33 @@ def _save_time(path: str):
     return h * 3600 + mi * 60 + s
 
 
+def clip_epoch(path: str) -> float:
+    """Absolute time a clip was saved, for ordering reels chronologically.
+
+    Prefers the sidecar's saved_epoch (exact), then the file's mtime, then the
+    HH-MM-SS in the filename. Filename order is NOT usable: clips are named
+    <killcount>_<tag>_<time>, and since assists no longer bump the kill counter
+    several clips share a prefix — so a plain sort put '013_assist_22-02' before
+    '013_down_21-48' ("assist" < "down"). That is the jarring cut back to an
+    earlier moment mid-reel."""
+    epoch, _kills = _load_sidecar(path)
+    if epoch > 0:
+        return float(epoch)
+    try:
+        return float(os.path.getmtime(path))
+    except OSError:
+        pass
+    secs = _save_time(path)
+    return float(secs) if secs is not None else 0.0
+
+
+def sort_chronologically(clips):
+    """Order clips oldest-first. Accepts paths or reel dicts with a 'path'."""
+    def key(c):
+        return clip_epoch(c["path"] if isinstance(c, dict) else c)
+    return sorted(clips, key=key)
+
+
 def write_kill_sidecar(clip_path: str, saved_epoch: float, kills: list) -> None:
     """Record WHEN the kills inside a clip happened: <clip>.json with the save
     moment and each kill's wall-clock epoch (+ whether it was a manual +1).
@@ -259,11 +286,26 @@ def _tag_rank(tag: str) -> int:
 
 
 def pick_potg(clips: list[dict]):
-    """The clip with the most kills; ties go to the flashier tag, then latest."""
+    """The best clip: most DISTINCT ENEMIES first, then total kills, then the
+    flashier tag, then latest.
+
+    Distinct downs lead deliberately. Scoring on the composite kill number let a
+    single runner downed AND finished (down + elim + finisher popups) outrank
+    genuinely downing two different people, because it racked up more scoring
+    events off one enemy. What actually looks like a play is how many people you
+    took out — Stan: "i downed a guy, then flipped around and downed another.
+    That should probably be play of the night"."""
     if len(clips) < 2:
         return None
+
+    def downs(c):
+        if "downs" in c:
+            return c["downs"]
+        return sum(1 for t in str(c.get("tag", "")).split("+") if t == "down")
+
     return max(enumerate(clips),
-               key=lambda ic: (ic[1]["kills"], -_tag_rank(ic[1]["tag"]), ic[0]))[1]
+               key=lambda ic: (downs(ic[1]), ic[1]["kills"],
+                               -_tag_rank(ic[1]["tag"]), ic[0]))[1]
 
 
 def find_music(music_dir: str) -> str:
