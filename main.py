@@ -1277,7 +1277,8 @@ def _reel_cut_kwargs(cfg) -> dict:
     """Tight-cut settings for build_match_reel, from config."""
     return {"tight_cuts": bool(cfg.get("reel_tight_cuts", True)),
             "preroll": float(cfg.get("reel_preroll_seconds", 8.0)),
-            "manual_preroll": float(cfg.get("reel_manual_preroll_seconds", 18.0))}
+            "manual_preroll": float(cfg.get("reel_manual_preroll_seconds", 18.0)),
+            "context_preroll": float(cfg.get("reel_context_preroll_seconds", 16.0))}
 
 
 def _reconcile_missed(match_tags, stats_d) -> int:

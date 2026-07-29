@@ -200,11 +200,32 @@ def _trim_start(dur, offsets_from_end, preroll: float,
     return round(start, 2)
 
 
+def preroll_for(clip: dict, preroll: float, manual_preroll: float,
+                context_preroll: float, is_manual: bool = False) -> float:
+    """How much lead-in this clip keeps before its first kill.
+
+    A single ordinary kill gets the LONGEST lead-in, because with one kill the
+    interesting part is the approach — the situation unfolding. A multikill needs
+    less setup: the action is the content, and a long ramp just delays it.
+
+    From Joe's review of a real reel: "for a kill montage it's a bit chaotic,
+    like someone telling you something with no context... I personally like to
+    watch the situation unfold if they're just normal kills. A short kill clip is
+    cool but for tactical play I think a bit of a longer clip with more gameplay
+    works better." The footage was always there — OBS saves ~30s and we were
+    throwing away 17 of them on single kills."""
+    if is_manual:
+        return manual_preroll          # the press lands well after the kill
+    return context_preroll if int(clip.get("kills", 1) or 1) <= 1 else preroll
+
+
 def clip_trim_start(clip: dict, dur, ffmpeg, preroll: float = 8.0,
-                    manual_preroll: float = 18.0) -> float:
+                    manual_preroll: float = 18.0,
+                    context_preroll: float = 16.0) -> float:
     """Trim in-point for a reel clip from its sidecar (plus the sidecars of any
     clips merged into it by drop_overlapping). Manual +1 kills get a longer
-    preroll — the button press lands well after the actual kill."""
+    preroll — the button press lands well after the actual kill — and a lone
+    ordinary kill gets a longer one too, so the setup is visible."""
     saved, kills = _load_sidecar(clip.get("path", ""))
     if not saved:
         return 0.0
@@ -214,7 +235,8 @@ def clip_trim_start(clip: dict, dur, ffmpeg, preroll: float = 8.0,
     if not kills:
         return 0.0
     offsets = [saved - k.get("epoch", 0) for k in kills]
-    pre = manual_preroll if any(k.get("manual") for k in kills) else preroll
+    pre = preroll_for(clip, preroll, manual_preroll, context_preroll,
+                      is_manual=any(k.get("manual") for k in kills))
     return _trim_start(dur, offsets, pre)
 
 

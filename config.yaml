@@ -114,7 +114,15 @@ loot_goblin_decal: true     # stamp a LOOT GOBLIN decal over the match's top
 reel_tight_cuts: true       # reels start ~8s before each clip's first kill
                             # instead of playing the whole 30s buffer (kill
                             # timing recorded per clip at save time)
-reel_preroll_seconds: 8     # how much lead-in to keep before the kill
+reel_preroll_seconds: 8     # lead-in before the kill on a MULTIKILL clip (the
+                            # action is the content — don't delay it)
+# Lead-in for a clip with a SINGLE ordinary kill. Longer on purpose: with one
+# kill the interesting part is the approach. Joe's review of a real reel — "for
+# a kill montage it's a bit chaotic, like someone telling you something with no
+# context... I like to watch the situation unfold if they're just normal kills."
+# The footage was always there; at 8s we discarded ~17s of every 33s clip.
+# Capped by your OBS Replay Buffer length — you can't keep more than it saves.
+reel_context_preroll_seconds: 16
 reel_manual_preroll_seconds: 18  # lead-in for manual +1 kills (the button
                             # press lands well after the actual kill)
 disk_warn_gb: 10            # warn when the clip drive drops below this (GB).

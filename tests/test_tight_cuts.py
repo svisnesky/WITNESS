@@ -43,8 +43,17 @@ def test_sidecar_roundtrip(tmp_path):
     clip = str(tmp_path / "005_down_21-50-43.mkv")
     open(clip, "wb").write(b"x")
     mr.write_kill_sidecar(clip, 1000.0, [{"epoch": 992.0, "manual": False}])
+    # A lone ordinary kill now takes the longer CONTEXT preroll (16s default),
+    # so the setup is visible: 30 - 8 - 16 = 6.
     ss = mr.clip_trim_start({"path": clip}, 30.0, "ffmpeg", preroll=8.0)
-    # kill 8s before end of a 30s clip -> start = 30-8-8 = 14
+    assert ss == 6.0
+    # Multikill clips still use the tight preroll: 30 - 8 - 8 = 14.
+    ss = mr.clip_trim_start({"path": clip, "kills": 2}, 30.0, "ffmpeg",
+                            preroll=8.0)
+    assert ss == 14.0
+    # And the context preroll is a knob — set it to 8 for the old behaviour.
+    ss = mr.clip_trim_start({"path": clip}, 30.0, "ffmpeg", preroll=8.0,
+                            context_preroll=8.0)
     assert ss == 14.0
 
 
@@ -76,3 +85,35 @@ def test_no_sidecar_no_trim(tmp_path):
     clip = str(tmp_path / "001_down_19-48-47.mkv")
     open(clip, "wb").write(b"x")
     assert mr.clip_trim_start({"path": clip}, 30.0, "ffmpeg") == 0.0
+
+
+def test_single_kill_gets_more_context_than_a_multikill():
+    """Joe's note on a real reel: "it's a bit chaotic, like someone telling you
+    something with no context... I like to watch the situation unfold if they're
+    just normal kills." One kill = show the approach; a multikill = get to it."""
+    one = {"kills": 1}
+    many = {"kills": 3}
+    assert mr.preroll_for(one, 8.0, 18.0, 16.0) == 16.0
+    assert mr.preroll_for(many, 8.0, 18.0, 16.0) == 8.0
+    # A manual +1 still wins — the press lands long after the kill.
+    assert mr.preroll_for(one, 8.0, 18.0, 16.0, is_manual=True) == 18.0
+    assert mr.preroll_for(many, 8.0, 18.0, 16.0, is_manual=True) == 18.0
+    # Missing/zero kills is treated as one.
+    assert mr.preroll_for({}, 8.0, 18.0, 16.0) == 16.0
+
+
+def test_longer_preroll_keeps_more_of_the_clip():
+    """On the real shape from the session log: a 33s clip whose kill landed ~8s
+    before the save. At 8s preroll it started at 17s (16s kept); the longer
+    context preroll keeps roughly twice as much."""
+    dur, offset_from_end = 33.0, 8.0
+    tight = mr._trim_start(dur, [offset_from_end], 8.0)
+    context = mr._trim_start(dur, [offset_from_end], 16.0)
+    assert tight == 17.0
+    assert context == 9.0
+    assert (dur - context) > (dur - tight)
+
+
+def test_context_preroll_cannot_exceed_the_footage():
+    """A preroll longer than the clip must not produce a negative in-point."""
+    assert mr._trim_start(12.0, [8.0], 16.0) == 0.0   # no cut worth making
