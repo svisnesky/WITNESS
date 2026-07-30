@@ -92,7 +92,8 @@ def _drawtext(tag: str, sub: str, font: str, accent: str) -> str:
 
 
 def build_short(src: str, dest: str, ffmpeg: str, tag: str = "",
-                sub: str = "", accent: str = "0x9184d9") -> bool:
+                sub: str = "", accent: str = "0x9184d9",
+                render_encoder: str = "auto") -> bool:
     """Render one vertical short. Returns True on success."""
     font = _find_font()
     overlay_chain = "[bgb][fgs]overlay=(W-w)/2:(H-h)/2"
@@ -105,13 +106,18 @@ def build_short(src: str, dest: str, ffmpeg: str, tag: str = "",
         "[fg]scale=1080:-2[fgs];"
         + overlay_chain + "[v]"
     )
-    cmd = [ffmpeg, "-y", "-i", src,
-           "-filter_complex", filt, "-map", "[v]", "-map", "0:a?",
-           "-c:v", "libx264", "-preset", "veryfast", "-crf", "21",
-           "-c:a", "aac", "-b:a", "160k", "-movflags", "+faststart",
-           dest]
-    r = subprocess.run(cmd, capture_output=True, text=True,
+    from match_reel import cpu_encoder_args, video_encoder_args
+    head = [ffmpeg, "-y", "-i", src,
+            "-filter_complex", filt, "-map", "[v]", "-map", "0:a?"]
+    tail_args = ["-c:a", "aac", "-b:a", "160k", "-movflags", "+faststart", dest]
+    enc = video_encoder_args({"render_encoder": render_encoder}, ffmpeg)
+    r = subprocess.run(head + enc + tail_args, capture_output=True, text=True,
                        creationflags=_render_flags())
+    if r.returncode != 0 and enc[1] != "libx264":
+        # A lost Short is worse than a warm CPU — retry in software.
+        r = subprocess.run(head + cpu_encoder_args() + tail_args,
+                           capture_output=True, text=True,
+                           creationflags=_render_flags())
     if r.returncode == 0 and os.path.exists(dest):
         return True
     tail = (r.stderr.strip().splitlines() or ["(no output)"])[-1]
@@ -120,7 +126,7 @@ def build_short(src: str, dest: str, ffmpeg: str, tag: str = "",
 
 
 def build_shorts(session_dir: str, ffmpeg: str, with_labels: bool = True,
-                 theme: dict | None = None):
+                 theme: dict | None = None, render_encoder: str = "auto"):
     """Render a vertical short for every clip in the session folder."""
     if not session_dir or not os.path.isdir(session_dir):
         return
@@ -159,6 +165,7 @@ def build_shorts(session_dir: str, ffmpeg: str, with_labels: bool = True,
             _num, tag = _parse_name(c)
             sub = brand              # just the game name — no "KILL #N"
         if build_short(os.path.join(session_dir, c), dest, ffmpeg,
-                       tag=tag, sub=sub, accent=accent):
+                       tag=tag, sub=sub, accent=accent,
+                       render_encoder=render_encoder):
             done += 1
     print(f"  [shorts] {done}/{len(clips)} vertical clips -> {out_dir}")

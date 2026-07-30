@@ -111,6 +111,18 @@ play_of_the_night: true     # at session end, cut the single best clip of the
                             # whole night into its own PLAY OF THE NIGHT reel
 loot_goblin_decal: true     # stamp a LOOT GOBLIN decal over the match's top
                             # looter on a decorated copy of the exfil screenshot
+# Which encoder renders the reels/montage/Shorts.
+#   auto  - NVIDIA hardware (h264_nvenc) when your ffmpeg has it, else CPU
+#   nvenc - force hardware; falls back to CPU if unavailable
+#   cpu   - always libx264
+# Hardware is the default because Marathon is CPU-heavy and CPU contention is
+# what demonstrably hurt frames here (the first frame-drop fix was lowering
+# render priority). NVENC is fixed-function silicon separate from the shader
+# cores the game uses, renders several times faster, and stops the fans ramping.
+# It costs a few hundred MB of VRAM; switch to cpu if VRAM ever gets tight.
+# A failed hardware encode automatically retries on CPU — a reel is never lost.
+render_encoder: auto
+
 reel_tight_cuts: true       # reels start ~8s before each clip's first kill
                             # instead of playing the whole 30s buffer (kill
                             # timing recorded per clip at save time)

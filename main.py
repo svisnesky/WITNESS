@@ -1274,7 +1274,8 @@ def _reel_cut_kwargs(cfg) -> dict:
     return {"tight_cuts": bool(cfg.get("reel_tight_cuts", True)),
             "preroll": float(cfg.get("reel_preroll_seconds", 8.0)),
             "manual_preroll": float(cfg.get("reel_manual_preroll_seconds", 18.0)),
-            "context_preroll": float(cfg.get("reel_context_preroll_seconds", 16.0))}
+            "context_preroll": float(cfg.get("reel_context_preroll_seconds", 16.0)),
+            "render_encoder": str(cfg.get("render_encoder", "auto"))}
 
 
 def _reconcile_missed(match_tags, stats_d) -> int:
@@ -2087,7 +2088,9 @@ def _build_session_artifacts(cfg, session_dir, tags, rc=None, report_speech=""):
             base = os.path.dirname(os.path.abspath(__file__))
             shorts.build_shorts(session_dir, montage.find_ffmpeg(base, cfg),
                                 with_labels=cfg.get("shorts_labels", True),
-                                theme=cfg.get("theme"))
+                                theme=cfg.get("theme"),
+                                render_encoder=str(cfg.get("render_encoder",
+                                                           "auto")))
             if cfg.get("youtube_upload_shorts", False):
                 sdir = os.path.join(session_dir, "shorts")
                 if os.path.isdir(sdir):

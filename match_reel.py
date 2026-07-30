@@ -33,6 +33,57 @@ def _render_flags():
     return flags
 
 
+_ENCODER_CACHE = {}
+
+
+def has_nvenc(ffmpeg: str) -> bool:
+    """True if this ffmpeg build has NVIDIA's hardware H.264 encoder.
+    Probed once per ffmpeg path — the answer can't change mid-session."""
+    if ffmpeg in _ENCODER_CACHE:
+        return _ENCODER_CACHE[ffmpeg]
+    ok = False
+    try:
+        r = subprocess.run([ffmpeg, "-hide_banner", "-encoders"],
+                           capture_output=True, text=True, timeout=20,
+                           creationflags=_render_flags())
+        ok = "h264_nvenc" in (r.stdout or "")
+    except Exception:
+        ok = False
+    _ENCODER_CACHE[ffmpeg] = ok
+    return ok
+
+
+def video_encoder_args(cfg, ffmpeg: str) -> list:
+    """ffmpeg -c:v arguments for reel/Shorts renders.
+
+    Defaults to NVIDIA's hardware encoder when available. Reasoning specific to
+    Stan's rig: Marathon is CPU-heavy, and his FIRST round of frame drops was
+    fixed by dropping render ffmpeg to below-normal priority — direct evidence
+    that CPU contention was what hurt his frames. libx264 at 4K pegs every core
+    (and spins the fans up). NVENC is fixed-function silicon separate from the
+    shader cores the game uses, so it moves the work off the contended resource.
+
+    Costs a few hundred MB of VRAM for the encoder session, which is why this is
+    switchable — VRAM is the tight resource on a 16 GB card running the game,
+    OBS and Discord. render_encoder: auto | nvenc | cpu."""
+    want = str((cfg or {}).get("render_encoder", "auto")).lower()
+    if want == "cpu":
+        return ["-c:v", "libx264", "-preset", "veryfast", "-crf", "21"]
+    if want in ("nvenc", "auto") and has_nvenc(ffmpeg):
+        # cq 21 ~ visually matches crf 21; p4 is the balanced preset.
+        return ["-c:v", "h264_nvenc", "-preset", "p4", "-rc", "vbr",
+                "-cq", "21", "-b:v", "0"]
+    if want == "nvenc":
+        print("  [reel] render_encoder: nvenc requested but this ffmpeg has no "
+              "h264_nvenc — falling back to CPU")
+    return ["-c:v", "libx264", "-preset", "veryfast", "-crf", "21"]
+
+
+def cpu_encoder_args() -> list:
+    """The software fallback, for retrying a render that NVENC refused."""
+    return ["-c:v", "libx264", "-preset", "veryfast", "-crf", "21"]
+
+
 def _rgb(c):
     """Accept an (r,g,b) tuple or a '#rrggbb' string -> (r,g,b) tuple."""
     if isinstance(c, str) and c.startswith("#") and len(c) == 7:
@@ -421,7 +472,8 @@ def build_match_reel(clips, out_path: str, ffmpeg: str,
                      transitions: bool = True, chyrons: bool = True,
                      theme: dict | None = None, tight_cuts: bool = True,
                      preroll: float = 8.0, manual_preroll: float = 18.0,
-                     context_preroll: float = 16.0) -> bool:
+                     context_preroll: float = 16.0,
+                     render_encoder: str = "auto") -> bool:
     """Title card [+ POTG card] + clips [+ music bed] -> one mp4.
 
     music_volume is 0-1 (0.08 = quiet bed under the game audio).
@@ -584,11 +636,16 @@ def build_match_reel(clips, out_path: str, ffmpeg: str,
         chains.append("[cat][mus]amix=inputs=2:duration=first:normalize=0[mixed]")
         a_out = "[mixed]"
 
-    cmd += ["-filter_complex", ";".join(chains), "-map", "[v]", "-map", a_out,
-            "-c:v", "libx264", "-preset", "veryfast", "-crf", "21",
-            "-c:a", "aac", "-b:a", "160k", "-movflags", "+faststart", out_path]
-
-    r = _run(cmd)
+    enc = video_encoder_args({"render_encoder": render_encoder}, ffmpeg)
+    tail_args = ["-c:a", "aac", "-b:a", "160k", "-movflags", "+faststart", out_path]
+    cmd += ["-filter_complex", ";".join(chains), "-map", "[v]", "-map", a_out]
+    r = _run(cmd + enc + tail_args)
+    if r.returncode != 0 and enc[1] != "libx264":
+        # Hardware encoding can fail for reasons that have nothing to do with the
+        # reel: a driver hiccup, or every NVENC session already in use by OBS. A
+        # lost reel is much worse than a warm CPU, so retry in software.
+        print("  [reel] hardware encode failed — retrying on CPU")
+        r = _run(cmd + cpu_encoder_args() + tail_args)
     for png in (title_png, potg_png, end_png):
         try:
             os.remove(png)
