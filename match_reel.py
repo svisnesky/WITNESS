@@ -300,7 +300,6 @@ def _normalize_clips(clips) -> list[dict]:
 
 
 def _tag_rank(tag: str) -> int:
-    first = tag.split("+")[0]
     for i, t in enumerate(TAG_PRIORITY):
         if t in tag:
             return i

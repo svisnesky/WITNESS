@@ -853,7 +853,7 @@ def _setup_session(cfg, dry_run):
         try:
             obs.connect()
             break
-        except Exception as e:
+        except Exception:
             if attempt >= 19:
                 raise
             if attempt == 0:
@@ -2394,15 +2394,24 @@ def _resolve_session_dir(cfg, which: str) -> str:
     if which and which != "latest" and os.path.isdir(which):
         return which
     root = ""
-    try:
-        obs = OBSClient(cfg)          # only to ask where OBS writes clips
-        obs.connect()
-        rec = obs.get_record_directory()
-        obs.close()
-        if rec:
-            root = os.path.join(rec, "Marathon Sessions")
-    except Exception as e:
-        print(f"(couldn't ask OBS for the clip folder: {e})")
+    # The cached folder first: rebuilding is an offline job on files already on
+    # disk, so it must NOT require OBS to be running. cached_record_dir() is
+    # written every session for exactly this kind of use.
+    rec = cached_record_dir()
+    if rec:
+        root = os.path.join(rec, "Marathon Sessions")
+    if not os.path.isdir(root):
+        try:
+            from obs_client import OBSClient      # imported lazily, like elsewhere
+            obs = OBSClient(cfg)
+            obs.connect()
+            rec = obs.get_record_directory()
+            obs.close()
+            if rec:
+                root = os.path.join(rec, "Marathon Sessions")
+                cache_record_dir(rec)
+        except Exception as e:
+            print(f"(couldn't ask OBS for the clip folder: {e})")
     if not root or not os.path.isdir(root):
         print("Couldn't find the 'Marathon Sessions' folder. Pass the full path:"
               "\n  python main.py --rebuild \"Z:/OBS Clips/Marathon/Marathon "

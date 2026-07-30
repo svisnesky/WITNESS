@@ -210,6 +210,36 @@ class LiveState:
                 return True
             return False
 
+    def request_rebuild(self, session: str = "latest") -> dict:
+        """Kick off a session rebuild in the BACKGROUND and return immediately.
+
+        Rendering takes minutes, and the dashboard poll would time out waiting —
+        so this reports 'started' and progress shows up on the recap banner the
+        same way an end-of-session build does."""
+        import threading
+        with self._lock:
+            if getattr(self, "_rebuilding", False):
+                return {"ok": False, "error": "a rebuild is already running"}
+            self._rebuilding = True
+        cfg = self._cfg or {}
+
+        def work():
+            try:
+                import main
+                self.set_recap({"status": "building",
+                                "note": f"rebuilding {session}…"})
+                main.rebuild_session(cfg, session)
+                self.set_recap({"status": "ready", "note": "rebuild complete"})
+            except Exception as e:
+                print(f"  [rebuild] failed: {e}")
+                self.set_recap({"status": "error", "note": f"rebuild failed: {e}"})
+            finally:
+                with self._lock:
+                    self._rebuilding = False
+
+        threading.Thread(target=work, daemon=True).start()
+        return {"ok": True, "started": session}
+
     def add_replay(self, label, path):
         with self._lock:
             self._replay_seq += 1
@@ -459,7 +489,7 @@ def _archive_page(base_dir: str, record_dir: str) -> str:
             media = []
             sr = os.path.join(sdir, "session_reel.mp4")
             if os.path.exists(sr):
-                media.append(("Session reel", f"session_reel.mp4"))
+                media.append(("Session reel", "session_reel.mp4"))
             rdir = os.path.join(sdir, "reels")
             if os.path.isdir(rdir):
                 for f in sorted(os.listdir(rdir)):
@@ -519,10 +549,22 @@ def _archive_page(base_dir: str, record_dir: str) -> str:
             rows = '<div class="rc none">no reels/replays kept for this session</div>'
         report_html = (f'<h4>WITNESS Report</h4><pre class="report">{_esc(s["report"])}</pre>'
                        if s.get("report") else "")
+        # A session with clips but no reels had a failed recap. Say so, and offer
+        # the fix right here — the clips are all that matter and they survived.
+        has_reels = any(lbl != "Montage" for lbl, _r in s["media"])
+        warn = ("" if has_reels or not s["clips"] else
+                '<div class="rc none" style="color:var(--warn,#f5a623)">'
+                'This session has clips but no reels — the recap failed. '
+                'Rebuild it below.</div>')
         blocks.append(f"""<details><summary><b>{_esc(date)}</b>
           <span class="meta">{s['clips']} clip{'s' if s['clips'] != 1 else ''}
           &middot; {_fmt_size(s['size'])}</span></summary>
-          <h4>Matches</h4>{rec_html}{report_html}<h4>Watch / share</h4>{rows}</details>""")
+          <h4>Matches</h4>{rec_html}{warn}{report_html}
+          <h4>Watch / share</h4>{rows}
+          <div class="mrow"><button class="mini rb"
+            onclick="rebuild('{_esc(s['id'])}',this)">Rebuild reels</button>
+            <span class="meta">re-renders the montage, reels and Shorts from the
+            clips on disk &mdash; takes a few minutes</span></div></details>""")
 
     body = "".join(blocks) or ('<p class="rc none">No sessions found yet'
                                + ("" if record_dir else " — press START once so the app learns your OBS folder")
@@ -830,6 +872,19 @@ def start_web(state, port, base_dir, host="0.0.0.0"):
                         result = {"error": f"{type(e).__name__}: {e}"}
                     self._send(json.dumps(result).encode(),
                                "application/json", cache=False)
+                elif path == "/rebuild":
+                    # Rebuild a past session's reels from the clips on disk.
+                    # Lives on the Archive page because that is where Stan looks;
+                    # a .bat in the app folder was not somewhere he'd find it.
+                    n = int(self.headers.get("Content-Length") or 0)
+                    try:
+                        body = json.loads(self.rfile.read(n) or b"{}")
+                    except Exception:
+                        body = {}
+                    sess = str(body.get("session") or "latest")
+                    result = state.request_rebuild(sess)
+                    self._send(json.dumps(result).encode(),
+                               "application/json", cache=False)
                 elif path == "/start":
                     state.fire_start()
                     self._send(b'{"ok":true}', "application/json", cache=False)
@@ -906,6 +961,13 @@ ARCHIVE_PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
     text-transform:uppercase; border:1px solid var(--accent-deep); border-radius:8px; padding:6px 13px; }
   .dl:hover { background:rgba(145,132,217,.12); }
   details > *:last-child { margin-bottom:14px; }
+  .mini { font:600 11.5px var(--ui); letter-spacing:.06em; text-transform:uppercase;
+    color:var(--text); background:var(--surface); border:1px solid var(--sborder);
+    border-radius:8px; padding:7px 12px; cursor:pointer; }
+  .mini:hover { border-color:var(--accent); color:var(--accent-light); }
+  .mini:disabled { opacity:.65; cursor:default; border-color:var(--sborder);
+    color:var(--muted); text-transform:none; letter-spacing:.02em; }
+  .rb { margin-right:10px; }
 </style></head><body><div class="wrap">
   <div class="top"><img src="/skull.png" alt=""><span class="wm">WITNESS</span>
     <nav class="nav"><a href="/">Live</a><a href="/archive">Reels</a>
@@ -915,7 +977,42 @@ ARCHIVE_PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
   <h2>Every session, kept</h2>
   <p class="sub">Tap a reel to watch; "save" downloads it for sharing (Files &rarr; share sheet &rarr; group chat).</p>
   %%BODY%%
-</div></body></html>"""
+</div>
+<script>
+  // Rebuild a session's reels from the clips on disk, then RELOAD when it's done.
+  // Stan asked "how would you refresh?" about this page once already — a build
+  // that finishes silently and leaves stale content on screen is the same trap,
+  // so this polls /status and reloads itself.
+  function rebuild(sess, btn){
+    if (btn.disabled) return;
+    var label = btn.textContent;
+    btn.disabled = true; btn.textContent = 'Rebuilding…';
+    fetch('/rebuild', {method:'POST', headers:{'Content-Type':'application/json'},
+                       body: JSON.stringify({session: sess})})
+      .then(function(r){ return r.json(); })
+      .then(function(j){
+        if (!j.ok) { btn.textContent = j.error || 'failed'; btn.disabled = false; return; }
+        var poll = setInterval(function(){
+          fetch('/status', {cache:'no-store'}).then(function(r){ return r.json(); })
+            .then(function(s){
+              var rc = s.recap || {};
+              if (rc.note) btn.textContent = rc.note;
+              if (rc.status === 'ready') {
+                clearInterval(poll);
+                btn.textContent = 'Done — reloading';
+                setTimeout(function(){ location.reload(); }, 700);
+              } else if (rc.status === 'error') {
+                clearInterval(poll);
+                btn.textContent = rc.note || 'failed';
+                btn.disabled = false;
+              }
+            }).catch(function(){});
+        }, 2000);
+      })
+      .catch(function(e){ btn.textContent = 'failed: ' + e; btn.disabled = false; });
+  }
+</script>
+</body></html>"""
 
 STATS_PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
