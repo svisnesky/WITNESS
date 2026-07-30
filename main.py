@@ -1351,6 +1351,8 @@ def _scan_feed_names(cfg, engine, s, expect):
             # A silent filter would hide a wrong player_name just as well.
             if cfg.get("ignore_map_locations", True):
                 where = encounters.location_hit(name)
+                if not where and encounters.looks_like_item(name):
+                    where = "a loot item"
                 if where:
                     print(f"  [names] ignored {name!r} — that's a map location "
                           f"({where}), not a player")

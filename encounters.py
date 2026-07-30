@@ -55,8 +55,13 @@ _NOT_NAMES = {"SEARCHANDDESTROY"}
 # close match, and can be switched off with ignore_map_locations: false.
 MAP_LOCATIONS = {
     "Perimeter": ["North Relay", "South Relay", "Station", "Overflow", "Hauler",
-                  "Tunnels", "Ravine", "Data Wall", "Twin Relays", "Command Hub",
-                  "Industrial Docks"],
+                  "Tunnels", "Ravine", "Data Wall", "East Wall", "Columns",
+                  "Twin Relays", "Command Hub", "Industrial Docks",
+                  # Stan confirmed FLIGHT CONTROL is not a gamertag; it and
+                  # TARMAC NORTH appear on screen but aren't in the wiki zone
+                  # lists, so they're sub-locations. Kept here because he is the
+                  # ground truth, not the wiki.
+                  "Flight Control", "Tarmac North", "Tarmac South", "Tarmac"],
     "Dire Marsh": ["Maintenance", "AI Uplink", "Complex", "Quarantine",
                    "Algae Ponds", "Bio-Research", "Greenhouse", "Intersection",
                    "West Gate", "East Gate", "Canal", "Anomaly", "Lockdown"],
@@ -70,6 +75,26 @@ MAP_LOCATIONS = {
 # slips.
 _FUZZY_MIN_LEN = 8
 _LOCATION_FUZZ = 90
+
+
+# ITEM / loot text also lands in the feed region. "DEPLeted PATCH KIT" was logged
+# as a victim on 2026-07-29 — that's loot, not a runner. Matching on the item NOUN
+# catches every rarity prefix (Depleted/Standard/Advanced Patch Kit) without me
+# needing a complete item list, which for a live game I can't have.
+ITEM_WORDS = ("patch kit", "med kit", "medkit", "stim", "ammo box", "shield cell",
+              "battery", "canister", "data key", "keycard", "lockpick",
+              "grenade", "syringe", "repair kit", "toolkit")
+
+
+def looks_like_item(name: str) -> bool:
+    """True if the text reads as a loot item rather than a gamertag.
+
+    WHOLE WORDS only. A naked substring test ate real gamertags — 'STIMPY'
+    contains 'stim' and 'BATTERYACID' contains 'battery' — which is the failure
+    mode that matters here: wrongly dropping a player loses real data silently."""
+    import re as _re
+    low = " ".join(name.lower().split())
+    return any(_re.search(rf"\b{_re.escape(w)}\b", low) for w in ITEM_WORDS)
 
 
 def _name_key(name: str) -> str:
@@ -134,7 +159,7 @@ def _is_player(name: str, ignore=frozenset(), skip_locations: bool = True) -> bo
     key = _name_key(name)
     if not key or key in _NOT_NAMES or key in ignore:
         return False
-    if skip_locations and location_hit(name):
+    if skip_locations and (location_hit(name) or looks_like_item(name)):
         return False
     return True
 
@@ -153,6 +178,13 @@ def _tokens(row: str) -> list[str]:
 def _find_tag_span(tokens: list[str], tag: str) -> tuple[int, int]:
     """(start, end) of the token span best matching your gamertag, or (-1, -1).
     Tags with spaces OCR as several tokens, so windows of 1-3 are tried."""
+    return _find_tag_span_scored(tokens, tag)[0]
+
+
+def _find_tag_span_scored(tokens: list[str], tag: str) -> tuple:
+    """((start, end), score) — as _find_tag_span, but also reports how well your
+    gamertag matched. The score is the confidence that this row is really YOUR
+    feed line, which is what lets one kill pick a single best victim."""
     tag = "".join(c for c in tag.lower() if c.isalnum())
     best_score, best = 0, (-1, -1)
     for n in (1, 2, 3):
@@ -163,7 +195,9 @@ def _find_tag_span(tokens: list[str], tag: str) -> tuple[int, int]:
             score = fuzz.ratio(tag, joined)
             if score > best_score:
                 best_score, best = score, (i, i + n)
-    return best if best_score >= 82 else (-1, -1)
+    if best_score < 82:
+        return (-1, -1), 0
+    return best, best_score
 
 
 def _clean_name(tokens: list[str]) -> str:
@@ -189,10 +223,16 @@ def extract(rows, gamertag: str, ignore=frozenset()) -> list[tuple[str, str]]:
     [('victim'|'killed_by', name)] — victim when your tag leads the line
     (you were the killer), killed_by when it ends it. Ability/game-text
     strings (see _is_player) are dropped."""
-    out = []
+    # AT MOST ONE name per direction. extract() used to return a hit for EVERY
+    # row matching your tag, so on 2026-07-29 a single down logged three
+    # "victims": FLIGHT CONTROL, TARMAC NoRth, REDACTED6618. One down has exactly
+    # one victim, so the extra rows are noise by definition — no blocklist
+    # needed to know that. Keep the row whose gamertag match scored highest,
+    # which is the best evidence of which line is actually yours.
+    best = {}          # direction -> (score, name)
     for row in rows:
         toks = _tokens(row)
-        s, e = _find_tag_span(toks, gamertag)
+        (s, e), score = _find_tag_span_scored(toks, gamertag)
         if s < 0:
             continue
         before = _clean_name(toks[:s]) if _is_player(_clean_name(toks[:s]), ignore) else ""
@@ -201,14 +241,20 @@ def extract(rows, gamertag: str, ignore=frozenset()) -> list[tuple[str, str]]:
         after = _clean_name(toks[e:e + 4])
         after = after if _is_player(after, ignore) else ""
         if after and not before:
-            out.append(("victim", after))
+            hit = ("victim", after)
         elif before and not after:
-            out.append(("killed_by", before))
+            hit = ("killed_by", before)
         elif before and after:
             # OCR noise put scraps on both sides — trust the longer side
-            out.append(("victim", after) if len(after) >= len(before)
-                       else ("killed_by", before))
-    return out
+            hit = (("victim", after) if len(after) >= len(before)
+                   else ("killed_by", before))
+        else:
+            continue
+        direction, name = hit
+        if score > best.get(direction, (0, ""))[0]:
+            best[direction] = (score, name)
+    # Stable order: your kill first, then who got you.
+    return [(d, best[d][1]) for d in ("victim", "killed_by") if d in best]
 
 
 def capture(cfg, engine) -> list[tuple[str, str]]:

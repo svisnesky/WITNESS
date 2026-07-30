@@ -68,3 +68,47 @@ def test_location_filter_can_be_bypassed():
 
 def test_config_name_ignore_still_applies():
     assert not encounters._is_player("SOMEONE", ignore={"SOMEONE"})
+
+
+def test_one_kill_logs_at_most_one_victim():
+    """THE structural bug from 2026-07-29: a single down logged three "victims"
+    (FLIGHT CONTROL, TARMAC NoRth, REDACTED6618) because extract() returned a hit
+    for every row matching the gamertag. A down has exactly one victim, so the
+    extras are noise by definition — this needs no blocklist to catch."""
+    rows = [
+        "FLIGHT CONTROL",                     # a location banner
+        "MRVIZNASTY 10M DEPLeted PATCH KIT",  # weak tag match + loot text
+        "MRVIZNASTY  REDACTED6618",           # the real feed line
+    ]
+    out = encounters.extract(rows, "MRVIZNASTY")
+    victims = [n for d, n in out if d == "victim"]
+    assert len(victims) <= 1, victims
+    assert victims == ["REDACTED6618"], out
+
+
+def test_one_victim_and_one_killer_can_coexist():
+    """You downed someone AND someone downed you: one of each, never more."""
+    rows = ["MRVIZNASTY  SOMEDUDE", "XX SANIK XX  MRVIZNASTY",
+            "MRVIZNASTY  OTHERGUY"]
+    out = dict(encounters.extract(rows, "MRVIZNASTY"))
+    assert set(out) <= {"victim", "killed_by"}
+    assert len(encounters.extract(rows, "MRVIZNASTY")) <= 2
+
+
+def test_loot_items_are_not_players():
+    for item in ["DEPLeted PATCH KIT", "Advanced Patch Kit", "STANDARD MED KIT",
+                 "Shield Cell", "data key"]:
+        assert encounters.looks_like_item(item), item
+        assert not encounters._is_player(item), item
+
+
+def test_item_filter_does_not_eat_real_gamertags():
+    for tag in ["PATCHY", "KITKAT99", "STIMPY", "BATTERYACID", "MEDIC"]:
+        assert not encounters.looks_like_item(tag), tag
+        assert encounters._is_player(tag), tag
+
+
+def test_stan_confirmed_non_gamertags_are_rejected():
+    """Stan: "Flight control is not a gamer tag." It became PRIME TARGET (2x)."""
+    for text in ["FLIGHT CONTROL", "TARMAC NoRth", "East Wall", "Columns"]:
+        assert not encounters._is_player(text), text
