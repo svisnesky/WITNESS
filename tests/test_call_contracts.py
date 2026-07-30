@@ -100,3 +100,43 @@ def test_every_module_imports_cleanly():
         except Exception as e:
             failures.append(f"{name}: {type(e).__name__}: {e}")
     assert not failures, "\n".join(failures)
+
+
+def test_every_dashboard_setting_is_actually_read_by_the_app():
+    """A toggle that changes nothing is worse than no toggle — it looks like it
+    worked. Every key exposed in the Settings UI must be consumed somewhere in
+    the codebase.
+
+    Prompted by youtube_upload_montage: the montage was the one artifact Stan
+    wanted uploaded and it had no toggle at all, so he was told to edit
+    config.yaml, which he couldn't find."""
+    import webserver
+
+    sources = {}
+    for name in ("main", "webserver", "match_reel", "montage", "shorts",
+                 "exfil_stats", "encounters", "announcer", "tidy",
+                 "witness_report", "loot_goblin", "youtube_upload"):
+        path = os.path.join(BASE, f"{name}.py")
+        if os.path.exists(path):
+            sources[name] = open(path, encoding="utf-8").read()
+    blob = "\n".join(sources.values())
+
+    unused = [key for key, _label in webserver.SETTINGS_META
+              if f'"{key}"' not in blob and f"'{key}'" not in blob]
+    assert not unused, f"settings exposed in the UI but never read: {unused}"
+
+
+def test_settings_ui_and_types_agree():
+    """A label with no type entry would crash apply_settings on first use."""
+    import webserver
+    typed = set(webserver.SETTINGS)
+    shown = {k for k, _ in webserver.SETTINGS_META}
+    assert shown <= typed, f"shown but untyped: {sorted(shown - typed)}"
+
+
+def test_youtube_uploads_all_default_off():
+    """Nothing may publish to Stan's channel without him turning it on."""
+    import webserver
+    for key, (default, _t) in webserver.SETTINGS.items():
+        if key.startswith("youtube_upload"):
+            assert default is False, key

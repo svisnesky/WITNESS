@@ -41,6 +41,10 @@ SETTINGS = {
     "heat_overlays": (True, bool),          # streak toasts on screen
     "heat_callouts": (True, bool),          # streak call-outs (voice)
     "witness_report": (True, bool),         # end-of-night WITNESS Report dossier
+    # The montage is the one Stan actually wants uploaded ("mainly the end
+    # montage") and it had no toggle at all — he had to edit config.yaml, which
+    # he couldn't find. Anything he'll realistically want to flip belongs here.
+    "youtube_upload_montage": (False, bool),       # auto-upload session montage
     "youtube_upload_session_reel": (False, bool),  # auto-upload session reel
     "youtube_upload_match_reels": (False, bool),   # auto-upload each match reel
     "youtube_upload_shorts": (False, bool),        # auto-upload each Short
@@ -158,6 +162,7 @@ SETTINGS_META = [
     ("heat_overlays", "Streak toasts on screen"),
     ("heat_callouts", "Streak call-outs (voice)"),
     ("witness_report", "End-of-night WITNESS Report"),
+    ("youtube_upload_montage", "YouTube: session montage"),
     ("youtube_upload_session_reel", "YouTube: session reel"),
     ("youtube_upload_match_reels", "YouTube: match reels"),
     ("youtube_upload_shorts", "YouTube: Shorts (quota-heavy)"),
