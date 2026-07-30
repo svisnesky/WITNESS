@@ -226,13 +226,18 @@ class LiveState:
         def work():
             try:
                 import main
-                self.set_recap({"status": "building",
-                                "note": f"rebuilding {session}…"})
-                main.rebuild_session(cfg, session)
-                self.set_recap({"status": "ready", "note": "rebuild complete"})
+                # set_recap takes KEYWORDS, not a dict.
+                self.set_recap(status="building", note="starting rebuild…")
+                # Pass set_recap through so each stage ("building session
+                # montage…", "cutting Play of the Night…", "rendering vertical
+                # Shorts…") reaches the UI. Without this the status sat on one
+                # message for the several minutes a render takes, which is
+                # indistinguishable from being hung.
+                main.rebuild_session(cfg, session, rc=self.set_recap)
+                self.set_recap(status="ready", note="rebuild complete")
             except Exception as e:
                 print(f"  [rebuild] failed: {e}")
-                self.set_recap({"status": "error", "note": f"rebuild failed: {e}"})
+                self.set_recap(status="error", note=f"rebuild failed: {e}")
             finally:
                 with self._lock:
                     self._rebuilding = False

@@ -2428,7 +2428,7 @@ def _resolve_session_dir(cfg, which: str) -> str:
     return os.path.join(root, names[0]) if names else ""
 
 
-def rebuild_session(cfg, which: str = "latest") -> None:
+def rebuild_session(cfg, which: str = "latest", rc=None) -> None:
     """Re-run the end-of-session renders for a session already on disk.
 
     The clips are the only irreplaceable part; the montage, reels, Shorts and
@@ -2437,14 +2437,31 @@ def rebuild_session(cfg, which: str = "latest") -> None:
     session is fully recoverable and this is how.
 
     Tags are recovered from the clip FILENAMES (NNN_tag_time.mkv), which is why
-    the tag is in the name at all."""
+    the tag is in the name at all.
+
+    rc: optional status callback (LiveState.set_recap) so the dashboard's Rebuild
+    button shows which stage is running. A multi-minute render with a single
+    unchanging message looks hung."""
+    def _say(note):
+        print(f"  [rebuild] {note}")
+        if rc is not None:
+            try:
+                rc(status="building", note=note)
+            except Exception:
+                pass
     sdir = _resolve_session_dir(cfg, which)
     if not sdir:
+        if rc is not None:
+            rc(status="error", note="couldn't find that session folder")
         return
+    name = os.path.basename(sdir.rstrip(os.sep))
     print(f"Rebuilding: {sdir}")
+    _say(f"rebuilding {name}")
     clips = _session_clips_from_dir(sdir)
     if not clips:
         print("  no clips in that folder — nothing to rebuild")
+        if rc is not None:
+            rc(status="error", note="no clips on disk for that session")
         return
     tags = []
     for c in clips:
@@ -2458,12 +2475,22 @@ def rebuild_session(cfg, which: str = "latest") -> None:
             os.remove(os.path.join(sdir, marker))
         except OSError:
             pass
-    _build_session_artifacts(cfg, sdir, tags, rc=None, report_speech="")
+    _say(f"{len(clips)} clips · {downs} downs · {elims} elims")
+    _build_session_artifacts(cfg, sdir, tags, rc=rc, report_speech="")
     if os.path.exists(os.path.join(sdir, ".recap_done")):
         print("Rebuild complete.")
+        if rc is not None:
+            rc(status="ready", note=f"rebuilt {name}")
     else:
-        print("Rebuild still had failures — see .recap_failed in the session "
-              "folder.")
+        why = ""
+        try:
+            with open(os.path.join(sdir, ".recap_failed"), encoding="utf-8") as f:
+                why = " — " + "; ".join(f.read().splitlines()[1:])
+        except OSError:
+            pass
+        print(f"Rebuild still had failures{why or ' — see .recap_failed'}")
+        if rc is not None:
+            rc(status="error", note=f"rebuild incomplete{why}")
 
 
 def main():

@@ -1,5 +1,6 @@
 """Resuming an interrupted end-of-session recap build."""
 import os
+import pathlib
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -83,3 +84,67 @@ def test_a_failed_recap_is_not_marked_done(tmp_path):
     assert "session reel" in (root / ".recap_failed").read_text()
     # And that means it is offered for resume/rebuild.
     assert main.find_unfinished_session(str(tmp_path)) == str(root)
+
+
+def test_rebuild_reports_each_stage_and_refuses_a_second_run(tmp_path):
+    """Stan asked "does it say the status of the rebuild anywhere?" — it must,
+    per stage. A multi-minute render showing one unchanging message is
+    indistinguishable from a hang.
+
+    Also covers two bugs found writing this: set_recap takes KEYWORDS (the first
+    version passed a dict and would have raised TypeError on the first click),
+    and rebuild_session passed rc=None so no stage note ever reached the UI."""
+    import time
+    import webserver
+
+    sess = tmp_path / "Marathon Sessions" / "s1"
+    sess.mkdir(parents=True)
+    (sess / "001_down_20-07-34.mkv").write_bytes(b"x")
+
+    st = webserver.LiveState()
+    st._cfg = {}
+    orig_cached = main.cached_record_dir
+    orig_build = main._build_session_artifacts
+    main.cached_record_dir = lambda: str(tmp_path)
+
+    notes = []
+
+    def slow(cfg, sdir, tags, rc=None, report_speech=""):
+        for note in ("building session montage…", "cutting Play of the Night…"):
+            if rc:
+                rc(status="building", note=note)
+            notes.append(note)
+            time.sleep(0.15)
+        (pathlib.Path(sdir) / ".recap_done").write_text("x")
+
+    main._build_session_artifacts = slow
+    try:
+        assert st.request_rebuild("s1")["ok"] is True
+        time.sleep(0.05)
+        # A second click while one is running must be refused, not queued.
+        second = st.request_rebuild("s1")
+        assert second["ok"] is False
+        assert "already running" in second["error"]
+        for _ in range(60):
+            if st.recap.get("status") in ("ready", "error"):
+                break
+            time.sleep(0.05)
+        assert st.recap.get("status") == "ready", st.recap
+        assert notes == ["building session montage…", "cutting Play of the Night…"]
+    finally:
+        main.cached_record_dir = orig_cached
+        main._build_session_artifacts = orig_build
+
+
+def test_rebuild_reports_a_missing_session_instead_of_going_quiet(tmp_path):
+    import webserver
+    st = webserver.LiveState()
+    st._cfg = {}
+    orig = main.cached_record_dir
+    main.cached_record_dir = lambda: str(tmp_path)
+    try:
+        main.rebuild_session({}, "nope-does-not-exist", rc=st.set_recap)
+        assert st.recap.get("status") == "error", st.recap
+        assert st.recap.get("note")
+    finally:
+        main.cached_record_dir = orig
