@@ -2017,6 +2017,12 @@ def _build_session_artifacts(cfg, session_dir, tags, rc=None, report_speech=""):
             except Exception:
                 pass
 
+    # Every stage failure is collected, NOT just printed. Last time the reels all
+    # raised TypeError, each except printed a line, and .recap_done was written
+    # anyway — so the session looked complete forever and could never be resumed
+    # or rebuilt. A recap is only "done" if nothing failed.
+    failures = []
+
     # Highlight montage of this session's clips (needs ffmpeg + organized clips).
     _rc(note="building session montage…")
     if cfg.get("make_montage", True) and session_dir:
@@ -2026,6 +2032,7 @@ def _build_session_artifacts(cfg, session_dir, tags, rc=None, report_speech=""):
             montage.build_montage(session_dir, montage.find_ffmpeg(base, cfg))
         except Exception as e:
             print(f"(montage error: {e})")
+            failures.append(f"montage: {e}")
 
     # Play of the Night — the single best clip across the WHOLE session, cut
     # into its own reel. Scoring is the same pick as per-match POTG (most kills,
@@ -2058,6 +2065,7 @@ def _build_session_artifacts(cfg, session_dir, tags, rc=None, report_speech=""):
                     print(f"Play of the Night -> {out}")
         except Exception as e:
             print(f"(play of the night error: {e})")
+            failures.append(f"play of the night: {e}")
 
     # Vertical Shorts render of each clip (needs ffmpeg + organized clips).
     _rc(note="rendering vertical Shorts…")
@@ -2079,14 +2087,16 @@ def _build_session_artifacts(cfg, session_dir, tags, rc=None, report_speech=""):
                                        "Auto-uploaded with WITNESS. #Shorts #Marathon")
         except Exception as e:
             print(f"(shorts error: {e})")
+            failures.append(f"shorts: {e}")
 
     # Session highlight reel (all clips + title card + Play of the Game), and
     # optional unlisted YouTube upload of just that one video.
     _rc(note="building the session reel (the big one)…")
     if session_dir and (cfg.get("make_session_reel", True)
                         or cfg.get("youtube_upload_session_reel", False)):
-        _build_session_reel_and_upload(cfg, session_dir, tags,
-                                       report_speech=report_speech)
+        if not _build_session_reel_and_upload(cfg, session_dir, tags,
+                                              report_speech=report_speech):
+            failures.append("session reel")
 
     # Organize the folder — LAST, so nothing moves out from under a builder
     # above. Only moves files into clips/ and exfil/; deletes nothing.
@@ -2101,9 +2111,22 @@ def _build_session_artifacts(cfg, session_dir, tags, rc=None, report_speech=""):
     # recap finished (covers configs where the session reel itself is off,
     # and stops a failed reel build from re-rendering on every boot).
     if session_dir:
+        stamp = time.strftime("%Y-%m-%d %H:%M:%S")
         try:
-            with open(os.path.join(session_dir, ".recap_done"), "w") as f:
-                f.write(time.strftime("%Y-%m-%d %H:%M:%S"))
+            if failures:
+                # Do NOT mark it done. Leaving the marker off is what lets the
+                # launch-time resume check pick this session back up, and the
+                # reasons file says what to look at.
+                with open(os.path.join(session_dir, ".recap_failed"), "w",
+                          encoding="utf-8") as f:
+                    f.write(stamp + "\n" + "\n".join(failures) + "\n")
+                print(f"  [recap] {len(failures)} stage(s) FAILED — not marking "
+                      f"this session complete so it can be rebuilt:")
+                for why in failures:
+                    print(f"          - {why}")
+            else:
+                with open(os.path.join(session_dir, ".recap_done"), "w") as f:
+                    f.write(stamp)
         except OSError:
             pass
 
@@ -2114,6 +2137,7 @@ def find_unfinished_session(record_dir: str) -> str:
     Only the NEWEST clip-bearing session is considered: older gaps are treated
     as deliberate (user may have turned renders off back then)."""
     import montage
+    import tidy
     root = os.path.join(record_dir or "", "Marathon Sessions")
     if not os.path.isdir(root):
         return ""
@@ -2121,9 +2145,10 @@ def find_unfinished_session(record_dir: str) -> str:
         sdir = os.path.join(root, name)
         if not os.path.isdir(sdir):
             continue
-        clips = [f for f in os.listdir(sdir)
-                 if f.lower().endswith(montage.VIDEO_EXTS)
-                 and not f.lower().startswith(("highlights", "session"))]
+        # Layout-agnostic: a TIDIED session keeps its clips in clips/, and
+        # scanning only the top level made every tidied session invisible here —
+        # so an interrupted-then-tidied recap could never be resumed.
+        clips = list(tidy.iter_session_media(sdir, montage.VIDEO_EXTS))
         if not clips:
             continue
         if (os.path.exists(os.path.join(sdir, ".recap_done"))
@@ -2205,7 +2230,9 @@ def _yt_upload(cfg, base, path, title, desc):
         print(f"  [youtube] error: {e}")
 
 
-def _build_session_reel_and_upload(cfg, session_dir, tags, report_speech=""):
+def _build_session_reel_and_upload(cfg, session_dir, tags, report_speech="") -> bool:
+    """True if the session reel was written (or genuinely had nothing to build).
+    False on a real failure, so the caller can refuse to mark the recap done."""
     try:
         import match_reel
         import montage
@@ -2213,7 +2240,7 @@ def _build_session_reel_and_upload(cfg, session_dir, tags, report_speech=""):
         clips = _session_clips_from_dir(session_dir)
         if not clips:
             print("  [session reel] no clips this session, skipping")
-            return
+            return True          # nothing to do is not a failure
         ffmpeg = montage.find_ffmpeg(base, cfg)
         out = os.path.join(session_dir, "session_reel.mp4")
         c = Counter(tags)
@@ -2232,7 +2259,7 @@ def _build_session_reel_and_upload(cfg, session_dir, tags, report_speech=""):
             **_reel_cut_kwargs(cfg))
         if not ok:
             print("  [session reel] build failed")
-            return
+            return False
 
         # Bake the WITNESS Report dossier in as the reel's voiceover — that's
         # where the spoken report actually earns its keep (nobody opens a lone
@@ -2268,8 +2295,10 @@ def _build_session_reel_and_upload(cfg, session_dir, tags, report_speech=""):
                     f"{c.get('assist',0)} assists.")
             youtube_upload.upload(out, title, desc, base,
                                   privacy=cfg.get("youtube_privacy", "unlisted"))
+        return True
     except Exception as e:
         print(f"  [session reel] error: {e}")
+        return False
 
 
 def _tray_icon_image(base: str, cfg: dict):
@@ -2349,6 +2378,74 @@ def run_tray(cfg: dict, dry_run: bool):
     worker.join(timeout=10)  # let the end-of-session recap finish
 
 
+def _resolve_session_dir(cfg, which: str) -> str:
+    """Session folder for --rebuild: a full path, a folder name, or 'latest'."""
+    if which and which != "latest" and os.path.isdir(which):
+        return which
+    root = ""
+    try:
+        obs = OBSClient(cfg)          # only to ask where OBS writes clips
+        obs.connect()
+        rec = obs.get_record_directory()
+        obs.close()
+        if rec:
+            root = os.path.join(rec, "Marathon Sessions")
+    except Exception as e:
+        print(f"(couldn't ask OBS for the clip folder: {e})")
+    if not root or not os.path.isdir(root):
+        print("Couldn't find the 'Marathon Sessions' folder. Pass the full path:"
+              "\n  python main.py --rebuild \"Z:/OBS Clips/Marathon/Marathon "
+              "Sessions/2026-07-29_20-00-15\"")
+        return ""
+    if which and which != "latest":
+        cand = os.path.join(root, which)
+        if os.path.isdir(cand):
+            return cand
+        print(f"No session folder named {which!r} in {root}")
+        return ""
+    names = sorted((n for n in os.listdir(root)
+                    if os.path.isdir(os.path.join(root, n))), reverse=True)
+    return os.path.join(root, names[0]) if names else ""
+
+
+def rebuild_session(cfg, which: str = "latest") -> None:
+    """Re-run the end-of-session renders for a session already on disk.
+
+    The clips are the only irreplaceable part; the montage, reels, Shorts and
+    dossier are all derived. So when a recap fails — as it did on 2026-07-29,
+    where every reel raised TypeError while the clips organized perfectly — the
+    session is fully recoverable and this is how.
+
+    Tags are recovered from the clip FILENAMES (NNN_tag_time.mkv), which is why
+    the tag is in the name at all."""
+    sdir = _resolve_session_dir(cfg, which)
+    if not sdir:
+        return
+    print(f"Rebuilding: {sdir}")
+    clips = _session_clips_from_dir(sdir)
+    if not clips:
+        print("  no clips in that folder — nothing to rebuild")
+        return
+    tags = []
+    for c in clips:
+        tags.extend(t for t in str(c.get("tag", "")).split("+") if t)
+    downs, elims = _kill_counts(tags)
+    print(f"  {len(clips)} clip(s) on disk -> {downs} downs, {elims} elims, "
+          f"{_kill_count(tags)} kills")
+    # Clear the stale markers so this run's outcome is what counts.
+    for marker in (".recap_done", ".recap_failed"):
+        try:
+            os.remove(os.path.join(sdir, marker))
+        except OSError:
+            pass
+    _build_session_artifacts(cfg, sdir, tags, rc=None, report_speech="")
+    if os.path.exists(os.path.join(sdir, ".recap_done")):
+        print("Rebuild complete.")
+    else:
+        print("Rebuild still had failures — see .recap_failed in the session "
+              "folder.")
+
+
 def main():
     p = argparse.ArgumentParser(description="Marathon Auto Kill Recorder")
     p.add_argument("--config", default=CONFIG_PATH)
@@ -2368,6 +2465,11 @@ def main():
                         "can keep up (run it with the game open for a real number)")
     p.add_argument("--tray", action="store_true",
                    help="run from a system-tray skull icon (no console window)")
+    p.add_argument("--rebuild", nargs="?", const="latest", metavar="SESSION",
+                   help="rebuild the reels/montage/Shorts for a past session "
+                        "from the clips still on disk. No argument = the most "
+                        "recent session; or pass a folder name or full path. "
+                        "Use this when a recap failed but the clips survived.")
     args = p.parse_args()
 
     # Self-update before anything loads config or starts detecting. If files
@@ -2385,7 +2487,9 @@ def main():
 
     cfg = load_config(args.config)
 
-    if args.teach:
+    if args.rebuild:
+        rebuild_session(cfg, args.rebuild)
+    elif args.teach:
         import teach
         teach.run(cfg)
     elif args.test_lines:
