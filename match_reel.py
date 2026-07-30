@@ -421,7 +421,8 @@ def build_match_reel(clips, out_path: str, ffmpeg: str,
                      music_tracks: list[str] | None = None,
                      transitions: bool = True, chyrons: bool = True,
                      theme: dict | None = None, tight_cuts: bool = True,
-                     preroll: float = 8.0, manual_preroll: float = 18.0) -> bool:
+                     preroll: float = 8.0, manual_preroll: float = 18.0,
+                     context_preroll: float = 16.0) -> bool:
     """Title card [+ POTG card] + clips [+ music bed] -> one mp4.
 
     music_volume is 0-1 (0.08 = quiet bed under the game audio).
@@ -484,7 +485,8 @@ def build_match_reel(clips, out_path: str, ffmpeg: str,
         dur = probe_duration(c["path"], ffmpeg)
         # Tight cuts: start ~preroll before the earliest kill instead of
         # playing the whole 30s buffer (kill timing from the clip's sidecar).
-        ss = (clip_trim_start(c, dur, ffmpeg, preroll, manual_preroll)
+        ss = (clip_trim_start(c, dur, ffmpeg, preroll, manual_preroll,
+                              context_preroll)
               if tight_cuts else 0.0)
         if ss and dur:
             print(f"  [reel] tight cut: {os.path.basename(c['path'])} "

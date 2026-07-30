@@ -392,10 +392,10 @@ def log_match_stats(base_dir: str, session_id: str, stats: dict, detected_kills:
     return path
 
 
-def report(stats: dict, tag_counts: dict) -> str:
+def report(stats: dict, tags) -> str:
     """Console summary + like-for-like audit of what we detected this match
-    vs what the game's summary screen says. tag_counts is a Counter of the
-    session's kill tags (down/precision/finisher/assist)."""
+    vs what the game's summary screen says. `tags` is the match's ORDERED tag
+    list — count_events() needs the order to fold modifiers onto their event."""
     if not stats:
         return "  [exfil] summary screen seen but couldn't read the stats panel"
     bits = []
@@ -411,12 +411,13 @@ def report(stats: dict, tag_counts: dict) -> str:
         bits.append(f"run {stats['run_time']}")
     lines = [f"  [exfil] match stats: {', '.join(bits) or stats}"]
 
+    detected = dict(zip(("downs", "elims"), count_events(tags)))
     audits = list(AUDIT_PAIRS)
-    for label, key, tags in audits:
+    for label, key, _mapped in audits:
         game = stats.get(key)
         if game is None:
             continue
-        ours = sum(tag_counts.get(t, 0) for t in tags)
+        ours = detected[label]
         if ours < game:
             lines.append(f"  [exfil] AUDIT {label}: game {game}, detected {ours} "
                          f"— missed {game - ours}")
@@ -437,20 +438,57 @@ def report(stats: dict, tag_counts: dict) -> str:
 # 'precision' appears in NEITHER list on purpose: it is a modifier printed
 # alongside a down for the same runner, not a separate event.
 AUDIT_PAIRS = (
-    ("downs", "runners_downed", ("down",)),
+    ("downs", "runners_downed", ("down", "manual_kill")),
     ("elims", "runner_elims", ("kill", "elim", "finisher")),
 )
 
+# Tags that mean "an enemy died by your hand".
+_ELIM = ("kill", "elim")
 
-def accumulate_accuracy(acc: dict, stats: dict, tag_counts: dict) -> None:
-    """Roll one match's audit into the session accuracy tally (mutates acc)."""
-    for name, key, tags in AUDIT_PAIRS:
+
+def count_events(tags) -> tuple:
+    """(downs, elims) from an ORDERED list of event tags — the canonical count,
+    shared by the live counter, the exfil audit and reconciliation so they can't
+    drift apart.
+
+    Order matters because Marathon prints modifiers just AFTER the event they
+    describe, and a modifier is the same enemy:
+      RUNNER DOWNED + PRECISION DOWNED  -> one down
+      RUNNER ELIM   + FINISHER          -> one elim (a melee finish)
+    A FINISHER with no elim in front of it IS its own elim, though — that's you
+    finishing a runner who never showed a RUNNER ELIM popup.
+
+    Measured across both audited sessions (2026-07-27 and 2026-07-29): folding a
+    trailing FINISHER matches the game's Runner Elims on 6 of 7 matches, versus
+    4 of 7 when every finisher was counted separately. The one miss is an
+    under-count on a match whose popup OCR'd as 'RUNNER ELIM [ASSIST F10 Xp'."""
+    downs = elims = 0
+    pending_elim = False          # an elim that hasn't had its FINISHER yet
+    for t in tags or []:
+        if t in ("down", "manual_kill"):
+            downs += 1
+        elif t in _ELIM:
+            elims += 1
+            pending_elim = True
+        elif t == "finisher":
+            if pending_elim:
+                pending_elim = False      # same runner, melee-finished
+            else:
+                elims += 1                # a finish with no elim popup of its own
+    return downs, elims
+
+
+def accumulate_accuracy(acc: dict, stats: dict, tags) -> None:
+    """Roll one match's audit into the session accuracy tally (mutates acc).
+    `tags` is the match's ORDERED tag list — count_events needs the order."""
+    detected = dict(zip(("downs", "elims"), count_events(tags)))
+    for name, key, _mapped in AUDIT_PAIRS:
         game = stats.get(key)
         if game is None:
             continue
         d = acc.setdefault(name, {"game": 0, "detected": 0, "matches": 0})
         d["game"] += game
-        d["detected"] += sum(tag_counts.get(t, 0) for t in tags)
+        d["detected"] += detected[name]
         d["matches"] += 1
 
 

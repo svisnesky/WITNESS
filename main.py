@@ -1015,12 +1015,8 @@ def _kill_counts(tags) -> tuple:
     downs == count of 'down' popups (precision excluded, it is a modifier),
     elims == count of 'kill'/'elim'/'finisher' popups. Assists count for
     nothing."""
-    # A manual +1 press counts on the DOWN side: it exists to credit a down the
-    # OCR missed, so it has to satisfy the same ground-truth comparison the game's
-    # "Runners Downed" drives — otherwise reconciliation adds it a second time.
-    downs = sum(1 for t in tags if t in ("down", "manual_kill"))
-    elims = sum(1 for t in tags if t in ELIM_TAGS)
-    return downs, elims
+    import exfil_stats
+    return exfil_stats.count_events(tags)
 
 
 def _kill_count(tags) -> int:
@@ -1541,7 +1537,7 @@ def _maybe_capture_exfil(cfg, engine, lines, s, now):
         # Audit THIS match's detected kills vs the game's count, then reset the
         # per-match tally for the next match.
         match_tags = s.get("match_tags", [])
-        print(exfil_stats.report(stats_d, Counter(match_tags)))
+        print(exfil_stats.report(stats_d, match_tags))
 
         # Ground-truth reconciliation: the game's own 'Runners Downed' number
         # is authoritative — if detection missed kills this match, add them so
@@ -1571,7 +1567,7 @@ def _maybe_capture_exfil(cfg, engine, lines, s, now):
                       f"added {missed}, count now {s['count']}")
         if stats_d:
             exfil_stats.accumulate_accuracy(s.setdefault("accuracy", {}),
-                                            stats_d, Counter(match_tags))
+                                            stats_d, match_tags)
             base = os.path.dirname(os.path.abspath(__file__))
             exfil_stats.log_match_stats(base, s["session_id"], stats_d,
                                         len(match_tags))

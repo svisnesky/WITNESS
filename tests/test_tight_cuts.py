@@ -117,3 +117,30 @@ def test_longer_preroll_keeps_more_of_the_clip():
 def test_context_preroll_cannot_exceed_the_footage():
     """A preroll longer than the clip must not produce a negative in-point."""
     assert mr._trim_start(12.0, [8.0], 16.0) == 0.0   # no cut worth making
+
+
+def test_reel_cut_kwargs_are_all_accepted_by_build_match_reel():
+    """CONTRACT. main._reel_cut_kwargs() is splatted straight into
+    build_match_reel(**kwargs), so every key it produces must be a real
+    parameter. Adding 'context_preroll' to the dict without adding it to the
+    signature raised TypeError at RUNTIME and destroyed a whole session's reels:
+    every match reel, Play of the Night and the session reel failed with
+    "build_match_reel() got an unexpected keyword argument 'context_preroll'"
+    while the montage still built, so it looked like a partial success."""
+    import inspect
+
+    import main
+
+    accepted = set(inspect.signature(mr.build_match_reel).parameters)
+    produced = set(main._reel_cut_kwargs({}))
+    missing = produced - accepted
+    assert not missing, f"build_match_reel() cannot accept: {sorted(missing)}"
+
+
+def test_build_match_reel_accepts_the_kwargs_without_raising():
+    """Belt and braces: actually CALL it with the real kwargs. No clips, so it
+    returns early without touching ffmpeg — but the binding is exercised, which
+    is the exact thing that broke."""
+    import main
+    assert mr.build_match_reel([], "/tmp/none.mp4", "ffmpeg", "T", 0, [],
+                               **main._reel_cut_kwargs({})) is False
