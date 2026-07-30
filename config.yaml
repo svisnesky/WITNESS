@@ -319,6 +319,13 @@ make_session_reel: true
 # separate toggle — also in the dashboard Settings. NOTE: YouTube allows
 # ~6 uploads/day by default, so leave "shorts" off unless you post a lot
 # (a busy session makes many).
+# Tidy the session folder when the recap finishes: per-kill clips (and their
+# .json sidecars) move into clips/, exfil screenshots into exfil/. The montage,
+# session reel, dossier, reels/ and shorts/ stay where they are. Files are MOVED
+# inside the session folder — nothing is deleted and nothing leaves — so it's
+# reversible by dragging them back. Readers handle either layout.
+tidy_session_folder: true
+
 youtube_upload_session_reel: false   # the one whole-session highlight reel
 youtube_upload_match_reels: false    # each match's highlight reel
 youtube_upload_shorts: false         # every vertical Short (quota-heavy)

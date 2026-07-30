@@ -2090,6 +2090,15 @@ def _build_session_artifacts(cfg, session_dir, tags, rc=None, report_speech=""):
         _build_session_reel_and_upload(cfg, session_dir, tags,
                                        report_speech=report_speech)
 
+    # Organize the folder — LAST, so nothing moves out from under a builder
+    # above. Only moves files into clips/ and exfil/; deletes nothing.
+    if session_dir and cfg.get("tidy_session_folder", True):
+        try:
+            import tidy
+            tidy.tidy_session(session_dir)
+        except Exception as e:
+            print(f"  [tidy] skipped: {e}")
+
     # Completion marker: tells the launch-time resume check this session's
     # recap finished (covers configs where the session reel itself is off,
     # and stops a failed reel build from re-rendering on every boot).
@@ -2166,17 +2175,19 @@ def _session_clips_from_dir(session_dir: str):
     inferring the kill count from the filename tag (e.g. down+finisher = 2)."""
     import match_reel
     import montage
+    import tidy
     out = []
-    for f in os.listdir(session_dir):
-        if not f.lower().endswith(montage.VIDEO_EXTS):
-            continue
-        if f.lower().startswith("highlights") or f.lower().startswith("session"):
+    # Tolerates a TIDIED folder (clips moved into clips/) as well as a flat one,
+    # so browsing or resuming an organized session still finds its clips.
+    for rel, full in tidy.iter_session_media(session_dir, montage.VIDEO_EXTS):
+        f = os.path.basename(rel)
+        if f.lower().startswith("session"):
             continue
         # NNN_tag_time.ext  ->  tag
         parts = f.split("_")
         tag = parts[1] if len(parts) >= 3 else "kill"
         tags = [p for p in tag.split("+") if p]
-        out.append({"path": os.path.join(session_dir, f),
+        out.append({"path": full,     # may live in clips/ on a tidied session
                     "kills": _kill_count(tags),
                     "downs": sum(1 for t in tags if t == "down"),
                     "tag": tag})
