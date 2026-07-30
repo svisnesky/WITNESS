@@ -326,6 +326,16 @@ make_session_reel: true
 # reversible by dragging them back. Readers handle either layout.
 tidy_session_folder: true
 
+# --- YouTube auto-upload ---
+# Needs a one-time free setup: a Google Cloud project with "YouTube Data API v3"
+# enabled, an OAuth client (type: Desktop app) saved as client_secret.json in
+# this folder. No billing account or card required — the API is quota-limited
+# (~6 uploads/day), not billed. First upload opens a browser once.
+#
+# IMPORTANT: publish the OAuth consent screen (Google Auth Platform -> Audience
+# -> Publish app). While it sits in "Testing", Google expires the refresh token
+# after 7 DAYS, so uploads work for a week and then quietly stop.
+youtube_upload_montage: false         # the end-of-session montage (every clip)
 youtube_upload_session_reel: false   # the one whole-session highlight reel
 youtube_upload_match_reels: false    # each match's highlight reel
 youtube_upload_shorts: false         # every vertical Short (quota-heavy)

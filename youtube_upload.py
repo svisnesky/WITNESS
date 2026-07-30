@@ -24,6 +24,41 @@ CLIENT_SECRET = "client_secret.json"
 TOKEN_FILE = "youtube_token.json"
 
 
+_MIMETYPES = {".mp4": "video/mp4", ".mkv": "video/x-matroska",
+              ".mov": "video/quicktime", ".webm": "video/webm",
+              ".avi": "video/x-msvideo", ".flv": "video/x-flv"}
+
+
+def _mimetype(path: str) -> str:
+    """Mimetype from the extension, defaulting to mp4."""
+    return _MIMETYPES.get(os.path.splitext(path)[1].lower(), "video/mp4")
+
+
+def _explain(err) -> str:
+    """Turn an upload failure into something actionable instead of a stack trace."""
+    text = str(err)
+    low = text.lower()
+    if "accessnotconfigured" in low or "has not been used in project" in low:
+        return ("the YouTube Data API v3 isn't enabled for this project. "
+                "Google Cloud console -> APIs & Services -> Library -> "
+                "'YouTube Data API v3' -> Enable.")
+    if "quotaexceeded" in low or "dailylimitexceeded" in low:
+        return ("daily API quota used up (~6 uploads/day on the free tier). "
+                "It resets at midnight Pacific.")
+    # Most specific first: youtubeSignupRequired arrives AS a 401, so the generic
+    # auth branch below would otherwise swallow it and send Stan chasing tokens.
+    if "youtubesignuprequired" in low:
+        return "that Google account has no YouTube channel yet — create one first."
+    if "unauthorized" in low or "invalid_grant" in low or "401" in text:
+        return ("authorization was rejected. Delete youtube_token.json and let "
+                "it re-authorize; if it keeps happening, publish the OAuth "
+                "consent screen (Testing status expires tokens after 7 days).")
+    if "forbidden" in low or "403" in text:
+        return ("YouTube refused the upload (403). Usually the API isn't enabled, "
+                "or the account has no channel.")
+    return text
+
+
 def _get_credentials(base_dir: str):
     """Load cached creds or run the one-time browser consent. Returns creds
     or None (with a printed reason)."""
@@ -56,6 +91,17 @@ def _get_credentials(base_dir: str):
             return creds
         except Exception as e:
             print(f"  [youtube] token refresh failed ({e}); re-authorizing")
+            if "invalid_grant" in str(e).lower():
+                # The 7-day trap: while the OAuth consent screen is in TESTING
+                # status Google expires refresh tokens after a week. Uploads work
+                # beautifully, then stop, and it looks like the app broke.
+                print("  [youtube] ^ this usually means your OAuth consent screen"
+                      " is still in 'Testing' status, which expires refresh"
+                      " tokens after 7 DAYS.\n"
+                      "            Fix permanently: Google Auth Platform ->"
+                      " Audience -> Publish app.\n"
+                      "            (An unverified single-user app just shows a"
+                      " warning you click past.)")
 
     if not os.path.exists(secret_path):
         print(f"  [youtube] {CLIENT_SECRET} not found in the app folder — "
@@ -91,8 +137,11 @@ def upload(video_path: str, title: str, description: str, base_dir: str,
                         "categoryId": "20"},  # 20 = Gaming
             "status": {"privacyStatus": privacy, "selfDeclaredMadeForKids": False},
         }
+        # Derive the mimetype from the file. It was hardcoded video/mp4, which is
+        # a lie for the session montage — that renders as .mkv (it's a stream copy
+        # of OBS's Replay Buffer output, never re-encoded).
         media = MediaFileUpload(video_path, chunksize=-1, resumable=True,
-                                mimetype="video/mp4")
+                                mimetype=_mimetype(video_path))
         req = youtube.videos().insert(part="snippet,status", body=body, media_body=media)
         print(f"  [youtube] uploading {os.path.basename(video_path)} ({privacy})...")
         resp = req.execute()
@@ -104,5 +153,5 @@ def upload(video_path: str, title: str, description: str, base_dir: str,
         print(f"  [youtube] upload returned no video id: {resp}")
         return None
     except Exception as e:
-        print(f"  [youtube] upload failed: {e}")
+        print(f"  [youtube] upload failed: {_explain(e)}")
         return None

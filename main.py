@@ -2029,7 +2029,18 @@ def _build_session_artifacts(cfg, session_dir, tags, rc=None, report_speech=""):
         try:
             import montage
             base = os.path.dirname(os.path.abspath(__file__))
-            montage.build_montage(session_dir, montage.find_ffmpeg(base, cfg))
+            made = montage.build_montage(session_dir,
+                                         montage.find_ffmpeg(base, cfg))
+            # The montage is the one Stan actually wants on YouTube ("mainly the
+            # end montage"), and it was the only artifact with no upload flag.
+            if made and cfg.get("youtube_upload_montage", False):
+                downs, elims = _kill_counts(tags)
+                _yt_upload(
+                    cfg, base, made,
+                    f"Marathon — {downs} downs, {elims} elims — "
+                    f"{time.strftime('%b %d, %Y')}",
+                    "Session montage, auto-uploaded with WITNESS.\n"
+                    f"{downs} runners downed, {elims} elims.")
         except Exception as e:
             print(f"(montage error: {e})")
             failures.append(f"montage: {e}")
