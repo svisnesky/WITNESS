@@ -745,18 +745,30 @@ def build_match_reel(clips, out_path: str, ffmpeg: str,
         return True
     tail = (r.stderr.strip().splitlines() or ["(no output)"])[-1]
     print(f"  [reel] ffmpeg failed: {tail}")
-    # Degrade gracefully rather than produce nothing: drop chyrons first
-    # (drawtext is the flakiest across ffmpeg builds), then transitions.
+    # Degrade gracefully rather than produce nothing: drop the TEXT first
+    # (drawtext is the flakiest thing across ffmpeg builds), then transitions.
+    # Stan asked for exactly this: "if it doesnt work can the failsafe be it just
+    # doesnt put text?"
+    #
+    # Everything else is forwarded verbatim. The retries used to pass only
+    # transitions/chyrons, so a fallback render silently reverted theme and the
+    # cut settings to their defaults too — losing the 16s context preroll on top
+    # of the text. A failsafe must drop ONE thing, not quietly change others.
+    keep = dict(theme=theme, tight_cuts=tight_cuts, preroll=preroll,
+                manual_preroll=manual_preroll, context_preroll=context_preroll,
+                render_encoder=render_encoder)
     if use_chyrons:
-        print("  [reel] retrying without chyrons...")
+        print("  [reel] text failed to render — building this reel without it")
         return build_match_reel(clips, out_path, ffmpeg, title, kills, sub_lines,
                                 wordmark_path, music_path, music_volume,
-                                music_tracks, transitions=transitions, chyrons=False)
+                                music_tracks, transitions=transitions,
+                                chyrons=False, **keep)
     if use_xfade:
         print("  [reel] retrying without transitions...")
         return build_match_reel(clips, out_path, ffmpeg, title, kills, sub_lines,
                                 wordmark_path, music_path, music_volume,
-                                music_tracks, transitions=False, chyrons=False)
+                                music_tracks, transitions=False, chyrons=False,
+                                **keep)
     return False
 
 

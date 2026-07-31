@@ -78,5 +78,10 @@ def test_a_failed_chyron_never_costs_the_reel():
     reel — I broke every reel in a session once already this week."""
     import inspect
     src = inspect.getsource(mr.build_match_reel)
-    assert "retrying without chyrons" in src
-    assert "chyrons=False" in src
+    assert "without it" in src and "chyrons=False" in src
+    # The failsafe must drop ONE thing. It used to forward only
+    # transitions/chyrons, so a fallback also reverted the theme and the cut
+    # settings to defaults — losing the 16s context preroll along with the text.
+    for kw in ("theme=theme", "tight_cuts=tight_cuts", "preroll=preroll",
+               "context_preroll=context_preroll", "render_encoder=render_encoder"):
+        assert kw in src, f"failsafe drops {kw} instead of forwarding it"
