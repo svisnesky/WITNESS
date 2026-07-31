@@ -357,27 +357,65 @@ def _tag_rank(tag: str) -> int:
     return len(TAG_PRIORITY)
 
 
-def pick_potg(clips: list[dict]):
-    """The best clip: most DISTINCT ENEMIES first, then total kills, then the
-    flashier tag, then latest.
+# A SAVE CLIP press competes as if it were a one-kill clip. It is the only signal
+# in the whole app that comes from a human deciding "that was good" rather than
+# from OCR, so it shouldn't rank below a routine down — but a genuine multikill
+# should still beat it.
+MANUAL_POTG_WEIGHT = 1
+
+
+def _tags(tag: str) -> list:
+    return [t for t in str(tag or "").split("+") if t]
+
+
+def _is_manual(tag: str) -> bool:
+    """True for a bare SAVE CLIP save — a kept moment with no detected kill.
+    Matched EXACTLY, not as a substring, so 'manual_kill' (a +1 KILL press, which
+    already counts as a real down) doesn't get its count inflated."""
+    return "manual" in _tags(tag)
+
+
+def human_flagged(tag: str) -> bool:
+    """True when YOU marked this moment: SAVE CLIP or +1 KILL. Both are a person
+    saying "that was good", which no OCR signal can express — so both win ties
+    against a clip the app merely happened to catch."""
+    return bool({"manual", "manual_kill"} & set(_tags(tag)))
+
+
+def potg_score(clip: dict) -> tuple:
+    """Ranking key for Play of the Game/Night, best last.
 
     Distinct downs lead deliberately. Scoring on the composite kill number let a
     single runner downed AND finished (down + elim + finisher popups) outrank
     genuinely downing two different people, because it racked up more scoring
     events off one enemy. What actually looks like a play is how many people you
     took out — Stan: "i downed a guy, then flipped around and downed another.
-    That should probably be play of the night"."""
+    That should probably be play of the night".
+
+    A manual save is scored as one kill and wins ties against routine clips.
+    NOTE this lives here and NOT in the clip's kills/downs fields: a SAVE CLIP is
+    still worth zero in the stats, and must never inflate a kill count."""
+    tag = str(clip.get("tag", ""))
+    downs = clip.get("downs")
+    if downs is None:
+        downs = sum(1 for t in tag.split("+") if t == "down")
+    kills = int(clip.get("kills", 1) or 0)
+    # Only a BARE manual save needs the weight — a +1 press already carries a
+    # real down, and boosting it would count the same moment twice.
+    if _is_manual(tag):
+        downs = max(downs, MANUAL_POTG_WEIGHT)
+        kills = max(kills, MANUAL_POTG_WEIGHT)
+    # The human-flagged bit sits AFTER kills: it breaks ties in a deliberate
+    # pick's favour but can never beat a clip with more actual enemies in it.
+    return (downs, kills, 1 if human_flagged(tag) else 0, -_tag_rank(tag))
+
+
+def pick_potg(clips: list[dict]):
+    """The best clip of the set, or None if there's nothing to choose between."""
     if len(clips) < 2:
         return None
-
-    def downs(c):
-        if "downs" in c:
-            return c["downs"]
-        return sum(1 for t in str(c.get("tag", "")).split("+") if t == "down")
-
     return max(enumerate(clips),
-               key=lambda ic: (downs(ic[1]), ic[1]["kills"],
-                               -_tag_rank(ic[1]["tag"]), ic[0]))[1]
+               key=lambda ic: potg_score(ic[1]) + (ic[0],))[1]
 
 
 def find_music(music_dir: str) -> str:
