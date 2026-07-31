@@ -84,6 +84,12 @@ def cpu_encoder_args() -> list:
     return ["-c:v", "libx264", "-preset", "veryfast", "-crf", "21"]
 
 
+def _hex_to_ff(c) -> str:
+    """(r,g,b) or '#rrggbb' -> ffmpeg's 0xRRGGBB colour literal."""
+    r, g, b = _rgb(c)
+    return f"0x{r:02x}{g:02x}{b:02x}"
+
+
 def _rgb(c):
     """Accept an (r,g,b) tuple or a '#rrggbb' string -> (r,g,b) tuple."""
     if isinstance(c, str) and c.startswith("#") and len(c) == 7:
@@ -208,7 +214,19 @@ def sort_chronologically(clips):
     return sorted(clips, key=key)
 
 
-def write_kill_sidecar(clip_path: str, saved_epoch: float, kills: list) -> None:
+def sidecar_victim(clip_path: str) -> str:
+    """The gamertag this clip's kill belonged to, or '' if none was read.
+    Kept separate from _load_sidecar so its 2-tuple contract stays intact."""
+    import json
+    try:
+        with open(clip_path + ".json", encoding="utf-8") as f:
+            return str(json.load(f).get("victim") or "").strip()
+    except Exception:
+        return ""
+
+
+def write_kill_sidecar(clip_path: str, saved_epoch: float, kills: list,
+                       victim: str = "") -> None:
     """Record WHEN the kills inside a clip happened: <clip>.json with the save
     moment and each kill's wall-clock epoch (+ whether it was a manual +1).
     Reels use this to cut straight to the action instead of playing the whole
@@ -217,6 +235,7 @@ def write_kill_sidecar(clip_path: str, saved_epoch: float, kills: list) -> None:
     try:
         with open(clip_path + ".json", "w", encoding="utf-8") as f:
             json.dump({"saved_epoch": float(saved_epoch),
+                       "victim": str(victim or ""),
                        "kills": [{"epoch": float(k.get("epoch", 0)),
                                   "manual": bool(k.get("manual", False))}
                                  for k in (kills or []) if k.get("epoch")]}, f)
@@ -592,13 +611,43 @@ def build_match_reel(clips, out_path: str, ffmpeg: str,
     font = _shorts._find_font()
     use_chyrons = bool(chyrons and font and _shorts._has_drawtext(ffmpeg))
 
+    # Eased alpha, not linear. The old ramp was a piecewise-linear if() chain,
+    # which is what Joe meant by "text is a bit choppy" — a straight-line fade
+    # reads as mechanical. smoothstep (p*p*(3-2p)) starts and ends gently.
+    def _ease(t0: float, t1: float, hold: float, fade: float) -> str:
+        pin = f"((t-{t0})/{fade})"
+        pout = f"(({t1}-t)/{fade})"
+        return (f"'if(lt(t,{t0}),0,"
+                f"if(lt(t,{t0 + fade}),{pin}*{pin}*(3-2*{pin}),"
+                f"if(lt(t,{hold}),1,"
+                f"if(lt(t,{t1}),{pout}*{pout}*(3-2*{pout}),0))))'")
+
+    _A = _ease(0.35, 4.9, 4.2, 0.55)
+
     def _chyron(label: str) -> str:
+        """Lower-third naming WHO you downed.
+
+        Two drawtext filters, no extra inputs — the plate is drawn by the name's
+        own box=1, so it shares the animated alpha and fades with the text. A
+        drawbox would have had to hard-cut, which is the choppiness we're fixing.
+
+        `label` is a gamertag. It used to be "KILL #3 - PRECISION", which the
+        title card three seconds earlier already said; the name is the one thing
+        a viewer can't get any other way. No name read -> no chyron at all,
+        rather than falling back to bookkeeping."""
         ff = font.replace(":", r"\:")
-        txt = label.replace("'", "").replace(":", r"\:")
-        a = ("'if(lt(t,0.4),0,if(lt(t,0.9),(t-0.4)*2,"
-             "if(lt(t,4.2),1,if(lt(t,4.9),(4.9-t)/0.7,0))))'")
-        return (f",drawtext=fontfile='{ff}':text='{txt}':fontsize=52:fontcolor=white:"
-                f"borderw=4:bordercolor=black@0.85:x=64:y=h-150:alpha={a}")
+        name = label.replace("'", "").replace(":", r"\:").replace("%", "")
+        accent = _hex_to_ff(ACCENT_LIGHT)
+        # Name + its plate. boxborderw pads the plate around the glyphs; the
+        # mockup sat the name low, so the top pad is larger than the bottom.
+        out = (f",drawtext=fontfile='{ff}':text='{name}':fontsize=62:"
+               f"fontcolor=white:box=1:boxcolor=0x0a0a10@0.78:boxborderw=26:"
+               f"x=76:y=h-150:alpha={_A}")
+        # Small accent label above it, tying the reel to the dashboard palette.
+        out += (f",drawtext=fontfile='{ff}':text='DOWNED':fontsize=26:"
+                f"fontcolor={accent}:box=1:boxcolor=0x0a0a10@0.78:boxborderw=12:"
+                f"x=78:y=h-192:alpha={_A}")
+        return out
 
     cmd = [ffmpeg, "-y"]
     for seg in segments:
@@ -634,7 +683,10 @@ def build_match_reel(clips, out_path: str, ffmpeg: str,
                           f"[{in_i + 1}:a]anull[a{si}]")
             in_i += 2
         else:
-            dt = _chyron(seg["label"]) if use_chyrons else ""
+            # The gamertag from this clip's sidecar. No name read -> NO chyron,
+            # rather than falling back to "KILL #3" bookkeeping.
+            who = sidecar_victim(seg["path"]) if use_chyrons else ""
+            dt = _chyron(who) if who else ""
             chains.append(f"[{in_i}:v]scale=1920:1080,setsar=1,fps=60,format=yuv420p{dt}[v{si}];"
                           f"[{in_i}:a]aformat=sample_rates=48000:channel_layouts=stereo[a{si}]")
             in_i += 1

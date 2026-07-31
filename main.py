@@ -943,7 +943,7 @@ def _prepare_medals_async(cfg, s):
 
 
 def _clip_ready_callback(s, tag, count, kills=1, kill_epochs=None,
-                         saved_epoch=0.0):
+                         saved_epoch=0.0, victim=""):
     """Callback for rename_clip_async: collect the clip (with its kill count,
     for Play of the Game), record WHEN its kills happened (sidecar, for tight
     reel cuts), and put it on the iPad as an instant replay."""
@@ -951,7 +951,8 @@ def _clip_ready_callback(s, tag, count, kills=1, kill_epochs=None,
         if saved_epoch and kill_epochs:
             try:
                 import match_reel
-                match_reel.write_kill_sidecar(dest, saved_epoch, kill_epochs)
+                match_reel.write_kill_sidecar(dest, saved_epoch, kill_epochs,
+                                              victim=victim)
             except Exception:
                 pass
         s["match_clips"].append({"path": dest, "kills": kills, "tag": tag})
@@ -1061,7 +1062,12 @@ def _flush_coalesce(s):
                                   kill_epochs=[{"epoch": p.get("epoch", 0),
                                                 "manual": p.get("manual", False)}
                                                for p in pending],
-                                  saved_epoch=saved_epoch))
+                                  saved_epoch=saved_epoch,
+                                  # only for clips that contain a real down —
+                                  # an assist-only clip's victim isn't yours
+                                  victim=(s.pop("_last_victim", "")
+                                          if any(p["tag"] == "down"
+                                                 for p in pending) else "")))
     s["_coalesce_pending"] = []
     s["_coalesce_deadline"] = 0.0
 
@@ -1364,6 +1370,11 @@ def _scan_feed_names(cfg, engine, s, expect):
             encounters.log(base, s["session_id"], direction, name)
             verb = "you downed" if direction == "victim" else "downed by"
             print(f"  [names] {verb}: {name}")
+            if direction == "victim":
+                # Remember it for the clip's sidecar, so reels can put the name
+                # on screen. This is the one fact a viewer can't get any other
+                # way — "KILL #3" is bookkeeping the title card already covered.
+                s["_last_victim"] = name
             if direction == "victim" and s["web"] is not None:
                 try:   # stitch the victim's tag onto the kill row on the dashboard
                     s["web"].annotate_last_kill(name)
