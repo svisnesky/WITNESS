@@ -347,6 +347,12 @@ tidy_session_folder: true
 # IMPORTANT: publish the OAuth consent screen (Google Auth Platform -> Audience
 # -> Publish app). While it sits in "Testing", Google expires the refresh token
 # after 7 DAYS, so uploads work for a week and then quietly stop.
+# Title for uploaded videos. Placeholders: {date} {kind} {downs} {elims} {kills}
+# {game} {match}. {kind} is "Session Montage" / "Session Reel" / "Match 3".
+# YouTube caps titles at 100 characters; a typo here falls back to the default
+# rather than costing you the upload.
+youtube_title_template: "WITNESS Auto Reel — {date}"
+
 youtube_upload_montage: false         # the end-of-session montage (every clip)
 youtube_upload_session_reel: false   # the one whole-session highlight reel
 youtube_upload_match_reels: false    # each match's highlight reel

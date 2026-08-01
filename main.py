@@ -1712,8 +1712,8 @@ def _build_match_reel_async(cfg, s, session_dir, stats_d):
                             pass
                 if cfg.get("youtube_upload_match_reels", False):
                     _yt_upload(cfg, base, best,
-                               f"Marathon — Match {match_num} — {total_kills} kills "
-                               f"— {time.strftime('%b %d, %Y')}",
+                               _yt_title(cfg, f"Match {match_num}",
+                                         kills=total_kills, match=match_num),
                                "Auto-uploaded match highlights, made with WITNESS.")
         except Exception as e:
             print(f"  [reel] error: {e}")
@@ -2049,8 +2049,7 @@ def _build_session_artifacts(cfg, session_dir, tags, rc=None, report_speech=""):
                 downs, elims = _kill_counts(tags)
                 _yt_upload(
                     cfg, base, made,
-                    f"Marathon — {downs} downs, {elims} elims — "
-                    f"{time.strftime('%b %d, %Y')}",
+                    _yt_title(cfg, "Session Montage", downs=downs, elims=elims),
                     "Session montage, auto-uploaded with WITNESS.\n"
                     f"{downs} runners downed, {elims} elims.")
         except Exception as e:
@@ -2244,6 +2243,27 @@ def _session_clips_from_dir(session_dir: str):
     return match_reel.sort_chronologically(out)
 
 
+def _yt_title(cfg, kind: str, **facts) -> str:
+    """The YouTube title for an upload, from youtube_title_template in config.
+
+    Stan asked for "WITNESS Auto Reel and the date", which is now the default.
+    Placeholders: {kind} {date} {downs} {elims} {kills} {game} {match}. An unknown
+    placeholder falls back to the plain template rather than raising mid-upload —
+    a typo in config must not cost the upload."""
+    tmpl = str(cfg.get("youtube_title_template")
+               or "WITNESS Auto Reel — {date}")
+    vals = {"kind": kind, "date": time.strftime("%b %d, %Y"),
+            "game": str(cfg.get("game", "") or "").title(),
+            "downs": "", "elims": "", "kills": "", "match": ""}
+    vals.update({k: v for k, v in facts.items() if v is not None})
+    try:
+        return tmpl.format(**vals)[:100]          # YouTube caps titles at 100
+    except (KeyError, IndexError, ValueError) as e:
+        print(f"  [youtube] youtube_title_template is invalid ({e}); "
+              "using the default")
+        return f"WITNESS Auto Reel — {vals['date']}"[:100]
+
+
 def _yt_upload(cfg, base, path, title, desc):
     """Upload one file to YouTube if the libraries + client_secret are set up.
     Degrades gracefully (prints why) — never breaks the end-of-session flow."""
@@ -2314,7 +2334,9 @@ def _build_session_reel_and_upload(cfg, session_dir, tags, report_speech="") -> 
 
         if cfg.get("youtube_upload_session_reel", False):
             import youtube_upload
-            title = f"Marathon — {total} kills — {time.strftime('%b %d, %Y')}"
+            r_downs, r_elims = _kill_counts(tags)
+            title = _yt_title(cfg, "Session Reel", kills=total,
+                              downs=r_downs, elims=r_elims)
             desc = ("Auto-uploaded Marathon session highlights.\n"
                     f"{c.get('finisher',0)} finishers, {c.get('precision',0)} precision, "
                     f"{c.get('assist',0)} assists.")
