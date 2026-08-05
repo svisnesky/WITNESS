@@ -215,6 +215,48 @@ class LiveState:
                 return True
             return False
 
+    def request_update(self, base_dir: str) -> dict:
+        """Check GitHub and apply an update, in the background.
+
+        REFUSES while a session is running or a recap/rebuild is building. Stan
+        lost two recaps to updating at the wrong moment — the render was killed
+        mid-flight — so this will not touch the files under a live session.
+
+        Deliberately does NOT relaunch: update_and_relaunch_if_needed() replaces
+        the process, which from inside the webserver would kill the very session
+        the user is watching. Files are staged and the UI says to restart."""
+        import threading
+        with self._lock:
+            if self.running:
+                return {"ok": False,
+                        "error": "stop the session first — updating mid-session "
+                                 "can kill a recap render"}
+            if (self.recap or {}).get("status") == "building":
+                return {"ok": False,
+                        "error": "a recap is still building — let it finish"}
+            if getattr(self, "_updating", False):
+                return {"ok": False, "error": "already checking"}
+            self._updating = True
+
+        def work():
+            try:
+                import updater
+                changed, msg = updater.check_and_update(base_dir)
+                with self._lock:
+                    self.update_msg = msg
+                    self.update_changed = bool(changed)
+                print(f"  [update] {msg}")
+            except Exception as e:
+                with self._lock:
+                    self.update_msg = f"update failed: {e}"
+                print(f"  [update] failed: {e}")
+            finally:
+                with self._lock:
+                    self._updating = False
+
+        threading.Thread(target=work, daemon=True).start()
+        return {"ok": True}
+
     def request_rebuild(self, session: str = "latest") -> dict:
         """Kick off a session rebuild in the BACKGROUND and return immediately.
 
@@ -402,6 +444,8 @@ class LiveState:
             return {"running": self.running, "count": self.count,
                     "started": self.started, "elapsed": elapsed,
                     "update": self.update_msg, "version": self.version,
+                    "update_changed": getattr(self, "update_changed", False),
+                    "updating": getattr(self, "_updating", False),
                     "detect": dict(self.detect),
                     "recap": dict(self.recap),
                     "heat": dict(self.heat),
@@ -881,6 +925,9 @@ def start_web(state, port, base_dir, host="0.0.0.0"):
                     except Exception as e:
                         result = {"error": f"{type(e).__name__}: {e}"}
                     self._send(json.dumps(result).encode(),
+                               "application/json", cache=False)
+                elif path == "/update":
+                    self._send(json.dumps(state.request_update(base_dir)).encode(),
                                "application/json", cache=False)
                 elif path == "/rebuild":
                     # Rebuild a past session's reels from the clips on disk.
@@ -1425,6 +1472,7 @@ PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
   <div class="ctrls">
     <button class="mini" id="snd" onclick="toggleSound()">SOUND: OFF</button>
     <button class="mini" id="autoplay" onclick="toggleAutoplay()">AUTO-PLAY: ON</button>
+    <button class="mini" id="upd" onclick="doUpdate()">Check for update</button>
     <button class="mini" id="fs" onclick="goFull()">Full screen</button>
   </div>
   <div class="hint" id="updmsg" style="color:var(--dim)"></div>
@@ -1505,7 +1553,20 @@ PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
       document.getElementById('sub').textContent =
         d.running && d.elapsed ? 'SESSION  ' + fmtElapsed(d.elapsed)
         : (d.running ? 'STARTING\\u2026' : 'Press START to begin watching');
-      if (d.update){ document.getElementById('updmsg').textContent = 'Updater: ' + d.update; }
+      if (d.update){
+        var m = document.getElementById('updmsg');
+        m.textContent = 'Updater: ' + d.update;
+        // Say plainly that a restart is what applies it. Updating does NOT
+        // relaunch from here — replacing the process would kill the session
+        // being watched, which is how two recaps were lost.
+        if (d.update_changed){
+          m.textContent += '  —  RESTART WITNESS to apply';
+          m.style.color = 'var(--accent-light)';
+        }
+      }
+      var ub = document.getElementById('upd');
+      if (ub){ ub.disabled = !!d.updating;
+               ub.textContent = d.updating ? 'Checking…' : 'Check for update'; }
       if (d.version){ document.getElementById('ver').textContent = 'WITNESS \\u00b7 ' + d.version; }
       if (d.running && d.detect && typeof d.detect.fps === 'number'){
         var v = d.detect;
@@ -1879,6 +1940,23 @@ PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
     if (nsVid && nsVid.paused) nsVid.play().catch(function(){});
     if (wl && wl.released) keepAwake();
   }, 5000);
+
+  function doUpdate(){
+    var b = document.getElementById('upd');
+    b.disabled = true; b.textContent = 'Checking…';
+    fetch('/update', {method:'POST'}).then(function(r){ return r.json(); })
+      .then(function(j){
+        if (!j.ok){
+          document.getElementById('updmsg').textContent = 'Updater: ' + j.error;
+          b.disabled = false; b.textContent = 'Check for update';
+        }
+        // on success the /status poll takes over and reports the result
+      })
+      .catch(function(e){
+        document.getElementById('updmsg').textContent = 'Updater: ' + e;
+        b.disabled = false; b.textContent = 'Check for update';
+      });
+  }
 
   function goFull(){
     var el = document.documentElement;
