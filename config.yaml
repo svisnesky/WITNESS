@@ -123,6 +123,13 @@ loot_goblin_decal: true     # stamp a LOOT GOBLIN decal over the match's top
 # A failed hardware encode automatically retries on CPU — a reel is never lost.
 render_encoder: auto
 
+# Detection canary: watch for WITNESS having silently stopped working — the
+# failure where a game patch renames the kill popup, nothing errors, and you find
+# out from an empty recap. It compares what the exfil panel CREDITED against what
+# was detected, so it can tell "detection is broken" from "you had a quiet night".
+# It only shouts when the game's own numbers prove it. Reported at session end.
+detection_canary: true
+
 reel_tight_cuts: true       # reels start ~8s before each clip's first kill
                             # instead of playing the whole 30s buffer (kill
                             # timing recorded per clip at save time)

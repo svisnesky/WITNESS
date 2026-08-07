@@ -919,6 +919,12 @@ def _setup_session(cfg, dry_run):
                 precision_at=cfg.get("heat_precision_streak", 3))
         except Exception:
             s["heat"] = None
+    if cfg.get("detection_canary", True):
+        try:
+            import canary
+            s["canary"] = canary.DetectionCanary()
+        except Exception:
+            s["canary"] = None
     if cfg.get("announcer_medals", True) and not dry_run:
         _prepare_medals_async(cfg, s)
     return s
@@ -1582,6 +1588,10 @@ def _maybe_capture_exfil(cfg, engine, lines, s, now):
         if stats_d:
             exfil_stats.accumulate_accuracy(s.setdefault("accuracy", {}),
                                             stats_d, match_tags)
+            if s.get("canary") is not None:
+                od, oe = _kill_counts(match_tags)
+                s["canary"].note_audit(stats_d.get("runners_downed"),
+                                       stats_d.get("runner_elims"), od, oe)
             base = os.path.dirname(os.path.abspath(__file__))
             exfil_stats.log_match_stats(base, s["session_id"], stats_d,
                                         len(match_tags))
@@ -1823,6 +1833,9 @@ def _run_live_inner(cfg: dict, dry_run: bool = False, stop_event=None, on_count=
                 blocked = is_suppressed(cfg, lines)
                 events = [] if blocked else detect_events(det, mode, lines, now=loop_start)
 
+                if s.get("canary") is not None:
+                    s["canary"].note_frame(lines)
+                    s["canary"].note_trigger(len(events))
                 for ev in events:
                     _handle_kill(cfg, ev, s, on_count)
 
@@ -1890,6 +1903,9 @@ def _run_live_inner(cfg: dict, dry_run: bool = False, stop_event=None, on_count=
     acc_line = exfil_stats_accuracy(s)
     if acc_line:
         print(acc_line)
+    can_line = canary_report(s)
+    if can_line:
+        print(can_line)
     _end_session(cfg, s["session_tags"], s["session_start"],
                  s["session_start_wall"], dry_run, s["obs"], s["session_id"],
                  kills=s["count"], web=s["web"])
@@ -1901,6 +1917,24 @@ def exfil_stats_accuracy(s) -> str:
         return exfil_stats.accuracy_summary(s.get("accuracy", {}))
     except Exception:
         return ""
+
+
+def canary_report(s) -> str:
+    """End-of-session detection health. Always prints the counts; shouts only
+    when the evidence is conclusive, because a false 'your app is broken' on a
+    quiet night teaches you to ignore the warning."""
+    c = s.get("canary")
+    if c is None:
+        return ""
+    lines = ["  " + c.summary()]
+    level, msg = c.verdict()
+    if level == "broken":
+        lines += ["", "  " + "!" * 66,
+                  "  DETECTION LOOKS BROKEN — " + msg,
+                  "  " + "!" * 66]
+    elif level in ("blind", "quiet"):
+        lines.append(f"  [canary] {level.upper()}: {msg}")
+    return "\n".join(lines)
 
 
 def _end_session(cfg, tags, start_monotonic, start_wall, dry_run, obs=None,
