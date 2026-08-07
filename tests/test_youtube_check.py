@@ -34,6 +34,9 @@ def test_missing_libraries_is_reported_first(capsys):
 
 def test_missing_client_secret_says_where_to_get_it(monkeypatch, tmp_path, capsys):
     _stub_libs(monkeypatch)
+    # Stub the finder: otherwise this depends on whether the machine running the
+    # tests happens to have a client_secret in its Downloads folder.
+    monkeypatch.setattr(yc, "_find_downloaded_secret", lambda: "")
     rc = yc.run(str(tmp_path), do_upload=False)
     out = capsys.readouterr().out
     assert rc == 1
@@ -100,3 +103,49 @@ def test_the_bat_exists_and_passes_arguments_through():
     assert os.path.exists(p)
     body = open(p, encoding="utf-8", errors="replace").read()
     assert "youtube_check.py %*" in body, "--upload must reach the script"
+
+
+def test_the_exact_destination_path_is_printed(monkeypatch, tmp_path, capsys):
+    """Stan: "not sure instructions are clear where to put the api key bc its in
+    the 'main' folder". GitHub zips extract to <name>\\<name>, so "save it here"
+    is ambiguous — print the full path INCLUDING the filename."""
+    _stub_libs(monkeypatch)
+    monkeypatch.setattr(yc, "_find_downloaded_secret", lambda: "")
+    yc.run(str(tmp_path), do_upload=False)
+    out = capsys.readouterr().out
+    assert os.path.join(str(tmp_path), "client_secret.json") in out
+    assert "main.py" in out            # anchors WHICH folder it means
+    assert "RENAME" in out             # the step people miss
+
+
+def test_a_downloaded_key_is_found_and_a_copy_command_offered(monkeypatch,
+                                                              tmp_path, capsys):
+    """Google downloads it as client_secret_<long-id>.json, so the rename is
+    hidden work. Finding the file lets us hand over the exact command."""
+    _stub_libs(monkeypatch)
+    dl = tmp_path / "Downloads"
+    dl.mkdir()
+    got = dl / "client_secret_123-abc.apps.googleusercontent.com.json"
+    got.write_text("{}")
+    monkeypatch.setattr(yc, "_find_downloaded_secret", lambda: str(got))
+    app = tmp_path / "app"
+    app.mkdir()
+    yc.run(str(app), do_upload=False)
+    out = capsys.readouterr().out
+    assert "I found what looks like your downloaded key" in out
+    assert str(got) in out
+    assert 'copy "' in out and "client_secret.json" in out
+
+
+def test_the_finder_never_opens_the_credential_file(monkeypatch, tmp_path):
+    """It reports a PATH only. Reading a credential to locate it would be
+    gratuitous — nothing here needs its contents."""
+    import inspect
+    src = inspect.getsource(yc._find_downloaded_secret)
+    assert "open(" not in src
+    assert "read(" not in src
+
+
+def test_the_finder_is_quiet_when_there_is_nothing_to_find(monkeypatch, tmp_path):
+    monkeypatch.setattr(os.path, "expanduser", lambda p: str(tmp_path))
+    assert yc._find_downloaded_secret() == ""

@@ -28,6 +28,30 @@ def _line(sym, msg):
     print(f"{sym} {msg}")
 
 
+def _find_downloaded_secret() -> str:
+    """A client_secret*.json sitting in Downloads/Desktop/home.
+
+    Google's download is named client_secret_<long-id>.apps.googleusercontent
+    .com.json, so "save it as client_secret.json" hides a rename step that is
+    easy to miss. Finding the file lets us print the exact copy command.
+
+    Only the PATH is used — the file is never opened here."""
+    home = os.path.expanduser("~")
+    for folder in (os.path.join(home, "Downloads"), os.path.join(home, "Desktop"),
+                   home):
+        try:
+            hits = sorted((f for f in os.listdir(folder)
+                           if f.lower().startswith("client_secret")
+                           and f.lower().endswith(".json")),
+                          key=lambda f: os.path.getmtime(os.path.join(folder, f)),
+                          reverse=True)
+        except OSError:
+            continue
+        if hits:
+            return os.path.join(folder, hits[0])
+    return ""
+
+
 def run(base_dir: str, do_upload: bool = False) -> int:
     print("=" * 58)
     print(" WITNESS — YouTube upload check")
@@ -48,10 +72,30 @@ def run(base_dir: str, do_upload: bool = False) -> int:
     import youtube_upload as yu
     secret = os.path.join(base_dir, yu.CLIENT_SECRET)
     if not os.path.exists(secret):
-        _line(BAD, f"{yu.CLIENT_SECRET} not found in {base_dir}")
-        print("       Google Cloud console -> APIs & Services -> Credentials")
-        print("       -> Create OAuth client ID -> Desktop app -> download the")
-        print(f"       JSON and save it here as {yu.CLIENT_SECRET}")
+        _line(BAD, f"{yu.CLIENT_SECRET} not found")
+        print()
+        # The install folder is often <zip-name>\<zip-name>, so "save it here"
+        # is ambiguous. Print the EXACT destination path, filename included.
+        print("       It must go exactly here (this is the folder with main.py")
+        print("       and the START bat):")
+        print()
+        print(f"         {secret}")
+        print()
+        found = _find_downloaded_secret()
+        if found:
+            # Google names the download client_secret_<long-id>.json, so the
+            # rename is the step people miss.
+            print("       I found what looks like your downloaded key:")
+            print(f"         {found}")
+            print()
+            print("       Copy it into place with this (it renames it too):")
+            print(f'         copy "{found}" "{secret}"')
+        else:
+            print("       Don't have it yet? Google Cloud console -> APIs &")
+            print("       Services -> Credentials -> Create OAuth client ID ->")
+            print("       Desktop app -> download the JSON.")
+            print(f"       Then RENAME it to exactly {yu.CLIENT_SECRET} — the")
+            print("       download has a long name and the rename is required.")
         return 1
     _line(OK, f"{yu.CLIENT_SECRET} found")
 
