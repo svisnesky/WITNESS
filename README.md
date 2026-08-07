@@ -9,6 +9,9 @@ and turns each match into a highlight reel.
 **New here? Follow [QUICKSTART.md](QUICKSTART.md)** — zero to auto-clipped
 kills in ~15 minutes, no coding.
 
+
+**Security & privacy:** WITNESS reads your screen and controls OBS, so it documents itself rather than asking for trust. [SECURITY.md](SECURITY.md) lists every network destination in the codebase (four, all optional — no telemetry), confirms there is no dynamic code execution and no secret in any commit, and discloses two design choices you should make knowingly: the dashboard has no password, and auto-update runs code from this repo.
+
 ## Any game (beta): teach it your game
 
 Marathon is the home game, but the engine works for **any game with an
