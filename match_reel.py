@@ -79,9 +79,33 @@ def video_encoder_args(cfg, ffmpeg: str) -> list:
     return ["-c:v", "libx264", "-preset", "veryfast", "-crf", "21"]
 
 
+def nvenc_legacy_args() -> list:
+    """NVENC with pre-SDK-10 argument names.
+
+    The p1..p7 presets and `-rc vbr -cq` only exist on newer ffmpeg/nvenc builds.
+    An older build lists h264_nvenc in -encoders (so has_nvenc() says yes) and
+    then fails at encode time with "Preset p4 not found" or an invalid -rc value.
+    That is exactly what happened on Stan's 2026-08-08 session: every reel fell
+    back to CPU, so the whole point of hardware encoding was silently lost."""
+    return ["-c:v", "h264_nvenc", "-preset", "hq", "-cq", "21"]
+
+
 def cpu_encoder_args() -> list:
     """The software fallback, for retrying a render that NVENC refused."""
     return ["-c:v", "libx264", "-preset", "veryfast", "-crf", "21"]
+
+
+def _why_encode_failed(r) -> str:
+    """The useful line out of ffmpeg's stderr. Without this the log said only
+    'hardware encode failed', which is a dead end — it takes another whole
+    session to learn anything."""
+    err = (getattr(r, "stderr", "") or "").strip().splitlines()
+    for line in reversed(err):
+        low = line.lower()
+        if any(k in low for k in ("nvenc", "preset", "cuda", "driver", "invalid",
+                                  "not found", "no capable", "error")):
+            return line.strip()
+    return err[-1].strip() if err else "(ffmpeg said nothing)"
 
 
 def _hex_to_ff(c) -> str:
@@ -734,8 +758,17 @@ def build_match_reel(clips, out_path: str, ffmpeg: str,
         # Hardware encoding can fail for reasons that have nothing to do with the
         # reel: a driver hiccup, or every NVENC session already in use by OBS. A
         # lost reel is much worse than a warm CPU, so retry in software.
-        print("  [reel] hardware encode failed — retrying on CPU")
-        r = _run(cmd + cpu_encoder_args() + tail_args)
+        print(f"  [reel] hardware encode failed: {_why_encode_failed(r)}")
+        # Try the older NVENC argument names before giving up on the GPU — a
+        # pre-SDK-10 build rejects p1..p7 presets but encodes fine with -preset hq.
+        r2 = _run(cmd + nvenc_legacy_args() + tail_args)
+        if r2.returncode == 0:
+            print("  [reel] ...succeeded with legacy NVENC settings")
+            r = r2
+        else:
+            print(f"  [reel] legacy NVENC also failed: {_why_encode_failed(r2)}")
+            print("  [reel] falling back to CPU")
+            r = _run(cmd + cpu_encoder_args() + tail_args)
     for png in (title_png, potg_png, end_png):
         try:
             os.remove(png)
