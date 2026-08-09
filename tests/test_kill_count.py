@@ -153,3 +153,79 @@ def test_headshot_down_does_not_fire_double_kill():
             main.show_text_overlay = orig
         got = fired[0] if fired else None
         assert got == expect, f"{tags}: got {got!r}, expected {expect!r}"
+
+
+def test_own_finisher_is_folded_even_after_the_clip_window_flushes():
+    """Stan, 2026-08-08: "i downed, killed, then downed another and killed" —
+    two enemies, reported as more. The second elim arrived after its down's
+    coalesce window had flushed, so the own-finisher check (which only looked
+    inside that window) missed it. The window is a CLIPPING concept and must not
+    decide what counts as a kill."""
+    class _Ev:
+        def __init__(self, raw):
+            self.raw_line = raw
+            self.is_self_kill = True
+            self.victim = ""
+
+    class _Obs:
+        def set_counter(self, n):
+            pass
+
+    s = {"count": 0, "downs": 0, "elims": 0, "session_tags": [], "match_tags": [],
+         "_coalesce_pending": [], "obs": _Obs(), "web": None, "medal_sounds": {},
+         "cfg": {}}
+    cfg = {"team_wipe": False, "announcer_medals": False, "show_overlays": False,
+           "play_sound": False,
+           "session_log": os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                       "_own_fin_test.csv")}
+
+    # enemy 1: down, then its elim in the SAME window
+    main._handle_kill(cfg, _Ev("RUNNER DOWN +15 XP"), s)
+    main._handle_kill(cfg, _Ev("RUNNER ELIM +10 XP"), s)
+    # window flushes (the clip is saved) — this is what broke it
+    s["_coalesce_pending"] = []
+    # enemy 2: down, then its elim AFTER the flush
+    main._handle_kill(cfg, _Ev("RUNNER DOWN +15 XP"), s)
+    s["_coalesce_pending"] = []
+    main._handle_kill(cfg, _Ev("RUNNER ELIM +10 XP"), s)
+
+    assert s["count"] == 2, f"two enemies, got {s['count']}"
+    assert s["downs"] == 2
+
+    try:
+        os.remove(cfg["session_log"])
+    except OSError:
+        pass
+
+
+def test_a_second_elim_is_not_folded_onto_the_same_down():
+    """Folding must apply ONCE per down — otherwise finishing a teammate's
+    downed runner right after your own kill would vanish."""
+    class _Ev:
+        def __init__(self, raw):
+            self.raw_line = raw
+            self.is_self_kill = True
+            self.victim = ""
+
+    class _Obs:
+        def set_counter(self, n):
+            pass
+
+    s = {"count": 0, "downs": 0, "elims": 0, "session_tags": [], "match_tags": [],
+         "_coalesce_pending": [], "obs": _Obs(), "web": None, "medal_sounds": {},
+         "cfg": {}}
+    cfg = {"team_wipe": False, "announcer_medals": False, "show_overlays": False,
+           "play_sound": False,
+           "session_log": os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                       "_own_fin2_test.csv")}
+    main._handle_kill(cfg, _Ev("RUNNER DOWN +15 XP"), s)
+    s["_coalesce_pending"] = []
+    main._handle_kill(cfg, _Ev("RUNNER ELIM +10 XP"), s)   # folds into the down
+    s["_coalesce_pending"] = []
+    main._handle_kill(cfg, _Ev("RUNNER ELIM +10 XP"), s)   # a DIFFERENT runner
+    assert s["count"] == 2, s["count"]
+
+    try:
+        os.remove(cfg["session_log"])
+    except OSError:
+        pass

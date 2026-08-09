@@ -1092,9 +1092,28 @@ def _handle_kill(cfg, ev, s, on_count=None):
     # A finisher on YOUR OWN down is the same kill, not a new one — the clip
     # coalescer already knows this; the headline counter now agrees. (A
     # standalone finisher — finishing a teammate's down — still counts.)
-    own_finisher = (tag in ELIM_TAGS
-                    and any(p["tag"] == "down"
-                            for p in s.get("_coalesce_pending", [])))
+    # An elim that lands shortly after one of YOUR downs is that runner being
+    # finished — the same kill, not a new one.
+    #
+    # This used to look ONLY inside the current coalesce window, which flushes on
+    # a timer. Stan's 2026-08-08 sequence ("i downed, killed, then downed another
+    # and killed" = 2 enemies) had the second elim arrive after its down's window
+    # had already flushed, so it counted as a third kill. The window is a
+    # CLIPPING concept and must not decide what a kill is — track the down time
+    # directly instead.
+    now_epoch = time.time()
+    recent_down = (s.get("_last_down_epoch", 0)
+                   and now_epoch - s["_last_down_epoch"] <= float(
+                       cfg.get("own_finisher_seconds", 25.0))
+                   and not s.get("_last_down_finished"))
+    own_finisher = tag in ELIM_TAGS and (
+        any(p["tag"] == "down" for p in s.get("_coalesce_pending", []))
+        or recent_down)
+    if tag == "down":
+        s["_last_down_epoch"] = now_epoch
+        s["_last_down_finished"] = False        # this runner isn't finished yet
+    elif own_finisher:
+        s["_last_down_finished"] = True         # don't fold a second elim onto it
     # An assist is someone ELSE's kill: Stan's rule is "for those I just want the
     # recordings — they shouldn't count toward anything else". So an assist gets
     # a clip and NOTHING else: no counter, no sound, no gamertag scan, no
@@ -1145,7 +1164,13 @@ def _handle_kill(cfg, ev, s, on_count=None):
     # assist). Three distinct deaths in a couple of minutes = squad wiped —
     # in trios you're almost always fighting exactly one team.
     raw_low = ev.raw_line.lower()
-    if cfg.get("team_wipe", True) and ("elim" in raw_low or "finisher" in raw_low):
+    # A wipe means three DIFFERENT people went down. Counting elim popups
+    # instead fired on Stan's 2026-08-08 "downed, killed, downed another, killed"
+    # — two enemies, each producing a down AND an elim, which looked like three
+    # deaths. An own-finisher is by definition the runner we already counted, so
+    # it can never be a new one.
+    if (cfg.get("team_wipe", True) and not own_finisher
+            and (tag == "down" or "elim" in raw_low or "finisher" in raw_low)):
         if register_elim(s.setdefault("elim_times", []), now,
                          wipe_size=int(cfg.get("team_wipe_size", 3))):
             print("  -> TEAM WIPE")
