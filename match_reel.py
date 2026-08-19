@@ -382,12 +382,19 @@ def drop_overlapping(clips, ffmpeg) -> list[dict]:
 
 
 def _normalize_clips(clips) -> list[dict]:
-    """Accept plain paths or {path, kills, tag} dicts."""
+    """Accept plain paths or {path, kills, tag, ...} dicts.
+
+    COPIES the dict rather than rebuilding it from three known keys. Rebuilding
+    silently discarded anything else the caller had set — which is how the clip
+    editor's explicit ss/to trim points vanished on the way in, so a hand-trimmed
+    export rendered every clip in full."""
     out = []
     for c in clips:
         if isinstance(c, dict):
-            out.append({"path": c["path"], "kills": int(c.get("kills", 1)),
-                        "tag": c.get("tag", "kill")})
+            d = dict(c)
+            d["kills"] = int(c.get("kills", 1))
+            d["tag"] = c.get("tag", "kill")
+            out.append(d)
         else:
             out.append({"path": c, "kills": 1, "tag": "kill"})
     return [c for c in out if os.path.exists(c["path"])]
@@ -554,7 +561,8 @@ def build_match_reel(clips, out_path: str, ffmpeg: str,
                      theme: dict | None = None, tight_cuts: bool = True,
                      preroll: float = 8.0, manual_preroll: float = 18.0,
                      context_preroll: float = 16.0,
-                     render_encoder: str = "auto") -> bool:
+                     render_encoder: str = "auto",
+                     dedupe: bool = True) -> bool:
     """Title card [+ POTG card] + clips [+ music bed] -> one mp4.
 
     music_volume is 0-1 (0.08 = quiet bed under the game audio).
@@ -562,7 +570,13 @@ def build_match_reel(clips, out_path: str, ffmpeg: str,
     random point in a random track, fades in/out, and long reels rotate
     through up to three tracks with crossfades. music_path (single file) is
     the legacy fallback."""
-    clips = drop_overlapping(_normalize_clips(clips), ffmpeg)
+    clips = _normalize_clips(clips)
+    # dedupe=False for a hand-picked export: overlap-merging would silently DROP
+    # a clip the user deliberately chose. Automatic reels still merge, because
+    # there nobody picked anything and back-to-back buffer saves play as
+    # duplicates.
+    if dedupe:
+        clips = drop_overlapping(clips, ffmpeg)
     if not clips:
         print("  [reel] no clips on disk to build a reel from")
         return False
@@ -615,12 +629,28 @@ def build_match_reel(clips, out_path: str, ffmpeg: str,
         label = (f"PLAY OF THE GAME - {tag_txt}" if c is potg
                  else f"KILL {c.get('n', '?')} - {tag_txt}")
         dur = probe_duration(c["path"], ffmpeg)
-        # Tight cuts: start ~preroll before the earliest kill instead of
-        # playing the whole 30s buffer (kill timing from the clip's sidecar).
-        ss = (clip_trim_start(c, dur, ffmpeg, preroll, manual_preroll,
-                              context_preroll)
-              if tight_cuts else 0.0)
-        if ss and dur:
+        if "ss" in c or "to" in c:
+            # EXPLICIT trim points, from the clip editor — a person chose these,
+            # so they override the automatic tight cut entirely. Handled here
+            # rather than in the filter graph: `dur` is what every xfade offset
+            # below is computed from, so setting it correctly is all that's
+            # needed and the fragile parts stay untouched.
+            ss = max(0.0, float(c.get("ss") or 0.0))
+            if dur:
+                end = float(c["to"]) if c.get("to") else float(dur)
+                end = max(ss + 1.0, min(end, float(dur)))   # never invert or overrun
+                ss = min(ss, end - 1.0)
+                dur = end - ss
+                print(f"  [reel] manual cut: {os.path.basename(c['path'])} "
+                      f"{ss:.1f}s -> {end:.1f}s")
+            ss = round(ss, 3)
+        else:
+            # Tight cuts: start ~preroll before the earliest kill instead of
+            # playing the whole 30s buffer (kill timing from the clip's sidecar).
+            ss = (clip_trim_start(c, dur, ffmpeg, preroll, manual_preroll,
+                                  context_preroll)
+                  if tight_cuts else 0.0)
+        if ss and dur and "ss" not in c and "to" not in c:
             print(f"  [reel] tight cut: {os.path.basename(c['path'])} "
                   f"starts at {ss:.0f}s (was {dur:.0f}s long)")
             dur = dur - ss

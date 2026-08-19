@@ -257,6 +257,52 @@ class LiveState:
         threading.Thread(target=work, daemon=True).start()
         return {"ok": True}
 
+    def request_export(self, base_dir: str, session: str, selection,
+                       opts=None) -> dict:
+        """Render a hand-picked reel in the BACKGROUND.
+
+        Same shape as request_rebuild: returns immediately, reports progress on
+        the recap banner, because a render takes minutes and the page's fetch
+        would time out. Refuses while a session is running — an export competes
+        for the same ffmpeg and encoder as live match reels."""
+        import threading
+        with self._lock:
+            if self.running:
+                return {"ok": False,
+                        "error": "stop the session first — exporting while "
+                                 "recording competes with the live reels"}
+            if getattr(self, "_exporting", False):
+                return {"ok": False, "error": "an export is already running"}
+            self._exporting = True
+        cfg = self._cfg or {}
+
+        def work():
+            try:
+                import main
+                sdir = main._resolve_session_dir(cfg, session)
+                if not sdir:
+                    self.set_recap(status="error",
+                                   note="couldn't find that session folder")
+                    return
+                import export_reel
+                self.set_recap(status="building", note="starting export…")
+                out = export_reel.build(sdir, selection, opts=opts, cfg=cfg,
+                                        on_note=self.set_recap)
+                if out:
+                    self.set_recap(status="ready",
+                                   note=f"exported {os.path.basename(out)}")
+                else:
+                    self.set_recap(status="error", note="export failed")
+            except Exception as e:
+                print(f"  [export] failed: {e}")
+                self.set_recap(status="error", note=f"export failed: {e}")
+            finally:
+                with self._lock:
+                    self._exporting = False
+
+        threading.Thread(target=work, daemon=True).start()
+        return {"ok": True}
+
     def request_rebuild(self, session: str = "latest") -> dict:
         """Kick off a session rebuild in the BACKGROUND and return immediately.
 
@@ -465,6 +511,68 @@ import re as _re
 import urllib.parse as _uparse
 
 _SAFE_PART = _re.compile(r"^[A-Za-z0-9 ._+\-]+$")
+
+
+def _clip_data(state, session: str) -> dict:
+    """Everything the clip viewer needs for one session: which session it is, and
+    every clip with what happened inside it.
+
+    Durations come from ffprobe, which is a subprocess per clip — fine for the
+    ~20 clips a session holds, and the result is what lets the page place event
+    markers on the scrub bar."""
+    try:
+        import clip_index
+        import main
+        import montage
+        cfg = state._cfg or {}
+        sdir = main._resolve_session_dir(cfg, session or "latest")
+        if not sdir:
+            return {"error": "no session folder found — press START once so the "
+                             "app learns your OBS folder", "clips": []}
+        base = os.path.dirname(os.path.abspath(__file__))
+        ff = montage.find_ffmpeg(base, cfg)
+        clips = clip_index.build_index(sdir, ff, with_duration=True)
+        return {"session": os.path.basename(sdir.rstrip(os.sep)),
+                "count": len(clips), "clips": clips}
+    except Exception as e:
+        return {"error": f"{type(e).__name__}: {e}", "clips": []}
+
+
+def _clip_thumb(state, session: str, rel: str) -> str:
+    """Path to this clip's cached thumbnail, building it on first request.
+    Returns '' for anything that isn't a real clip inside the session."""
+    try:
+        import export_reel
+        import main
+        import montage
+        cfg = state._cfg or {}
+        sdir = main._resolve_session_dir(cfg, session or "latest")
+        if not sdir or not rel or ".." in rel.replace("\\", "/").split("/"):
+            return ""
+        root = os.path.realpath(sdir)
+        full = os.path.realpath(os.path.join(sdir, rel))
+        if not full.startswith(root + os.sep) or not os.path.isfile(full):
+            return ""
+        # Grab the frame at the first kill when known — a frame from the action
+        # beats one from the approach, which on a 33s buffer save is a corridor.
+        at = None
+        try:
+            import clip_index
+            import match_reel
+            saved, kills = match_reel._load_sidecar(full)
+            dur = match_reel.probe_duration(full, montage.find_ffmpeg(
+                os.path.dirname(os.path.abspath(__file__)), cfg))
+            ev = clip_index.clip_events(dur, saved, kills)
+            if ev:
+                at = ev[0]["t"]
+        except Exception:
+            at = None
+        return export_reel.ensure_thumb(
+            sdir, rel, full,
+            montage.find_ffmpeg(os.path.dirname(os.path.abspath(__file__)), cfg),
+            at_seconds=at)
+    except Exception:
+        return ""
 
 
 def _archive_video_path(record_dir: str, sess: str, rel: str):
@@ -841,6 +949,26 @@ def start_web(state, port, base_dir, host="0.0.0.0"):
                     self._send(apply_theme(_stats_page(base_dir),
                                            state._cfg).encode("utf-8"),
                                "text/html; charset=utf-8", cache=False)
+                elif path == "/clips":
+                    self._send(apply_theme(
+                        CLIPS_PAGE, state._cfg).encode("utf-8"),
+                               "text/html; charset=utf-8", cache=False)
+                elif path == "/clipdata":
+                    q = _uparse.parse_qs(self.path.split("?", 1)[1]
+                                         if "?" in self.path else "")
+                    sess = (q.get("s") or ["latest"])[0]
+                    self._send(json.dumps(_clip_data(state, sess)).encode(),
+                               "application/json", cache=False)
+                elif path == "/clipthumb":
+                    q = _uparse.parse_qs(self.path.split("?", 1)[1]
+                                         if "?" in self.path else "")
+                    fp = _clip_thumb(state, (q.get("s") or [""])[0],
+                                     (q.get("f") or [""])[0])
+                    if fp:
+                        with open(fp, "rb") as f:
+                            self._send(f.read(), "image/jpeg")
+                    else:
+                        self.send_error(404)
                 elif path == "/archive":
                     self._send(apply_theme(
                         _archive_page(base_dir, getattr(state, "record_dir", "")),
@@ -926,6 +1054,17 @@ def start_web(state, port, base_dir, host="0.0.0.0"):
                         result = {"error": f"{type(e).__name__}: {e}"}
                     self._send(json.dumps(result).encode(),
                                "application/json", cache=False)
+                elif path == "/export":
+                    n = int(self.headers.get("Content-Length") or 0)
+                    try:
+                        body = json.loads(self.rfile.read(n) or b"{}")
+                    except Exception:
+                        body = {}
+                    self._send(json.dumps(state.request_export(
+                        base_dir, str(body.get("session") or "latest"),
+                        body.get("clips") or [],
+                        body.get("opts") or {})).encode(),
+                        "application/json", cache=False)
                 elif path == "/update":
                     self._send(json.dumps(state.request_update(base_dir)).encode(),
                                "application/json", cache=False)
@@ -1027,7 +1166,7 @@ ARCHIVE_PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
   .rb { margin-right:10px; }
 </style></head><body><div class="wrap">
   <div class="top"><img src="/skull.png" alt=""><span class="wm">WITNESS</span>
-    <nav class="nav"><a href="/">Live</a><a href="/archive">Reels</a>
+    <nav class="nav"><a href="/">Live</a><a href="/clips">Clips</a><a href="/archive">Reels</a>
       <a href="/stats">Stats</a><a class="on" href="/archive">Archive</a>
       <a href="/archive" title="Refresh — new reels finish rendering after you stop">&#8635; Refresh</a></nav></div>
   <div class="kick">Archive</div>
@@ -1132,7 +1271,7 @@ STATS_PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
     border:1px solid var(--sborder); border-radius:12px; padding:20px; }
 </style></head><body><div class="wrap">
   <div class="top"><img src="/skull.png" alt=""><span class="wm">WITNESS</span>
-    <nav class="nav"><a href="/">Live</a><a href="/archive">Reels</a>
+    <nav class="nav"><a href="/">Live</a><a href="/clips">Clips</a><a href="/archive">Reels</a>
       <a class="on" href="/stats">Stats</a><a href="/archive">Archive</a></nav></div>
   <div class="kick">Career</div>
   <h2>Career stats</h2>
@@ -1393,6 +1532,7 @@ PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
     <span class="livepill" id="livepill"><i></i>LIVE</span>
     <nav class="nav">
       <a class="on">Live</a>
+      <a onclick="location.href='/clips'">Clips</a>
       <a onclick="location.href='/archive'">Reels</a>
       <a onclick="location.href='/stats'">Stats</a>
       <a onclick="location.href='/archive'">Archive</a>
@@ -1971,4 +2111,292 @@ PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
     document.getElementById('fs').style.display='none';
     document.getElementById('hint').style.display='none';
   }
+</script></body></html>"""
+
+
+CLIPS_PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>WITNESS &mdash; Clips</title>
+<style>
+  :root { --bg:#0e0e16; --panel:#12181d; --line:#232d34; --text:#e9e9ed;
+    --muted:#8a90a0; --accent:#9184d9; --danger:#ff4d3d; --warn:#f5a623;
+    --sec:#b9b9c6; --dim:#5f6572; --accent-light:#c7bdff; --ok:#5ac47d;
+    --surface:rgba(255,255,255,.03); --sborder:rgba(255,255,255,.07);
+    --ground:radial-gradient(120% 80% at 82% -10%,#20203a 0%,#14141f 46%,#0e0e16 100%);
+    --ui:'Inter',system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+    --mono:'JetBrains Mono',ui-monospace,"SF Mono",Menlo,Consolas,monospace; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font-family:var(--ui);
+    -webkit-font-smoothing:antialiased; }
+  .wrap { min-height:100vh; background:var(--ground); max-width:1240px; margin:0 auto;
+    padding:calc(20px + env(safe-area-inset-top)) 26px calc(120px + env(safe-area-inset-bottom)); }
+  .top { display:flex; align-items:center; gap:13px; margin-bottom:18px; flex-wrap:wrap; }
+  .wm { font-weight:800; letter-spacing:.16em; font-size:15px; }
+  .nav { display:flex; gap:4px; flex-wrap:wrap; }
+  .nav a { font:500 12.5px var(--ui); color:var(--muted); padding:6px 10px;
+    border-radius:7px; text-decoration:none; }
+  .nav a:hover { background:var(--surface); color:var(--text); }
+  .nav a.on { background:var(--surface); color:var(--accent-light); }
+  h1 { font:800 22px var(--ui); margin:0 0 4px; letter-spacing:.01em; }
+  .sub { color:var(--muted); font-size:12.5px; margin:0 0 18px; }
+  .bar { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:14px; }
+  .mini { font:600 11.5px var(--ui); letter-spacing:.06em; text-transform:uppercase;
+    color:var(--text); background:var(--surface); border:1px solid var(--sborder);
+    border-radius:8px; padding:7px 12px; cursor:pointer; }
+  .mini:hover { border-color:var(--accent); color:var(--accent-light); }
+  .mini:disabled { opacity:.6; cursor:default; }
+  .mini.go { background:var(--accent); border-color:var(--accent); color:#fff; }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:12px;
+    padding:12px; margin-bottom:10px; display:grid;
+    grid-template-columns:200px 1fr; gap:14px; align-items:start; }
+  .card.sel { border-color:var(--accent); box-shadow:0 0 0 1px var(--accent) inset; }
+  .thumbwrap { position:relative; border-radius:8px; overflow:hidden;
+    background:#000; aspect-ratio:16/9; cursor:pointer; }
+  .thumbwrap img { width:100%; height:100%; object-fit:cover; display:block; }
+  .thumbwrap .play { position:absolute; inset:0; display:flex; align-items:center;
+    justify-content:center; font-size:34px; color:#fff; opacity:.85;
+    text-shadow:0 2px 10px rgba(0,0,0,.8); }
+  .ord { position:absolute; top:6px; left:6px; background:var(--accent);
+    color:#fff; font:800 11px var(--mono); padding:2px 7px; border-radius:20px; }
+  .hd { display:flex; align-items:baseline; gap:10px; flex-wrap:wrap; }
+  .who { font:800 17px var(--ui); }
+  .who.none { color:var(--dim); font-weight:600; font-style:italic; }
+  .clock { font:500 11.5px var(--mono); color:var(--muted); }
+  .chips { display:flex; gap:5px; flex-wrap:wrap; margin:7px 0; }
+  .chip { font:700 10px var(--ui); letter-spacing:.08em; padding:3px 8px;
+    border-radius:20px; border:1px solid transparent; }
+  .chip.kill { background:rgba(145,132,217,.16); color:var(--accent-light);
+    border-color:rgba(145,132,217,.4); }
+  .chip.prec { background:rgba(245,166,35,.14); color:#f5c76a;
+    border-color:rgba(245,166,35,.38); }
+  .chip.elim { background:rgba(255,77,61,.13); color:#ff8a7a;
+    border-color:rgba(255,77,61,.35); }
+  .chip.assist { background:rgba(255,255,255,.05); color:var(--muted);
+    border-color:var(--sborder); }
+  .chip.manual { background:rgba(90,196,125,.14); color:#7fd79b;
+    border-color:rgba(90,196,125,.38); }
+  .summary { color:var(--sec); font-size:13.5px; margin:2px 0 9px; }
+  .track { position:relative; height:22px; background:var(--surface);
+    border:1px solid var(--sborder); border-radius:6px; margin:8px 0 6px; }
+  .mk { position:absolute; top:-3px; width:2px; height:28px; background:var(--danger);
+    border-radius:2px; }
+  .mk.man { background:var(--ok); }
+  .mk span { position:absolute; top:-16px; left:50%; transform:translateX(-50%);
+    font:700 9px var(--mono); color:var(--danger); white-space:nowrap; }
+  .mk.man span { color:var(--ok); }
+  .region { position:absolute; top:0; bottom:0; background:rgba(145,132,217,.22);
+    border-left:2px solid var(--accent); border-right:2px solid var(--accent); }
+  .trim { display:flex; gap:10px; align-items:center; flex-wrap:wrap;
+    font:500 11.5px var(--ui); color:var(--muted); }
+  .trim input[type=number] { width:66px; background:var(--surface); color:var(--text);
+    border:1px solid var(--sborder); border-radius:6px; padding:4px 6px;
+    font:500 12px var(--mono); }
+  .row2 { display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-top:8px; }
+  label.ck { display:flex; gap:7px; align-items:center; cursor:pointer;
+    font:600 12px var(--ui); }
+  .dock { position:fixed; left:0; right:0; bottom:0; background:rgba(14,14,22,.97);
+    border-top:1px solid var(--line); padding:12px 26px
+    calc(12px + env(safe-area-inset-bottom)); backdrop-filter:blur(8px); }
+  .dock .inner { max-width:1240px; margin:0 auto; display:flex; gap:10px;
+    align-items:center; flex-wrap:wrap; }
+  .dock input[type=text] { background:var(--surface); color:var(--text);
+    border:1px solid var(--sborder); border-radius:8px; padding:7px 10px;
+    font:500 13px var(--ui); min-width:170px; }
+  .count { font:700 13px var(--ui); color:var(--accent-light); }
+  .msg { font:500 12.5px var(--ui); color:var(--muted); }
+  .empty { color:var(--muted); padding:30px 0; }
+  dialog { background:var(--panel); color:var(--text); border:1px solid var(--line);
+    border-radius:14px; padding:0; max-width:min(96vw,1000px); }
+  dialog::backdrop { background:rgba(0,0,0,.75); }
+  dialog video { width:100%; display:block; border-radius:14px 14px 0 0; background:#000; }
+  dialog .db { padding:12px 16px; display:flex; gap:10px; align-items:center;
+    justify-content:space-between; flex-wrap:wrap; }
+  @media (max-width:720px){ .card { grid-template-columns:1fr; } }
+</style></head><body><div class="wrap">
+  <div class="top">
+    <span class="wm">WITNESS</span>
+    <nav class="nav">
+      <a href="/">Live</a><a href="/clips" class="on">Clips</a>
+      <a href="/stats">Stats</a><a href="/archive">Archive</a>
+    </nav>
+  </div>
+  <h1>Clip viewer</h1>
+  <p class="sub" id="sub">Loading&hellip;</p>
+  <div class="bar">
+    <button class="mini" onclick="pickAll(1)">Select all</button>
+    <button class="mini" onclick="pickAll(0)">Select none</button>
+    <button class="mini" onclick="pickKills()">Only real kills</button>
+    <button class="mini" onclick="pickHuman()">Only ones I flagged</button>
+    <button class="mini" onclick="trimToKills()">Auto-trim to the action</button>
+    <button class="mini" onclick="load()">Reload</button>
+  </div>
+  <div id="list"><p class="empty">Loading clips&hellip;</p></div>
+</div>
+
+<dialog id="player"><video id="vid" controls preload="metadata"></video>
+  <div class="db"><span class="msg" id="pmsg"></span>
+    <span><button class="mini" onclick="useIn()">Set IN here</button>
+    <button class="mini" onclick="useOut()">Set OUT here</button>
+    <button class="mini" onclick="document.getElementById('player').close()">Close</button></span>
+  </div></dialog>
+
+<div class="dock"><div class="inner">
+  <span class="count" id="cnt">0 selected</span>
+  <input type="text" id="name" placeholder="reel file name" value="my_reel">
+  <input type="text" id="title" placeholder="title card" value="WITNESS">
+  <label class="ck"><input type="checkbox" id="opt_music" checked> Music</label>
+  <label class="ck"><input type="checkbox" id="opt_trans" checked> Transitions</label>
+  <label class="ck"><input type="checkbox" id="opt_chy" checked> Names on clips</label>
+  <label class="ck"><input type="checkbox" id="opt_ann"> Announcer</label>
+  <button class="mini go" id="exp" onclick="doExport()">Export reel</button>
+  <span class="msg" id="emsg"></span>
+</div></div>
+
+<script>
+var CLIPS = [], SESSION = "latest", curr = -1;
+
+function esc(s){ return String(s==null?"":s).replace(/&/g,"&amp;")
+  .replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;"); }
+function fmt(t){ if(t==null) return "?";
+  var m=Math.floor(t/60), s=Math.floor(t%60); return m+":"+(s<10?"0":"")+s; }
+
+function load(){
+  fetch('/clipdata?s='+encodeURIComponent(SESSION),{cache:'no-store'})
+    .then(function(r){return r.json();}).then(function(d){
+      if(d.error){ document.getElementById('list').innerHTML =
+        '<p class="empty">'+esc(d.error)+'</p>';
+        document.getElementById('sub').textContent=''; return; }
+      SESSION = d.session || SESSION;
+      CLIPS = (d.clips||[]).map(function(c){
+        c.pick = c.downs>0 || c.human;   // sensible default: real kills + your picks
+        c.ss=""; c.to=""; return c; });
+      document.getElementById('sub').textContent =
+        d.session+'  ·  '+d.count+' clip'+(d.count===1?'':'s')+
+        '  ·  pick what belongs in the reel, trim it, then export';
+      render();
+    }).catch(function(e){ document.getElementById('list').innerHTML =
+      '<p class="empty">could not load clips: '+esc(e)+'</p>'; });
+}
+
+function render(){
+  var order = 0;
+  var html = CLIPS.map(function(c,i){
+    if(c.pick) order++;
+    var chips = (c.chips||[]).map(function(ch){
+      return '<span class="chip '+esc(ch.role)+'">'+esc(ch.label)+'</span>'; }).join('');
+    var marks = (c.events||[]).map(function(e){
+      var pct = c.duration ? (e.t/c.duration*100) : 0;
+      return '<i class="mk'+(e.manual?' man':'')+'" style="left:'+pct+'%">'+
+             '<span>'+esc(e.label)+'</span></i>'; }).join('');
+    var a = c.ss===""?0:parseFloat(c.ss), b = c.to===""?(c.duration||0):parseFloat(c.to);
+    var reg = (c.duration && (c.ss!==""||c.to!=="")) ?
+      '<i class="region" style="left:'+(a/c.duration*100)+'%;width:'+
+      (Math.max(0,(b-a))/c.duration*100)+'%"></i>' : '';
+    return '<div class="card'+(c.pick?' sel':'')+'">'+
+      '<div class="thumbwrap" onclick="play('+i+')">'+
+        (c.pick?'<span class="ord">'+order+'</span>':'')+
+        '<img loading="lazy" src="/clipthumb?s='+encodeURIComponent(SESSION)+
+          '&f='+encodeURIComponent(c.rel)+'" alt="">'+
+        '<span class="play">&#9658;</span></div>'+
+      '<div><div class="hd">'+
+        (c.victim? '<span class="who">'+esc(c.victim)+'</span>'
+                 : '<span class="who none">no name read</span>')+
+        '<span class="clock">'+esc(c.clock)+'  ·  '+fmt(c.duration)+'</span></div>'+
+        '<div class="chips">'+chips+'</div>'+
+        '<div class="summary">'+esc(c.summary)+'</div>'+
+        '<div class="track">'+reg+marks+'</div>'+
+        '<div class="trim">Trim'+
+          ' <input type="number" step="0.5" min="0" placeholder="in" value="'+esc(c.ss)+
+            '" oninput="setIn('+i+',this.value)">to'+
+          ' <input type="number" step="0.5" min="0" placeholder="out" value="'+esc(c.to)+
+            '" oninput="setOut('+i+',this.value)">sec'+
+          ' <button class="mini" onclick="clearT('+i+')">Full clip</button>'+
+          ' <button class="mini" onclick="trimOne('+i+')">To the action</button>'+
+        '</div>'+
+        '<div class="row2">'+
+          '<label class="ck"><input type="checkbox" '+(c.pick?'checked':'')+
+            ' onchange="setPick('+i+',this.checked)"> In the reel</label>'+
+          '<button class="mini" onclick="move('+i+',-1)">&uarr; Earlier</button>'+
+          '<button class="mini" onclick="move('+i+',1)">&darr; Later</button>'+
+        '</div>'+
+      '</div></div>';
+  }).join('');
+  document.getElementById('list').innerHTML = html ||
+    '<p class="empty">No clips in this session yet.</p>';
+  var n = CLIPS.filter(function(c){return c.pick;}).length;
+  document.getElementById('cnt').textContent = n+' selected';
+  document.getElementById('exp').disabled = n===0;
+}
+
+function setPick(i,v){ CLIPS[i].pick=v; render(); }
+function setIn(i,v){ CLIPS[i].ss=v; render(); }
+function setOut(i,v){ CLIPS[i].to=v; render(); }
+function clearT(i){ CLIPS[i].ss=""; CLIPS[i].to=""; render(); }
+function pickAll(v){ CLIPS.forEach(function(c){c.pick=!!v;}); render(); }
+function pickKills(){ CLIPS.forEach(function(c){c.pick=c.downs>0;}); render(); }
+function pickHuman(){ CLIPS.forEach(function(c){c.pick=!!c.human;}); render(); }
+
+/* Trim to a window around the known kill times — the marker data makes this
+   exact rather than a guess. */
+function trimOne(i){
+  var c=CLIPS[i]; if(!c.events||!c.events.length||!c.duration) return;
+  var first=c.events[0].t, last=c.events[c.events.length-1].t;
+  c.ss=Math.max(0,+(first-6).toFixed(1));
+  c.to=Math.min(c.duration,+(last+4).toFixed(1));
+  render();
+}
+function trimToKills(){ CLIPS.forEach(function(c,i){ trimOne(i); }); }
+
+function move(i,d){
+  var j=i+d; if(j<0||j>=CLIPS.length) return;
+  var t=CLIPS[i]; CLIPS[i]=CLIPS[j]; CLIPS[j]=t; render();
+}
+
+function play(i){
+  curr=i; var c=CLIPS[i];
+  var v=document.getElementById('vid');
+  v.src='/avideo?s='+encodeURIComponent(SESSION)+'&f='+encodeURIComponent(c.rel);
+  document.getElementById('pmsg').textContent =
+    (c.victim||'no name read')+' — '+c.summary;
+  document.getElementById('player').showModal();
+  if(c.events && c.events.length){ v.currentTime=Math.max(0,c.events[0].t-5); }
+}
+/* Scrub to the moment you want, then set it as the cut point — far easier than
+   typing seconds. */
+function useIn(){ if(curr<0) return;
+  CLIPS[curr].ss=+document.getElementById('vid').currentTime.toFixed(1); render(); }
+function useOut(){ if(curr<0) return;
+  CLIPS[curr].to=+document.getElementById('vid').currentTime.toFixed(1); render(); }
+
+function doExport(){
+  var picks = CLIPS.filter(function(c){return c.pick;}).map(function(c){
+    return {rel:c.rel, ss:c.ss===""?null:parseFloat(c.ss),
+            to:c.to===""?null:parseFloat(c.to)}; });
+  if(!picks.length) return;
+  var b=document.getElementById('exp'), m=document.getElementById('emsg');
+  b.disabled=true; m.textContent='starting…';
+  fetch('/export',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({session:SESSION, clips:picks, opts:{
+      name:document.getElementById('name').value,
+      title:document.getElementById('title').value,
+      music:document.getElementById('opt_music').checked,
+      transitions:document.getElementById('opt_trans').checked,
+      chyrons:document.getElementById('opt_chy').checked,
+      announcer:document.getElementById('opt_ann').checked}})})
+   .then(function(r){return r.json();}).then(function(j){
+     if(!j.ok){ m.textContent=j.error||'failed'; b.disabled=false; return; }
+     /* A render takes minutes, so follow the recap banner like the rebuild
+        button does rather than leaving the page looking stuck. */
+     var poll=setInterval(function(){
+       fetch('/status',{cache:'no-store'}).then(function(r){return r.json();})
+        .then(function(s){ var rc=s.recap||{};
+          if(rc.note) m.textContent=rc.note;
+          if(rc.status==='ready'){ clearInterval(poll); b.disabled=false;
+            m.textContent=(rc.note||'done')+' — see the Archive'; }
+          else if(rc.status==='error'){ clearInterval(poll); b.disabled=false; }
+        }).catch(function(){}); },2000);
+   }).catch(function(e){ m.textContent='failed: '+e; b.disabled=false; });
+}
+
+load();
 </script></body></html>"""
