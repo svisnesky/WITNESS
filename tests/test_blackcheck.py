@@ -244,3 +244,57 @@ def test_the_overlay_sits_away_from_the_crosshair():
     pos = cfg["black_overlay_position"]
     y = float(pos.split(",")[1])
     assert y < 0.3, f"{pos} would sit over the crosshair"
+
+
+# --- sweat mode ---------------------------------------------------------------
+
+def test_the_warning_is_held_during_a_clutch(monkeypatch):
+    """Stan: "is this even on sweats mode?" It wasn't — it would have slammed a
+    red banner and a voice line over him mid-1vN. He can't fix OBS during a
+    clutch, so the distraction is pure cost."""
+    import main
+    calls = _spy_overlay(monkeypatch)
+    st = {"clutch": True}
+    main.check_obs_not_black({"announcer_medals": False}, _Obs(_png(_img(0))),
+                             state=st)
+    assert calls == [], "no overlay while clutching"
+    assert st["black_pending"] is True, "but it must be remembered"
+
+
+def test_the_held_warning_fires_when_the_clutch_ends(monkeypatch):
+    """DEFERRED, not dropped — he still needs to know."""
+    import main
+    calls = _spy_overlay(monkeypatch)
+    s = {"clutch": False, "black_pending": True,
+         "obs": _Obs(_png(_img(0))), "web": None}
+    main._fire_deferred_black({"announcer_medals": False}, s)
+    assert len(calls) == 1 and "OBS IS BLACK" in calls[0][0]
+    assert s["black_pending"] is False, "must not repeat forever"
+
+
+def test_nothing_fires_when_there_was_nothing_held(monkeypatch):
+    import main
+    calls = _spy_overlay(monkeypatch)
+    main._fire_deferred_black({}, {"black_pending": False, "obs": _Obs(b"")})
+    assert calls == []
+
+
+def test_a_capture_fixed_during_the_clutch_does_not_warn_afterwards(monkeypatch):
+    """The deferred call RE-CHECKS rather than replaying a stale result."""
+    import main
+    calls = _spy_overlay(monkeypatch)
+    s = {"black_pending": True, "web": None,
+         "obs": _Obs(_png(_img(110, noise=35)))}   # healthy again
+    main._fire_deferred_black({"announcer_medals": False}, s)
+    assert calls == [], "no warning for a capture that's fine now"
+
+
+def test_every_clutch_exit_releases_the_held_warning():
+    """A deferred warning is worthless if only one of the three exits fires it:
+    squad revived, you went down, or you exfiled solo."""
+    import inspect
+
+    import main
+    for fn in (main._check_clutch, main._end_clutch_quietly,
+               main._maybe_capture_exfil):
+        assert "_fire_deferred_black" in inspect.getsource(fn), fn.__name__

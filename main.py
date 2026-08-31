@@ -1050,10 +1050,22 @@ def check_obs_not_black(cfg, obs, web=None, state=None, label="") -> bool:
                   f"(brightness {res['mean']:.0f}, variation {res['stddev']:.0f})")
         return True
     print(blackcheck.warning_text(res))
-    # ON SCREEN, like the skull. A console warning is useless mid-match — Stan:
-    # "sometimes i get lost in the game". critical=True so muting flair can't
-    # mute this, and it re-fires on every periodic check while still broken:
-    # annoying by design, and it stops the moment he fixes it.
+    # SWEAT MODE. Stan asked: "is this even on sweats mode?" — it wasn't, and it
+    # would have slammed a red banner and a voice line over him mid-1vN. He can't
+    # fix OBS during a clutch anyway, so the distraction is pure cost. DEFER it,
+    # don't drop it: _fire_deferred_black() shows it the moment the clutch ends.
+    # The console line and the dashboard still update immediately.
+    if state is not None and state.get("clutch"):
+        state["black_pending"] = True
+        print("  [capture] holding the on-screen warning — you're clutching")
+        if web is not None:
+            try:
+                web.set_recap(status="error",
+                              note="OBS is recording a BLACK SCREEN — re-pick "
+                                   "the display in OBS")
+            except Exception:
+                pass
+        return False
     if cfg.get("black_overlay", True):
         try:
             show_text_overlay(
@@ -1350,17 +1362,35 @@ def _check_clutch(cfg, engine, s, now):
             _clutch_celebrate(cfg, s, kills)
         else:
             print("  [clutch] squad's back up.")
+        _fire_deferred_black(cfg, s)
     # No timeout exit: an ELIMINATED teammate stays on the panel for minutes,
     # and a timeout would exit + instantly re-trigger, wiping the solo-kill
     # tally. Clutch ends only on resolution: panel clears, you go down
     # (GIVE UP), you exfil, or the next match's deploy screen appears.
 
 
-def _end_clutch_quietly(s, reason):
+def _fire_deferred_black(cfg, s):
+    """Show a black-capture warning that was held back during a clutch.
+
+    Deferring rather than dropping: he still needs to know, just not while he's
+    fighting for his life."""
+    if not s.get("black_pending"):
+        return
+    s["black_pending"] = False
+    print("  [capture] clutch over — showing the held warning")
+    try:
+        check_obs_not_black(cfg, s["obs"], web=s.get("web"), state=None)
+    except Exception as e:
+        print(f"  [capture] deferred warning failed: {e}")
+
+
+def _end_clutch_quietly(s, reason, cfg=None):
     """You went down / the match ended some other way — no celebration."""
     if s.get("clutch"):
         s["clutch"] = False
         print(f"  [clutch] {reason}")
+        if cfg is not None:
+            _fire_deferred_black(cfg, s)
 
 
 def _clutch_celebrate(cfg, s, kills):
@@ -1575,7 +1605,7 @@ def _maybe_capture_killer(cfg, engine, lines, s, now):
             or phrase_matches("self revive", blob, 80)):
         return
     s["_last_downed_scan"] = now
-    _end_clutch_quietly(s, "you went down — no shame, it was 1vX.")
+    _end_clutch_quietly(s, "you went down — no shame, it was 1vX.", cfg)
     _scan_feed_names(cfg, engine, s, expect="killed_by")
 
 
@@ -1589,7 +1619,8 @@ def _maybe_detect_runner(cfg, engine, lines, s):
         if not runner_detect.is_deploy_screen(lines):
             return
         s["runner_checked"] = True
-        _end_clutch_quietly(s, "new match starting — clutch state cleared.")
+        _end_clutch_quietly(s, "new match starting — clutch state cleared.",
+                            cfg)
         runner = runner_detect.capture_runner(cfg, engine)
         s["current_runner"] = runner
         if runner:
@@ -1634,6 +1665,7 @@ def _maybe_capture_exfil(cfg, engine, lines, s, now):
                 _clutch_celebrate(cfg, s, kills)
             else:
                 print("  [clutch] exfiled solo — the quiet kind of clutch.")
+            _fire_deferred_black(cfg, s)
         save_dir = ""
         try:
             rec = s["obs"].get_record_directory()
