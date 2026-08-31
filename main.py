@@ -888,6 +888,8 @@ def _setup_session(cfg, dry_run):
             except Exception:
                 pass
             web.set_running(True)
+            # Preflight: catch a black capture BEFORE he plays for three hours.
+            check_obs_not_black(cfg, obs, web=web, label="startup")
             print(f"Live view: http://{webserver.local_ip()}:{port}  "
                   f"(open in your iPad/phone browser on the same Wi-Fi)")
         except Exception as e:
@@ -1012,6 +1014,47 @@ ELIM_TAGS = ("kill", "elim", "finisher")
 # Never a kill of yours: an assist is someone else's, a manual SAVE CLIP press
 # is just a kept moment.
 NON_KILL_TAGS = ("assist", "manual") + MODIFIER_TAGS
+
+
+def check_obs_not_black(cfg, obs, web=None, state=None, label="") -> bool:
+    """Look through OBS's eyes and shout if it's recording nothing.
+
+    Stan lost a full night to this: OBS's Display Capture had lost its display, so
+    every clip was black. WITNESS couldn't tell, because it reads the SCREEN
+    directly — its own frames were perfect the whole time. Asking OBS for a
+    screenshot of its program scene is the only check that answers the question
+    that actually matters.
+
+    Returns True when the capture looks fine (or when the check couldn't run — an
+    inconclusive check must never be reported as a broken capture)."""
+    if not cfg.get("check_black_capture", True):
+        return True
+    try:
+        import blackcheck
+        res = blackcheck.check_obs_capture(obs)
+    except Exception as e:
+        print(f"  [capture] check skipped: {e}")
+        return True
+    if not res.get("ok"):
+        if res.get("reason"):
+            print(f"  [capture] check skipped: {res['reason']}")
+        return True
+    if not res.get("blank"):
+        if label:
+            print(f"  [capture] OBS is seeing picture "
+                  f"(brightness {res['mean']:.0f}, variation {res['stddev']:.0f})")
+        return True
+    print(blackcheck.warning_text(res))
+    if web is not None:
+        try:
+            web.set_recap(status="error",
+                          note="OBS is recording a BLACK SCREEN — re-pick the "
+                               "display in OBS")
+        except Exception:
+            pass
+    if state is not None:
+        state["black_warned"] = time.time()
+    return False
 
 
 def _kill_counts(tags) -> tuple:
@@ -1874,6 +1917,14 @@ def _run_live_inner(cfg: dict, dry_run: bool = False, stop_event=None, on_count=
                     _scan_feed_names(cfg, engine, s, expect="victim")
 
                 _check_coalesce(s)
+
+                # Re-check that OBS still has picture. A Display Capture can lose
+                # its target MID-SESSION (monitor sleeps, driver reloads), so a
+                # clean startup is not a guarantee for the next three hours.
+                every = float(cfg.get("black_check_minutes", 5)) * 60
+                if every > 0 and (loop_start - s.get("_black_check_at", 0)) >= every:
+                    s["_black_check_at"] = loop_start
+                    check_obs_not_black(cfg, s["obs"], web=s["web"], state=s)
 
                 # Every frame (not just suppressed ones): the handler is
                 # edge-triggered and needs the clear frames to re-arm.

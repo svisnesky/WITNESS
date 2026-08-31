@@ -130,6 +130,16 @@ render_encoder: auto
 # It only shouts when the game's own numbers prove it. Reported at session end.
 detection_canary: true
 
+# Catch OBS recording a BLACK SCREEN. WITNESS reads the screen directly, so its
+# own frames look fine even when OBS's Display Capture has lost its display —
+# which is how a whole night of clips came out black with nothing looking wrong.
+# This asks OBS to screenshot its own program scene and checks it has content:
+# once at startup (before you play) and every few minutes after, because a
+# capture can break mid-session when a monitor sleeps or a driver reloads.
+# A dark-but-varied game scene is fine; only a black or flat-colour frame warns.
+check_black_capture: true
+black_check_minutes: 5      # 0 disables the periodic re-check
+
 # Clip viewer (dashboard -> Clips): every clip in a session with WHAT happened
 # inside it and WHEN, so you can pick what belongs in a reel instead of trusting
 # the automatic pick. Thumbnails are cached in <session>/thumbs/ on first view.

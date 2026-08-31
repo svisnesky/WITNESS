@@ -133,6 +133,29 @@ class OBSClient:
                             "saved_replay_path", "") or "",
             default="", label="get last replay") or ""
 
+    def get_scene_screenshot(self, width: int = 480) -> bytes:
+        """PNG bytes of what OBS's PROGRAM SCENE looks like right now, or b''.
+
+        This is the only way to answer "will my clips be black". WITNESS reads the
+        screen directly, so its own frames look fine even when OBS's Display
+        Capture has lost its target — which is exactly how Stan lost a whole night
+        of footage without anything looking wrong.
+
+        Small by default: this runs at startup and periodically, and a full-res
+        screenshot over the websocket is wasteful when a 480px frame answers the
+        question just as well."""
+        def go():
+            import blackcheck
+            scene = self._client.get_current_program_scene()
+            name = (getattr(scene, "current_program_scene_name", None)
+                    or getattr(scene, "scene_name", None))
+            if not name:
+                return b""
+            r = self._client.get_source_screenshot(name, "png", width,
+                                                   int(width * 9 / 16), -1)
+            return blackcheck.decode_datauri(getattr(r, "image_data", ""))
+        return self._call(go, b"", "scene screenshot")
+
     def get_record_directory(self) -> str:
         """OBS's recording output folder (where replay clips are saved)."""
         return self._call(
@@ -159,6 +182,9 @@ class DryRunOBS:
 
     def get_last_replay_path(self) -> str:
         return ""
+
+    def get_scene_screenshot(self, width: int = 480) -> bytes:
+        return b""
 
     def get_record_directory(self) -> str:
         return ""
