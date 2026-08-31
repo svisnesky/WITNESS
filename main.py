@@ -472,10 +472,15 @@ def show_overlay(cfg: dict) -> None:
 
 
 def show_text_overlay(cfg, text, size=60, position="custom:0.5,0.42",
-                      color="#9184d9", duration_ms=1600, rise=True):
+                      color="#9184d9", duration_ms=1600, rise=True,
+                      critical=False):
     """Flash click-through text over the game (DOUBLE KILL, CLIP SAVED...).
-    Same animation language as the skull; never blocks the capture loop."""
-    if not cfg.get("show_overlays", True):
+    Same animation language as the skull; never blocks the capture loop.
+
+    critical=True bypasses show_overlays. That switch exists to mute FLAIR; it
+    must not also mute a warning that you are losing footage right now. Stan
+    turning off the fun banners should not cost him another black night."""
+    if not critical and not cfg.get("show_overlays", True):
         return
     try:
         import subprocess
@@ -1045,6 +1050,47 @@ def check_obs_not_black(cfg, obs, web=None, state=None, label="") -> bool:
                   f"(brightness {res['mean']:.0f}, variation {res['stddev']:.0f})")
         return True
     print(blackcheck.warning_text(res))
+    # ON SCREEN, like the skull. A console warning is useless mid-match — Stan:
+    # "sometimes i get lost in the game". critical=True so muting flair can't
+    # mute this, and it re-fires on every periodic check while still broken:
+    # annoying by design, and it stops the moment he fixes it.
+    if cfg.get("black_overlay", True):
+        try:
+            show_text_overlay(
+                cfg, "OBS IS BLACK - NOT RECORDING",
+                size=int(cfg.get("black_overlay_size", 54)),
+                position=str(cfg.get("black_overlay_position",
+                                     "custom:0.5,0.12")),
+                color=_theme_color(cfg, "danger", "#ff4d3d"),
+                duration_ms=int(cfg.get("black_overlay_ms", 6000)),
+                rise=False, critical=True)
+        except Exception as e:
+            print(f"  [capture] overlay failed: {e}")
+    # And say it out loud, since he may be looking down the sights, not at the
+    # top of the screen.
+    if cfg.get("black_callout", True) and cfg.get("announcer_medals", True):
+        try:
+            import threading
+
+            import announcer
+            import montage
+            base = os.path.dirname(os.path.abspath(__file__))
+
+            def speak():
+                try:
+                    wav = announcer.ensure_callout(
+                        base, "Warning. O B S is not recording.",
+                        cfg.get("announcer_voice", announcer.DEFAULT_VOICE),
+                        montage.find_ffmpeg(base, cfg),
+                        pitch=cfg.get("announcer_pitch", announcer.DEFAULT_PITCH),
+                        eleven_voice=cfg.get("elevenlabs_voice_id", ""))
+                    if wav:
+                        announcer.play_medal({"blk": wav}, "blk")
+                except Exception:
+                    pass
+            threading.Thread(target=speak, daemon=True).start()
+        except Exception:
+            pass
     if web is not None:
         try:
             web.set_recap(status="error",

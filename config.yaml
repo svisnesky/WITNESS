@@ -139,6 +139,16 @@ detection_canary: true
 # A dark-but-varied game scene is fine; only a black or flat-colour frame warns.
 check_black_capture: true
 black_check_minutes: 5      # 0 disables the periodic re-check
+# Put the warning ON SCREEN like the headshot skull, not just in the console —
+# a console line is useless while you're in a match. This IGNORES show_overlays
+# on purpose: that switch mutes flair, and muting flair must not also mute a
+# warning that you're losing footage right now. It re-appears on every check
+# while the capture is still black, and stops as soon as you fix it.
+black_overlay: true
+black_overlay_ms: 6000        # how long it stays up
+black_overlay_size: 54        # font px
+black_overlay_position: "custom:0.5,0.12"   # top-centre, out of the crosshair
+black_callout: true           # also say it out loud (needs announcer_medals)
 
 # Clip viewer (dashboard -> Clips): every clip in a session with WHAT happened
 # inside it and WHEN, so you can pick what belongs in a reel instead of trusting

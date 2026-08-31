@@ -155,3 +155,92 @@ def test_the_check_can_be_turned_off():
     import main
     assert main.check_obs_not_black({"check_black_capture": False},
                                     _Obs(_png(_img(0)))) is True
+
+
+# --- the ON-SCREEN warning ----------------------------------------------------
+
+def _spy_overlay(monkeypatch):
+    calls = []
+    import main
+    monkeypatch.setattr(main, "show_text_overlay",
+                        lambda cfg, text, **kw: calls.append((text, kw)))
+    return calls
+
+
+def test_a_black_capture_shows_an_overlay_on_the_game_screen(monkeypatch):
+    """Stan: "any way for it to pop on the game screen like a headshot logo does?
+    that would be super useful since sometimes i get lost in the game". A console
+    warning is useless mid-match."""
+    import main
+    calls = _spy_overlay(monkeypatch)
+    main.check_obs_not_black({"announcer_medals": False},
+                             _Obs(_png(_img(0))))
+    assert len(calls) == 1
+    text, kw = calls[0]
+    assert "OBS IS BLACK" in text
+    assert kw["critical"] is True
+    assert kw["duration_ms"] >= 4000, "a warning must linger, unlike flair"
+
+
+def test_muting_flair_does_NOT_mute_the_warning(monkeypatch):
+    """show_overlays exists to silence the fun banners. It must not also silence
+    a warning that footage is being lost right now."""
+    import main
+    calls = _spy_overlay(monkeypatch)
+    main.check_obs_not_black({"show_overlays": False, "announcer_medals": False},
+                             _Obs(_png(_img(0))))
+    assert len(calls) == 1 and calls[0][1]["critical"] is True
+
+
+def test_the_real_overlay_function_honours_critical(monkeypatch):
+    """The bypass has to live in show_text_overlay itself, or critical=True is
+    just a label."""
+    import main
+    spawned = []
+
+    class _P:
+        def __init__(self, *a, **k):
+            spawned.append(a)
+    monkeypatch.setattr("subprocess.Popen", _P)
+    monkeypatch.setattr(os.path, "exists", lambda p: True)
+
+    main.show_text_overlay({"show_overlays": False}, "FLAIR")
+    assert not spawned, "flair must stay muted"
+    main.show_text_overlay({"show_overlays": False}, "WARNING", critical=True)
+    assert spawned, "a critical warning must still be shown"
+
+
+def test_the_overlay_can_be_turned_off_on_its_own(monkeypatch):
+    """It's deliberately intrusive, so it needs its own off switch."""
+    import main
+    calls = _spy_overlay(monkeypatch)
+    main.check_obs_not_black({"black_overlay": False, "announcer_medals": False},
+                             _Obs(_png(_img(0))))
+    assert calls == []
+
+
+def test_a_healthy_capture_shows_nothing(monkeypatch):
+    import main
+    calls = _spy_overlay(monkeypatch)
+    main.check_obs_not_black({"announcer_medals": False},
+                             _Obs(_png(_img(110, noise=35))))
+    assert calls == []
+
+
+def test_an_inconclusive_check_shows_nothing(monkeypatch):
+    """No screenshot available is not evidence of a black capture."""
+    import main
+    calls = _spy_overlay(monkeypatch)
+    main.check_obs_not_black({"announcer_medals": False}, _Obs(b""))
+    assert calls == []
+
+
+def test_the_overlay_sits_away_from_the_crosshair():
+    """Default position is top-centre: visible without covering the fight."""
+    import yaml
+    base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    with open(os.path.join(base, "config.yaml"), encoding="utf-8") as f:
+        cfg = yaml.safe_load(f)
+    pos = cfg["black_overlay_position"]
+    y = float(pos.split(",")[1])
+    assert y < 0.3, f"{pos} would sit over the crosshair"
