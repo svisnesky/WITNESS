@@ -1050,12 +1050,15 @@ def check_obs_not_black(cfg, obs, web=None, state=None, label="") -> bool:
                   f"(brightness {res['mean']:.0f}, variation {res['stddev']:.0f})")
         return True
     print(blackcheck.warning_text(res))
-    # SWEAT MODE. Stan asked: "is this even on sweats mode?" — it wasn't, and it
-    # would have slammed a red banner and a voice line over him mid-1vN. He can't
-    # fix OBS during a clutch anyway, so the distraction is pure cost. DEFER it,
-    # don't drop it: _fire_deferred_black() shows it the moment the clutch ends.
-    # The console line and the dashboard still update immediately.
-    if state is not None and state.get("clutch"):
+    # SWEAT MODE. I first held this back during a clutch, reasoning he couldn't
+    # act on it mid-fight. Stan overruled that: "if im using sweat mode i would
+    # like to see the alert though" — and he's right, a clutch is exactly the
+    # footage worth not losing. Showing it is now the DEFAULT.
+    #
+    # The deferral is kept behind black_overlay_in_clutch: false for anyone who
+    # wants the quiet version; it releases at every clutch exit.
+    if (state is not None and state.get("clutch")
+            and not cfg.get("black_overlay_in_clutch", True)):
         state["black_pending"] = True
         print("  [capture] holding the on-screen warning — you're clutching")
         if web is not None:

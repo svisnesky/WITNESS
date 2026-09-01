@@ -248,17 +248,32 @@ def test_the_overlay_sits_away_from_the_crosshair():
 
 # --- sweat mode ---------------------------------------------------------------
 
-def test_the_warning_is_held_during_a_clutch(monkeypatch):
-    """Stan: "is this even on sweats mode?" It wasn't — it would have slammed a
-    red banner and a voice line over him mid-1vN. He can't fix OBS during a
-    clutch, so the distraction is pure cost."""
+def test_the_warning_SHOWS_during_a_clutch_by_default(monkeypatch):
+    """Stan: "if im using sweat mode i would like to see the alert though".
+
+    I'd first held it back, reasoning he couldn't act mid-fight. He overruled
+    that, and he's right: a clutch is exactly the footage worth not losing. Sweat
+    mode mutes FLAIR; this isn't flair."""
     import main
     calls = _spy_overlay(monkeypatch)
     st = {"clutch": True}
     main.check_obs_not_black({"announcer_medals": False}, _Obs(_png(_img(0))),
                              state=st)
-    assert calls == [], "no overlay while clutching"
-    assert st["black_pending"] is True, "but it must be remembered"
+    assert len(calls) == 1, "sweat mode must not hide a data-loss warning"
+    assert "OBS IS BLACK" in calls[0][0]
+    assert not st.get("black_pending"), "shown now, nothing to defer"
+
+
+def test_the_quiet_version_is_still_available(monkeypatch):
+    """black_overlay_in_clutch: false holds it until the clutch ends."""
+    import main
+    calls = _spy_overlay(monkeypatch)
+    st = {"clutch": True}
+    main.check_obs_not_black({"announcer_medals": False,
+                              "black_overlay_in_clutch": False},
+                             _Obs(_png(_img(0))), state=st)
+    assert calls == []
+    assert st["black_pending"] is True, "held, never dropped"
 
 
 def test_the_held_warning_fires_when_the_clutch_ends(monkeypatch):

@@ -149,6 +149,11 @@ black_overlay_ms: 6000        # how long it stays up
 black_overlay_size: 54        # font px
 black_overlay_position: "custom:0.5,0.12"   # top-centre, out of the crosshair
 black_callout: true           # also say it out loud (needs announcer_medals)
+# Show the warning during SWEAT MODE (clutch) too. Sweat mode mutes flair so a
+# tense 1vX isn't cluttered — but losing the footage of a clutch is exactly what
+# you'd regret most, so this is NOT flair and shows by default.
+# Set false to hold it until the clutch ends instead; it is never dropped.
+black_overlay_in_clutch: true
 
 # Clip viewer (dashboard -> Clips): every clip in a session with WHAT happened
 # inside it and WHEN, so you can pick what belongs in a reel instead of trusting
