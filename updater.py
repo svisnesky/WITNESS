@@ -1,9 +1,17 @@
 """Self-updater — keeps the app current with GitHub automatically.
 
 On launch, compares the local version (.app_version, the last-synced commit
-sha) with the repo's latest commit. If newer, downloads every repo file,
-swaps in the ones that changed, and reports what happened so the launcher can
-relaunch with fresh code. No git needed, stdlib only.
+sha) with the repo's latest commit. If newer, it asks GitHub for the file list
+of that commit, which carries each file's git blob sha, hashes the local copy
+the same way, and downloads ONLY the files that differ or are missing. Then it
+swaps those in and reports what happened so the launcher can relaunch with
+fresh code. No git needed, stdlib only.
+
+Line endings: git stores text files with LF and raw.githubusercontent serves
+them that way, but a GitHub ZIP (and .gitattributes) gives the .bat files CRLF.
+Text files are therefore compared with line endings normalized, so a fresh ZIP
+costs two API calls and writes nothing, and a .bat that really changed is
+written with CRLF, the way cmd.exe wants it.
 
 Never touched: settings_override.yaml (your dashboard settings), logs/,
 music/, client_secret.json / youtube_token.json, .venv — anything not
@@ -13,6 +21,7 @@ config.yaml.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import urllib.parse
@@ -36,6 +45,61 @@ SKIP = {"settings_override.yaml", "session_log.csv"}
 # Written on first install only, then left alone — a user's edits (OBS
 # password, tuning) must survive updates. New options ship as code defaults.
 SKIP_IF_EXISTS = {"config.yaml"}
+# Compared with CRLF folded to LF. Binary assets are compared byte for byte:
+# folding them could call a changed image "unchanged".
+TEXT_EXTS = (".py", ".yaml", ".md", ".txt", ".bat")
+
+
+def _is_text(path: str) -> bool:
+    return path.lower().endswith(TEXT_EXTS)
+
+
+def _lf(data: bytes) -> bytes:
+    return data.replace(b"\r\n", b"\n")
+
+
+def _blob_sha(data: bytes) -> str:
+    """git's object id for a blob: what the tree API lists as each file's sha."""
+    return hashlib.sha1(b"blob %d\0" % len(data) + data).hexdigest()
+
+
+def _local_matches(dest: str, path: str, sha) -> bool:
+    """True when the file on disk already holds the blob GitHub lists for this
+    path, either byte for byte or (text only) once CRLF is folded to LF.
+    Anything unreadable, missing or without a sha counts as changed: a false
+    "changed" costs one download, a false "unchanged" strands the user on
+    stale code."""
+    if not sha:
+        return False
+    try:
+        with open(dest, "rb") as f:
+            local = f.read()
+    except OSError:
+        return False
+    if _blob_sha(local) == sha:
+        return True
+    if _is_text(path):
+        folded = _lf(local)
+        return folded != local and _blob_sha(folded) == sha
+    return False
+
+
+def _same_content(path: str, old: bytes, new: bytes) -> bool:
+    if _is_text(path):
+        return _lf(old) == _lf(new)
+    return old == new
+
+
+def _for_disk(path: str, data: bytes) -> bytes:
+    """.bat files are written with CRLF (cmd.exe); everything else exactly as
+    GitHub serves it."""
+    if path.lower().endswith(".bat"):
+        return _lf(data).replace(b"\n", b"\r\n")
+    return data
+
+
+def _dest(base_dir: str, path: str) -> str:
+    return os.path.join(base_dir, path.replace("/", os.sep))
 
 
 def _why(exc) -> str:
@@ -124,33 +188,45 @@ def check_and_update(base_dir: str, force: bool = False) -> tuple[bool, str]:
 
     try:
         tree = json.loads(_get(f"{API}/git/trees/{latest}?recursive=1", timeout=10))
-        paths = [e["path"] for e in tree.get("tree", [])
-                 if e.get("type") == "blob"
-                 and e["path"].lower().endswith(EXTS)
-                 and os.path.basename(e["path"]) not in SKIP]
-        if not paths:
+        entries = [e for e in tree.get("tree", [])
+                   if e.get("type") == "blob"
+                   and e["path"].lower().endswith(EXTS)
+                   and os.path.basename(e["path"]) not in SKIP]
+        if not entries:
             return False, "Update check failed: repo file list came back empty."
-        # Download EVERYTHING first; only then write.
+        # Only what differs. A fresh ZIP (no .app_version) used to re-download
+        # all ~130 files one connection at a time and then relaunch, purely
+        # because its .bat files are CRLF and GitHub serves LF.
+        todo = []
+        for e in entries:
+            path = e["path"]
+            dest = _dest(base_dir, path)
+            if os.path.basename(path) in SKIP_IF_EXISTS and os.path.exists(dest):
+                continue  # user-owned file: never overwrite after first install
+            if _local_matches(dest, path, e.get("sha")):
+                continue
+            todo.append(path)
+        # Download EVERYTHING that differs first; only then write.
         fetched = []
-        for p in paths:
+        for p in todo:
             fetched.append((p, _get(f"{RAW}/{latest}/{urllib.parse.quote(p)}", timeout=30)))
     except Exception as e:
         return False, f"Update aborted, nothing changed: {type(e).__name__}: {e}"
 
     changed = []
     for path, data in fetched:
-        dest = os.path.join(base_dir, path.replace("/", os.sep))
+        dest = _dest(base_dir, path)
         if os.path.basename(path) in SKIP_IF_EXISTS and os.path.exists(dest):
             continue  # user-owned file: never overwrite after first install
         try:
             with open(dest, "rb") as f:
-                if f.read() == data:
-                    continue
+                if _same_content(path, f.read(), data):
+                    continue  # differs only in line endings: leave it alone
         except OSError:
             pass  # new file
         os.makedirs(os.path.dirname(dest) or base_dir, exist_ok=True)
         with open(dest, "wb") as f:
-            f.write(data)
+            f.write(_for_disk(path, data))
         changed.append(path)
 
     with open(ver_path, "w", encoding="utf-8") as f:

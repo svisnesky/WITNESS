@@ -16,6 +16,8 @@ import json
 import os
 import sys
 
+import pytest
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import updater  # noqa: E402
@@ -114,3 +116,256 @@ def test_positional_signature_is_kept():
     params = list(inspect.signature(updater.check_and_update).parameters.values())
     assert params[0].name == "base_dir"
     assert params[1].name == "force" and params[1].default is False
+
+
+# --------------------------------------------------------------------------
+# Download only what differs
+
+PNG = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR" + bytes(range(256))
+BAT = b"@echo off\nREM launcher\npython main.py\npause\n"
+REPO = {
+    "main.py": b"print('main')\n",
+    "games/marathon.yaml": b"name: marathon\n",
+    "START Kill Recorder.bat": BAT,
+    "witness_logo.png": PNG,
+    "witness_splash.gif": b"GIF89a\x01\x00\x01\x00\n\r\n",
+    "witness.ico": b"\x00\x00\x01\x00\n",
+    "config.yaml": b"auto_update: true\ngamertag: \"\"\n",
+}
+
+
+def _crlf(b):
+    return b.replace(b"\r\n", b"\n").replace(b"\n", b"\r\n")
+
+
+def _fresh_zip(base, repo=REPO):
+    """What extracting GitHub's ZIP gives you: .gitattributes turns the .bat
+    files to CRLF; everything else is byte-identical; no .app_version."""
+    for path, data in repo.items():
+        _write(base, path, _crlf(data) if path.endswith(".bat") else data)
+
+
+def _snapshot(base):
+    out = {}
+    for root, _dirs, files in os.walk(str(base)):
+        for f in files:
+            p = os.path.join(root, f)
+            with open(p, "rb") as fh:
+                out[os.path.relpath(p, str(base))] = (fh.read(), os.stat(p).st_mtime_ns)
+    return out
+
+
+def test_blob_sha_is_gits_object_id():
+    assert updater._blob_sha(b"") == "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391"
+    assert updater._blob_sha(b"hello\n") == "ce013625030ba8dba906f756967f9e9ca394464a"
+    for data in (BAT, PNG, b"x" * 100000):
+        assert updater._blob_sha(data) == git_blob_sha(data)
+
+
+def test_fresh_zip_downloads_nothing_and_writes_nothing(tmp_path, monkeypatch):
+    """The first launch of a fresh ZIP: two API calls, zero raw downloads, no
+    rewritten .bat (cmd.exe is executing one of them), no relaunch."""
+    _fresh_zip(tmp_path)
+    before = _snapshot(tmp_path)
+    gh = FakeGitHub(REPO)
+    monkeypatch.setattr(updater, "_get", gh)
+    changed, msg = updater.check_and_update(str(tmp_path))
+    assert changed is False, msg
+    assert msg.startswith("Up to date")
+    assert gh.raw_fetches() == []
+    assert len(gh.api_calls()) == 2
+    after = _snapshot(tmp_path)
+    after.pop(updater.VERSION_FILE)
+    assert after == before                      # same bytes, same mtimes
+    assert _read(tmp_path, "START Kill Recorder.bat") == _crlf(BAT)
+    assert _read(tmp_path, updater.VERSION_FILE).decode() == LATEST
+
+
+def test_crlf_bat_matching_the_tree_is_not_downloaded(tmp_path, monkeypatch):
+    _fresh_zip(tmp_path)
+    gh = FakeGitHub(REPO)
+    monkeypatch.setattr(updater, "_get", gh)
+    updater.check_and_update(str(tmp_path))
+    assert not any("Kill%20Recorder.bat" in u for u in gh.urls)
+
+
+def test_lf_bat_from_the_old_updater_is_left_alone(tmp_path, monkeypatch):
+    """Stan's install: the old updater already rewrote his .bat files as LF.
+    They match the tree byte for byte and must not churn back to CRLF."""
+    _fresh_zip(tmp_path)
+    _write(tmp_path, "START Kill Recorder.bat", BAT)
+    gh = FakeGitHub(REPO)
+    monkeypatch.setattr(updater, "_get", gh)
+    changed, _ = updater.check_and_update(str(tmp_path))
+    assert changed is False
+    assert _read(tmp_path, "START Kill Recorder.bat") == BAT
+
+
+def test_matching_binary_is_skipped(tmp_path, monkeypatch):
+    _fresh_zip(tmp_path)
+    gh = FakeGitHub(REPO)
+    monkeypatch.setattr(updater, "_get", gh)
+    updater.check_and_update(str(tmp_path))
+    assert not any(u.endswith("witness_logo.png") for u in gh.urls)
+
+
+def test_binary_is_never_line_ending_folded(tmp_path, monkeypatch):
+    """A PNG whose LF bytes were turned into CRLF is CORRUPT, not unchanged.
+    Folding binaries would hide that, so only text files are folded."""
+    _fresh_zip(tmp_path)
+    _write(tmp_path, "witness_logo.png", PNG.replace(b"\n", b"\r\n"))
+    gh = FakeGitHub(REPO)
+    monkeypatch.setattr(updater, "_get", gh)
+    changed, msg = updater.check_and_update(str(tmp_path))
+    assert changed is True, msg
+    assert _read(tmp_path, "witness_logo.png") == PNG
+
+
+def test_one_changed_py_is_the_only_download(tmp_path, monkeypatch):
+    _fresh_zip(tmp_path)
+    repo = dict(REPO, **{"main.py": b"print('fixed')\n"})
+    gh = FakeGitHub(repo)
+    monkeypatch.setattr(updater, "_get", gh)
+    changed, msg = updater.check_and_update(str(tmp_path))
+    assert changed is True
+    assert gh.raw_fetches() == [f"{updater.RAW}/{LATEST}/main.py"]
+    assert _read(tmp_path, "main.py") == b"print('fixed')\n"
+    assert "main.py" in msg and "1 file" in msg
+    assert _read(tmp_path, updater.VERSION_FILE).decode() == LATEST
+
+
+def test_a_crlf_py_that_really_changed_is_downloaded(tmp_path, monkeypatch):
+    """Folding must not make a CHANGED text file look unchanged."""
+    _fresh_zip(tmp_path)
+    _write(tmp_path, "main.py", b"print('old')\r\n")
+    gh = FakeGitHub(REPO)
+    monkeypatch.setattr(updater, "_get", gh)
+    changed, _ = updater.check_and_update(str(tmp_path))
+    assert changed is True
+    assert _read(tmp_path, "main.py") == REPO["main.py"]
+
+
+def test_missing_file_is_downloaded(tmp_path, monkeypatch):
+    _fresh_zip(tmp_path)
+    os.remove(tmp_path / "games" / "marathon.yaml")
+    gh = FakeGitHub(REPO)
+    monkeypatch.setattr(updater, "_get", gh)
+    changed, _ = updater.check_and_update(str(tmp_path))
+    assert changed is True
+    assert gh.raw_fetches() == [f"{updater.RAW}/{LATEST}/games/marathon.yaml"]
+    assert _read(tmp_path, "games/marathon.yaml") == REPO["games/marathon.yaml"]
+
+
+def test_existing_config_yaml_is_never_fetched_or_written(tmp_path, monkeypatch):
+    _fresh_zip(tmp_path)
+    mine = b"auto_update: true\ngamertag: MRVIZNASTY\nobs_password: hunter2\n"
+    _write(tmp_path, "config.yaml", mine)
+    gh = FakeGitHub(REPO)
+    monkeypatch.setattr(updater, "_get", gh)
+    updater.check_and_update(str(tmp_path))
+    assert not any(u.endswith("config.yaml") for u in gh.raw_fetches())
+    assert _read(tmp_path, "config.yaml") == mine
+
+
+def test_config_yaml_is_written_on_first_install(tmp_path, monkeypatch):
+    _fresh_zip(tmp_path)
+    os.remove(tmp_path / "config.yaml")
+    gh = FakeGitHub(REPO)
+    monkeypatch.setattr(updater, "_get", gh)
+    updater.check_and_update(str(tmp_path))
+    assert _read(tmp_path, "config.yaml") == REPO["config.yaml"]
+
+
+def test_a_changed_bat_is_written_with_crlf(tmp_path, monkeypatch):
+    _fresh_zip(tmp_path)
+    new_bat = b"@echo off\nREM launcher v2\npython main.py\npause\n"
+    gh = FakeGitHub(dict(REPO, **{"START Kill Recorder.bat": new_bat}))
+    monkeypatch.setattr(updater, "_get", gh)
+    changed, _ = updater.check_and_update(str(tmp_path))
+    assert changed is True
+    on_disk = _read(tmp_path, "START Kill Recorder.bat")
+    assert on_disk == _crlf(new_bat)
+    assert b"\n" not in on_disk.replace(b"\r\n", b"")     # no bare LF left
+
+
+def test_line_ending_only_difference_is_never_written(tmp_path, monkeypatch):
+    """Belt and braces behind the sha check: even if the tree's sha does not
+    match, a download that differs from the local file only in line endings
+    is not written (and does not trigger a relaunch)."""
+    _fresh_zip(tmp_path)
+    _write(tmp_path, "main.py", _crlf(REPO["main.py"]))
+    before = _snapshot(tmp_path)["main.py"]
+    gh = FakeGitHub(REPO, tree_sha={"main.py": "0" * 40})
+    monkeypatch.setattr(updater, "_get", gh)
+    changed, _ = updater.check_and_update(str(tmp_path))
+    assert changed is False
+    assert f"{updater.RAW}/{LATEST}/main.py" in gh.raw_fetches()
+    assert _snapshot(tmp_path)["main.py"] == before
+
+
+def test_already_on_latest_costs_one_api_call(tmp_path, monkeypatch):
+    _fresh_zip(tmp_path)
+    _write(tmp_path, updater.VERSION_FILE, LATEST.encode())
+    gh = FakeGitHub(REPO)
+    monkeypatch.setattr(updater, "_get", gh)
+    changed, msg = updater.check_and_update(str(tmp_path))
+    assert changed is False and msg.startswith("Up to date")
+    assert len(gh.urls) == 1
+
+
+def test_missing_required_asset_resyncs_even_on_latest(tmp_path, monkeypatch):
+    _fresh_zip(tmp_path)
+    _write(tmp_path, updater.VERSION_FILE, LATEST.encode())
+    os.remove(tmp_path / "witness_splash.gif")
+    gh = FakeGitHub(REPO)
+    monkeypatch.setattr(updater, "_get", gh)
+    changed, _ = updater.check_and_update(str(tmp_path))
+    assert changed is True
+    assert gh.raw_fetches() == [f"{updater.RAW}/{LATEST}/witness_splash.gif"]
+
+
+def test_a_failed_download_writes_nothing(tmp_path, monkeypatch):
+    _fresh_zip(tmp_path)
+    repo = dict(REPO, **{"main.py": b"print('fixed')\n",
+                         "games/marathon.yaml": b"name: v2\n"})
+    gh = FakeGitHub(repo)
+
+    def flaky(url, timeout=10):
+        if url.endswith("marathon.yaml"):
+            raise OSError("connection reset")
+        return gh(url, timeout)
+
+    monkeypatch.setattr(updater, "_get", flaky)
+    before = _snapshot(tmp_path)
+    changed, msg = updater.check_and_update(str(tmp_path))
+    assert changed is False and "nothing changed" in msg
+    assert _snapshot(tmp_path) == before        # no .app_version either
+
+
+def _git(*args, **kw):
+    import subprocess
+    base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    return subprocess.run(["git"] + list(args), cwd=base, capture_output=True,
+                          check=True, **kw).stdout
+
+
+def test_real_repo_blobs_hash_to_gits_own_ids(tmp_path):
+    """Against git itself, not our oracle: every tracked .bat (as the CRLF a
+    ZIP gives you) and every tracked .png in HEAD must count as unchanged
+    against the sha git lists for it, the same sha GitHub's tree API returns."""
+    try:
+        listing = _git("ls-tree", "-r", "-z", "HEAD").decode("utf-8", "replace")
+    except Exception:
+        pytest.skip("not a git checkout (ZIP install)")
+    checked = 0
+    for line in filter(None, listing.split("\0")):
+        meta, path = line.split("\t", 1)
+        _mode, kind, sha = meta.split()
+        if kind != "blob" or not path.lower().endswith((".bat", ".png")):
+            continue
+        blob = _git("cat-file", "blob", sha)
+        local = _crlf(blob) if path.lower().endswith(".bat") else blob
+        dest = _write(tmp_path, os.path.basename(path), local)
+        assert updater._local_matches(dest, path, sha), path
+        checked += 1
+    assert checked >= 5
