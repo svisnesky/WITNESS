@@ -570,9 +570,14 @@ class Relaunch:
 
     def __init__(self):
         self.popen = []
+        self.call = []
 
     def Popen(self, cmd, **kw):
         self.popen.append((cmd, kw))
+
+    def call_(self, cmd, **kw):
+        self.call.append((cmd, kw))
+        return 7
 
 
 def _fake_update(monkeypatch, changed, msg, files):
@@ -643,3 +648,130 @@ def test_the_relaunched_run_appends_the_note_instead_of_overwriting(tmp_path, mo
     assert "Updated 2 file(s)" in status                     # kept
     assert "Restarted on the latest version (update applied). New components installed." in status
     assert "MKR_UPDATED" not in os.environ and "MKR_UPDATE_NOTE" not in os.environ
+
+
+# --------------------------------------------------------------------------
+# Console launchers wait for the relaunched run
+
+class _Tty:
+    def isatty(self):
+        return True
+
+
+def _console_process(monkeypatch):
+    monkeypatch.setattr(sys, "executable", r"C:\WITNESS\.venv\Scripts\python.exe")
+    monkeypatch.setattr(sys, "stdin", _Tty())
+
+
+def _patch_relaunch(monkeypatch):
+    import signal
+    import subprocess
+    rl = Relaunch()
+    monkeypatch.setattr(subprocess, "Popen", rl.Popen)
+    monkeypatch.setattr(subprocess, "call", rl.call_)
+    handlers = []
+    monkeypatch.setattr(signal, "signal", lambda sig, h: handlers.append((sig, h)))
+    monkeypatch.delenv("MKR_UPDATED", raising=False)
+    monkeypatch.delenv("MKR_UPDATE_NOTE", raising=False)
+    monkeypatch.setattr(updater, "ensure_requirements",
+                        lambda b: pytest.fail("pip must not run"))
+    _fake_update(monkeypatch, True, "Updated 1 file(s)", ["main.py"])
+    return rl, handlers
+
+
+def test_console_parent_waits_and_exits_with_the_childs_code(tmp_path, monkeypatch):
+    """'4 - Benchmark' printed its VERDICT from the child while the .bat had
+    already reached `pause` (parent gone). Now the parent waits."""
+    import signal
+    rl, handlers = _patch_relaunch(monkeypatch)
+    _console_process(monkeypatch)
+    with pytest.raises(SystemExit) as ex:
+        updater.update_and_relaunch_if_needed(str(tmp_path), ["main.py", "--bench"])
+    assert ex.value.code == 7
+    assert rl.popen == []
+    (cmd, kw), = rl.call
+    assert cmd == [sys.executable, "main.py", "--bench"]
+    assert kw["cwd"] == str(tmp_path) and kw["env"]["MKR_UPDATED"] == "1"
+    (sig, handler), = handlers
+    assert sig == signal.SIGINT
+    assert callable(handler) and handler is not signal.SIG_IGN
+
+
+def test_gui_process_keeps_popen_and_exit(tmp_path, monkeypatch):
+    rl, handlers = _patch_relaunch(monkeypatch)
+    _gui_process(monkeypatch)
+    with pytest.raises(SystemExit) as ex:
+        updater.update_and_relaunch_if_needed(str(tmp_path), ["gui.py"])
+    assert ex.value.code == 0
+    assert rl.call == [] and len(rl.popen) == 1 and handlers == []
+
+
+def test_console_but_not_main_thread_does_not_block(tmp_path, monkeypatch):
+    """gui.py runs its update check on a worker thread. Waiting there would
+    keep the old window up next to the new one (and signal.signal raises
+    off the main thread), so that path keeps Popen + exit."""
+    import threading
+    rl, handlers = _patch_relaunch(monkeypatch)
+    _console_process(monkeypatch)
+    out = {}
+
+    def worker():
+        try:
+            updater.update_and_relaunch_if_needed(str(tmp_path), ["gui.py"])
+        except SystemExit as e:
+            out["code"] = e.code
+
+    t = threading.Thread(target=worker)
+    t.start()
+    t.join(5)
+    assert out == {"code": 0}
+    assert rl.call == [] and len(rl.popen) == 1 and handlers == []
+
+
+def test_console_detection():
+    import types
+    real = (sys.executable, sys.stdin)
+    try:
+        sys.executable = r"C:\x\.venv\Scripts\pythonw.exe"
+        sys.stdin = _Tty()
+        assert updater._console_attached() is False
+        sys.executable = r"C:\x\.venv\Scripts\python.exe"
+        sys.stdin = None
+        assert updater._console_attached() is False
+        sys.stdin = types.SimpleNamespace(isatty=lambda: False)
+        assert updater._console_attached() is False
+        sys.stdin = _Tty()
+        assert updater._console_attached() is True
+    finally:
+        sys.executable, sys.stdin = real
+
+
+def test_the_relaunched_child_still_gets_ctrl_c():
+    """SIG_IGN would be inherited across exec on POSIX and Python keeps it, so
+    the relaunched app would ignore Ctrl-C too. Run the real thing in a
+    throwaway interpreter (never touch this test runner's SIGINT)."""
+    import subprocess
+    repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    child = ("import signal; print(signal.getsignal(signal.SIGINT) "
+             "is signal.default_int_handler)")
+    parent = ("import sys, subprocess, updater; updater._ignore_ctrl_c(); "
+              f"sys.stdout.write(subprocess.check_output([sys.executable, '-c', {child!r}]).decode())")
+    out = subprocess.run([sys.executable, "-c", parent], cwd=repo,
+                         capture_output=True, timeout=60)
+    assert out.returncode == 0, out.stderr
+    assert out.stdout.strip() == b"True"
+
+
+def test_a_console_that_cannot_print_does_not_stop_the_relaunch(monkeypatch):
+    class Cp1252Console:
+        def write(self, s):
+            s.encode("cp1252")                 # raises on characters it lacks
+            return len(s)
+
+        def flush(self):
+            pass
+
+    monkeypatch.setattr(sys, "stdout", Cp1252Console())
+    updater._say("Updated 1 file(s): ☠.py")   # must not raise
+    monkeypatch.setattr(sys, "stdout", None)        # pythonw
+    updater._say("Updated 1 file(s)")

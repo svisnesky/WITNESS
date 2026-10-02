@@ -363,10 +363,55 @@ def _write_status(base_dir: str, msg: str, append: bool = False) -> None:
         pass
 
 
+def _say(text: str) -> None:
+    """print() that can never stop a relaunch (pythonw has no stdout; a
+    redirected Windows console may not encode every character)."""
+    try:
+        print(text, flush=True)
+    except Exception:
+        pass
+
+
+def _console_attached() -> bool:
+    """python.exe started from a .bat (or a terminal), not pythonw.exe/GUI."""
+    import sys
+    exe = (sys.executable or "").replace("\\", "/").rsplit("/", 1)[-1]
+    if exe.lower().startswith("pythonw"):
+        return False
+    try:
+        return sys.stdin is not None and sys.stdin.isatty()
+    except Exception:
+        return False
+
+
+def _swallow_ctrl_c(signum, frame) -> None:
+    """SIGINT handler for a parent that is only waiting on its relaunched
+    child. Ctrl-C reaches the child too (same console), and the child is the
+    one that stops the session cleanly and builds the recap."""
+
+
+def _ignore_ctrl_c() -> None:
+    """Not SIG_IGN: on POSIX an ignored SIGINT is inherited across exec and
+    Python keeps it, so the relaunched app would ignore Ctrl-C as well. A
+    Python-level no-op handler resets to the default in the child."""
+    import signal
+    try:
+        signal.signal(signal.SIGINT, _swallow_ctrl_c)
+    except (ValueError, OSError, AttributeError):
+        pass   # not the main thread / no SIGINT: nothing to protect
+
+
 def update_and_relaunch_if_needed(base_dir: str, argv=None) -> str:
     """For launchers: run the update; if code changed, relaunch this process
     so the fresh files actually load. Returns the status message (only when
-    no relaunch was needed — otherwise the process is replaced)."""
+    no relaunch was needed — otherwise the process is replaced).
+
+    From a console (.bat + python.exe) the parent WAITS for the relaunched
+    run and exits with its code, so the .bat's `pause` comes after the real
+    output (the Benchmark verdict used to be lost) and Ctrl-C does not drop
+    cmd into "Terminate batch job (Y/N)?" while the app is still running.
+    The parent ignores Ctrl-C meanwhile; otherwise subprocess.call would kill
+    the child mid-recap on KeyboardInterrupt. pythonw/GUI keeps Popen + exit."""
     import subprocess
     import sys
     if os.environ.get("MKR_UPDATED") == "1":
@@ -382,14 +427,19 @@ def update_and_relaunch_if_needed(base_dir: str, argv=None) -> str:
     if changed and "requirements.txt" in LAST_CHANGED_FILES:
         # Before the relaunch, or the fresh process imports a module that is
         # not installed yet (pywebview once shipped exactly like that).
-        print("  requirements.txt changed - installing new components...")
+        _say("  requirements.txt changed - installing new components...")
         _ok, note = ensure_requirements(base_dir)
     _write_status(base_dir, f"{msg}  {note}" if note else msg)
     if changed:
         env = dict(os.environ, MKR_UPDATED="1")
         if note:
             env["MKR_UPDATE_NOTE"] = note
-        subprocess.Popen([sys.executable] + list(argv or sys.argv),
-                         cwd=base_dir, env=env)
+        cmd = [sys.executable] + list(argv or sys.argv)
+        _say(f"{msg}\n  Restarting on the new version...")
+        if (_console_attached()
+                and threading.current_thread() is threading.main_thread()):
+            _ignore_ctrl_c()
+            sys.exit(subprocess.call(cmd, cwd=base_dir, env=env))
+        subprocess.Popen(cmd, cwd=base_dir, env=env)
         sys.exit(0)
     return msg
