@@ -294,7 +294,8 @@ ffmpeg_path: ""        # leave empty to auto-find ffmpeg.exe in this folder / PA
 # opponents with "last downed", plus your nemeses. Set gamertag to your EXACT
 # in-game name so the feed lines can be matched.
 track_names: true
-gamertag: "MRVIZNASTY"
+gamertag: ""   # your EXACT in-game name; empty = Menace Report, kill-name
+               # chyrons and streamer alerts are off
 
 # Marathon prints MAP LOCATION names on screen (zone banners, objective text),
 # and they get read as gamertags: "ALGAE PONDS" and "QUARANTINE" are Dire Marsh
@@ -352,8 +353,8 @@ elevenlabs_voice_id: ""
 announcer_voice: "en-US-ChristopherNeural"
 # Deepen any voice; "-18Hz" on Christopher = the deep broadcast voice.
 announcer_pitch: "-18Hz"
-# How the announcer says your name (phonetic). Empty = "our runner".
-announcer_player_name: "Mister Viz Nasty"
+# How the announcer says your name (spell it phonetically if it reads oddly).
+announcer_player_name: ""   # empty = "your runner"
 reel_music_volume: 0.08   # 0-1 loudness of the music bed under the game audio
                           # (0.08 = quiet background; 0 = off, 0.22 = old level)
 
