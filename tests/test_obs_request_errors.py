@@ -8,21 +8,52 @@ whole websocket reconnect ran, inside the detection loop, on every kill.
 
 A refused request arrives over a HEALTHY socket, so it must never reconnect. A
 real drop (or a timeout) must still reconnect, exactly once, as before.
+
+These tests must RUN where obsws-python is not installed. A module-level
+importorskip used to skip the whole file there, so CI (which installs only
+requirements-dev.txt) passed while running none of them, and a skip never fails
+a "pip install until it passes" loop. Every test drives a fake socket and only
+needs an exception with a .code, so the stand-ins below take the library's
+place; only the two tests that drive the real library skip without it.
 """
 
 import logging
 import os
+import re
+import subprocess
 import sys
 
 import pytest
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, ROOT)
 
 import obs_client  # noqa: E402
 
-error = pytest.importorskip("obsws_python.error")
-Refused = error.OBSSDKRequestError
-Timeout = error.OBSSDKTimeoutError
+try:
+    from obsws_python.error import OBSSDKRequestError as Refused
+    from obsws_python.error import OBSSDKTimeoutError as Timeout
+except ImportError:
+    class Refused(Exception):
+        """Same shape as obsws_python's OBSSDKRequestError: OBS answered, no."""
+
+        def __init__(self, req_name, code, comment):
+            self.req_name = req_name
+            self.code = code
+            super().__init__(f"Request {req_name} returned code {code}. "
+                             f"With message: {comment}")
+
+    class Timeout(Exception):
+        """Stands in for OBSSDKTimeoutError: a connection problem, not a refusal."""
+
+
+@pytest.fixture(autouse=True)
+def _refusal_class(monkeypatch):
+    """obs_client's 'OBS refused this' class is whichever Refused is in use.
+    With the library installed this is the class obs_client would load itself;
+    without it, obs_client's own fallback is a class nothing ever raises."""
+    monkeypatch.setattr(obs_client, "_REQUEST_ERROR", Refused)
+
 
 NO_SOURCE = "No source was found by the name of `KillCounter`."
 
@@ -78,7 +109,7 @@ def test_the_real_library_error_shape_is_recognised(caplog, capsys):
     """Drive the real obsws-python ReqClient.send, so the test fails if the
     library ever stops raising OBSSDKRequestError with a .code, and check its
     logger.exception() no longer reaches a handler."""
-    import obsws_python
+    obsws_python = pytest.importorskip("obsws_python")
 
     class _Base:
         def req(self, req_type, req_data=None):
@@ -248,7 +279,7 @@ def test_a_client_without_base_client_falls_back_to_disconnect():
 
 
 def test_connect_silences_the_obsws_logger(monkeypatch):
-    import obsws_python
+    obsws_python = pytest.importorskip("obsws_python")
     monkeypatch.setattr(obsws_python, "ReqClient", lambda **kw: object())
     lib = logging.getLogger("obsws_python")
     before = lib.level
@@ -396,3 +427,45 @@ def test_dryrun_stub_has_the_new_interface():
     assert d.get_scene_input_kinds() is None
     assert d.replay_buffer_ok is True
     d.close()
+
+
+# --- the file runs without obsws-python -----------------------------------------
+
+# Runs pytest on this file in a fresh interpreter where obsws_python cannot be
+# imported, i.e. what CI sees. Deselects itself there, so it never recurses.
+_WITHOUT_OBSWS = r"""
+import sys
+
+class _NoObsws:
+    def find_spec(self, name, path=None, target=None):
+        if name == "obsws_python" or name.startswith("obsws_python."):
+            raise ModuleNotFoundError("No module named %r (hidden for this run)" % name)
+        return None
+
+sys.meta_path.insert(0, _NoObsws())
+import pytest
+sys.exit(pytest.main(sys.argv[1:]))
+"""
+
+# The tests that drive the real library, and so may skip without it.
+_NEEDS_THE_LIBRARY = 2
+
+
+def test_the_file_runs_without_obsws_python():
+    """A module-level importorskip skipped all of these in CI ('1 skipped')
+    and CI still passed. Without the library, only the real-library tests may
+    skip; every fake-socket test must run and pass."""
+    me = os.path.abspath(__file__)
+    r = subprocess.run(
+        [sys.executable, "-c", _WITHOUT_OBSWS, me, "-q", "-rs",
+         "-p", "no:cacheprovider", "-k", "not test_the_file_runs_without_obsws_python"],
+        cwd=ROOT, capture_output=True, text=True, timeout=120)
+    out = r.stdout + r.stderr
+    assert r.returncode == 0, out
+
+    def count(word):
+        m = re.search(r"(\d+) " + word, out)
+        return int(m.group(1)) if m else 0
+    assert count("skipped") == _NEEDS_THE_LIBRARY, out
+    assert count("passed") >= 20, out
+    assert count("failed") == 0 and count("error") == 0, out
