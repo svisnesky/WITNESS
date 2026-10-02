@@ -1353,14 +1353,17 @@ def _handle_kill(cfg, ev, s, on_count=None):
     # Team wipe: an enemy DEATH shows an ELIM or FINISHER popup (yours or an
     # assist). Three distinct deaths in a couple of minutes = squad wiped —
     # in trios you're almost always fighting exactly one team.
-    raw_low = ev.raw_line.lower()
     # A wipe means three DIFFERENT people went down. Counting elim popups
     # instead fired on Stan's 2026-08-08 "downed, killed, downed another, killed"
     # — two enemies, each producing a down AND an elim, which looked like three
     # deaths. An own-finisher is by definition the runner we already counted, so
     # it can never be a new one.
+    # Decide by TAG, not raw substrings: a garbled 'RUNNER EL1M' is tagged an
+    # elim but contains no 'elim', so it never voted. A manual +1 press
+    # ('manual_kill') casts no vote, as before; assists and precision return
+    # earlier.
     if (cfg.get("team_wipe", True) and not own_finisher
-            and (tag == "down" or "elim" in raw_low or "finisher" in raw_low)):
+            and (tag == "down" or tag in ELIM_TAGS)):
         if register_elim(s.setdefault("elim_times", []), now,
                          wipe_size=int(cfg.get("team_wipe_size", 3))):
             print("  -> TEAM WIPE")
