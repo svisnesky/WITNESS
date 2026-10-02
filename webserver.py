@@ -1,10 +1,11 @@
 """A tiny built-in web dashboard so a phone/iPad/second screen can watch the
 kill feed live over the local network. No dependencies (stdlib http.server).
 
-Open http://<PC-IP>:<port> in the device's browser (same Wi-Fi). The page polls
+Open <PC-IP>:<port> in the device's browser (same Wi-Fi). The page polls
 /status once a second; the recorder updates a shared LiveState as kills happen.
 """
 
+import ipaddress
 import json
 import os
 import socket
@@ -1004,6 +1005,108 @@ def local_ip():
         return "127.0.0.1"
 
 
+def _split_host_port(value: str):
+    """'name:port' as sent in a Host header -> (name, port-or-None).
+    Handles '[v6]:port' and a bare unbracketed v6 literal."""
+    v = (value or "").strip()
+    if v.startswith("["):
+        end = v.find("]")
+        if end < 0:
+            return v, None
+        rest = v[end + 1:]
+        return v[1:end], (rest[1:] if rest.startswith(":") and rest[1:] else None)
+    if v.count(":") == 1:
+        name, port = v.split(":", 1)
+        return name, (port or None)
+    return v, None
+
+
+def _own_hostnames() -> set:
+    try:
+        hn = socket.gethostname().strip().lower().rstrip(".")
+    except Exception:
+        hn = ""
+    return {hn, hn.split(".")[0]} - {""}
+
+
+def _host_allowed(name: str) -> bool:
+    """Is this Host header name one that really means THIS PC?
+
+    The guard against DNS rebinding: a hostile page can make its OWN domain
+    resolve to 127.0.0.1 or the PC's LAN IP, and the browser then treats the
+    dashboard as same-origin with that page. The one thing the attacker can't
+    change is the Host header — it carries their domain. So answer only to:
+      - IP literals (v4/v6). The iPad and the iOS app connect by IP. NOT pinned
+        to local_ip(): VPN, WSL and Hyper-V adapters make that a different
+        address than the one the iPad uses, and the LAN IP can change while
+        the app runs.
+      - localhost, and the PC's own hostname.
+      - any *.local name (mDNS — answered only on the local link, never by a
+        public DNS server an attacker controls).
+      - any single-label name ('GAMING-PC', NetBIOS/LLMNR). Like .local, those
+        resolve only on the local network; every name an attacker can publish
+        has a dot in it.
+    """
+    h = (name or "").strip().lower().rstrip(".")
+    if not h:
+        return True                 # no Host at all: not a browser
+    try:
+        ipaddress.ip_address(_uparse.unquote(h).split("%", 1)[0])
+        return True
+    except ValueError:
+        pass
+    if h == "localhost" or h.endswith(".local") or "." not in h:
+        return True
+    return h in _own_hostnames()
+
+
+def _origin_matches(source: str, host_header: str) -> bool:
+    """Does an Origin (or Referer) header name the same host:port as Host?
+    Browsers attach Origin to every cross-site POST, including no-cors ones,
+    so a mismatch means another site's page is driving the dashboard."""
+    try:
+        u = _uparse.urlsplit((source or "").strip())
+        oport = u.port
+    except ValueError:
+        return False
+    if u.scheme not in ("http", "https") or not u.hostname:
+        return False               # 'null', file:, a garbled value
+    if oport is None:
+        oport = 443 if u.scheme == "https" else 80
+    name, port = _split_host_port(host_header)
+    try:
+        hport = int(port) if port else 80
+    except ValueError:
+        return False
+    return (u.hostname.lower().rstrip(".") == name.lower().rstrip(".")
+            and oport == hport)
+
+
+_refusals_logged = set()
+
+
+def request_refusal(headers, post: bool) -> str:
+    """'' when a request may proceed, else a short reason for the 403.
+
+    Host must mean this PC (see _host_allowed). On a POST, an Origin header —
+    or a Referer when there's no Origin — must name the same host:port as Host.
+    A request with neither is allowed: the iOS app and plain navigations send
+    none, and every browser attaches Origin to a cross-site POST.
+
+    Deliberately NOT required: a JSON Content-Type (five dashboard buttons send
+    none, and they'd silently stop working) or a login token (owner's call:
+    the iPad bookmark keeps working; LAN access is disclosed in SECURITY.md)."""
+    host = headers.get("Host") or ""
+    name, _port = _split_host_port(host)
+    if not _host_allowed(name):
+        return f"host {name[:60]!r} is not this PC"
+    if post:
+        src = headers.get("Origin") or headers.get("Referer") or ""
+        if src and not _origin_matches(src, host):
+            return f"request came from another site ({src[:60]!r})"
+    return ""
+
+
 class _QuietServer(ThreadingHTTPServer):
     """Don't print a traceback when a client simply hangs up.
 
@@ -1015,6 +1118,14 @@ class _QuietServer(ThreadingHTTPServer):
     Windows that arrives as ConnectionAbortedError (WinError 10053), which the
     handlers didn't catch either; it and BrokenPipe/ConnectionReset are all
     ConnectionError. Anything else is a real bug and still prints."""
+
+    # HTTPServer turns SO_REUSEADDR on. On Linux/macOS that only lets a restart
+    # rebind past TIME_WAIT. On WINDOWS it lets a second process bind the very
+    # same port while the first still listens — so a second WITNESS came up
+    # "fine" on :8000, ran a second OCR loop on the GPU and saved duplicate
+    # replays, with the two servers splitting the iPad's requests. Off on
+    # Windows, a second copy fails to bind instead (the launcher reports it).
+    allow_reuse_address = (os.name != "nt")
 
     def handle_error(self, request, client_address):
         import sys
@@ -1042,6 +1153,20 @@ def start_web(state, port, base_dir, host="0.0.0.0"):
 
         def log_message(self, *a):
             pass  # quiet
+
+        def _refused(self, post=False) -> bool:
+            """Answer 403 and return True when request_refusal() says no."""
+            why = request_refusal(self.headers, post)
+            if not why:
+                return False
+            if why not in _refusals_logged and len(_refusals_logged) < 20:
+                _refusals_logged.add(why)      # one line per cause, not per poll
+                print(f"  [web] refused a request: {why}")
+            self.send_error(403, "Forbidden",
+                            "WITNESS refused this request: " + why + ". Open the "
+                            "dashboard by the PC's IP address (as shown in the "
+                            "WITNESS window), localhost, or its .local name.")
+            return True
 
         def _send(self, body, ctype, cache=True):
             self.send_response(200)
@@ -1095,6 +1220,8 @@ def start_web(state, port, base_dir, host="0.0.0.0"):
                     remaining -= len(chunk)
 
         def do_GET(self):
+            if self._refused():
+                return
             path = self.path.split("?")[0]
             try:
                 if path == "/status":
@@ -1245,6 +1372,10 @@ def start_web(state, port, base_dir, host="0.0.0.0"):
             except ValueError:
                 n = 0
             self._body = self.rfile.read(n) if n > 0 else b""
+            # After the body is drained (so a refusal can't desync keep-alive),
+            # before ANY route acts: settings, start/stop, update, rebuild.
+            if self._refused(post=True):
+                return
             try:
                 if path == "/clip":
                     state.request_clip()
