@@ -241,11 +241,12 @@ def resolve_target(base: str = BASE):
             raise CalibrateError(f"game: {game!r} isn't a valid game name.")
         target = os.path.join(base, "games", f"{game}.yaml")
         if not os.path.exists(target):
+            where = ("settings_override.yaml" if override.get("game")
+                     else "config.yaml")
             raise CalibrateError(
                 f"game: {game} is active but games/{game}.yaml doesn't exist, so "
                 "WITNESS is using Marathon's settings. Teach the game first, or "
-                "set game: marathon (or delete the game: line) in "
-                "settings_override.yaml.")
+                f"set game: marathon (or delete the game: line) in {where}.")
         try:
             eff.update(_load_yaml(target))
         except CalibrateError:
