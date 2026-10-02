@@ -448,3 +448,167 @@ def test_boot_checks_for_a_running_copy_before_the_update_check():
     src = inspect.getsource(gui._boot)
     assert "_witness_already_running(_configured_port())" in src
     assert src.index("_witness_already_running(") < src.index("tk.Tk()")
+
+
+# --- auto-update at launch -------------------------------------------------------
+
+def test_boot_starts_the_update_check_and_drops_the_debug_text():
+    src = inspect.getsource(gui._boot)
+    assert "threading.Thread(target=check_updates" in src
+    assert src.index("threading.Thread(target=check_updates") < src.index("_show_splash(")
+    full = inspect.getsource(gui)
+    assert "(no update message)" not in full
+    # staging only: the relaunching helper replaces the process from a thread
+    assert "update_and_relaunch_if_needed(" not in full
+
+
+def test_relaunch_only_from_the_splash_before_import_main():
+    src = inspect.getsource(gui._boot)
+    hold = src[src.index("def hold():"):]
+    assert "_relaunch_updated(" in hold
+    assert "_relaunch_updated(" not in src[src.index("def finish():"):src.index("def hold():")]
+    assert "_relaunch_updated" not in inspect.getsource(gui._run_webview)
+    assert "_relaunch_updated" not in inspect.getsource(gui._late_update_msg)
+
+
+def _boot_state(**kw):
+    b = gui._new_boot_state()
+    b.update(kw)
+    return b
+
+
+@pytest.mark.parametrize("elapsed,intro,state,want", [
+    (0.5, False, {}, "wait"),                                  # intro playing
+    (2.0, True, {"done": True}, "leave"),
+    (0.5, False, {"done": True}, "wait"),                      # let it play
+    (0.5, False, {"done": True, "changed": True}, "relaunch"),  # no need to wait
+    (3.0, True, {"done": True, "changed": True}, "relaunch"),
+    (5.0, True, {"can_abort": True}, "wait"),                  # check in flight
+    (gui.UPDATE_HOLD_CAP, True, {"can_abort": True}, "abort"),
+    # pip adding a package for files already written: hold longer
+    (gui.UPDATE_HOLD_CAP + 5, True, {"can_abort": True, "phase": "installing"}, "wait"),
+    (gui.LONG_HOLD_CAP, True, {"can_abort": True, "phase": "installing"}, "abort"),
+    # an updater without ABORT_WRITES can't be stopped from writing late
+    (gui.UPDATE_HOLD_CAP + 5, True, {}, "wait"),
+    (gui.LONG_HOLD_CAP, True, {}, "abort"),
+])
+def test_splash_step(elapsed, intro, state, want):
+    assert gui._splash_step(elapsed, intro, _boot_state(**state)) == want
+
+
+def _fake_updater(monkeypatch, **attrs):
+    mod = types.ModuleType("updater")
+
+    def never(*a, **k):
+        raise AssertionError("the launch check must not relaunch from a thread")
+    mod.update_and_relaunch_if_needed = never
+    for k, v in attrs.items():
+        setattr(mod, k, v)
+    monkeypatch.setitem(sys.modules, "updater", mod)
+    return mod
+
+
+def test_check_stages_and_installs_new_requirements(monkeypatch, tmp_path):
+    monkeypatch.setattr(gui, "BASE", str(tmp_path))
+    calls = []
+    _fake_updater(
+        monkeypatch,
+        check_and_update=lambda base: (True, "Updated 2 file(s) to abc1234"),
+        LAST_CHANGED_FILES=["main.py", "requirements.txt"],
+        ensure_requirements=lambda base: calls.append(base) or (True, "installed zeroconf"))
+    b = gui._new_boot_state()
+    gui.check_updates(b)
+    assert b["done"] and b["evt"].is_set() and b["changed"] is True
+    assert calls == [str(tmp_path)] and b["note"] == "installed zeroconf"
+    assert "Updated 2 file(s)" in (tmp_path / "update_status.txt").read_text(
+        encoding="utf-8")
+
+
+def test_check_works_with_the_updater_before_it_learns_new_tricks(monkeypatch, tmp_path):
+    monkeypatch.setattr(gui, "BASE", str(tmp_path))
+    _fake_updater(monkeypatch, check_and_update=lambda base: (False, "Up to date (abc1234)."))
+    b = gui._new_boot_state()
+    gui.check_updates(b)
+    assert b["done"] and not b["changed"] and b["msg"] == "Up to date (abc1234)."
+    assert b["can_abort"] is False
+    gui._abort_update_writes()                     # no ABORT_WRITES yet: no-op
+
+
+def test_check_failure_is_a_message(monkeypatch, tmp_path):
+    monkeypatch.setattr(gui, "BASE", str(tmp_path))
+
+    def boom(base):
+        raise OSError("no route to host")
+    _fake_updater(monkeypatch, check_and_update=boom)
+    b = gui._new_boot_state()
+    gui.check_updates(b)
+    assert b["done"] and not b["changed"]
+    assert b["msg"].startswith("Update check skipped: no route to host")
+
+
+def test_abort_sets_the_updaters_flag(monkeypatch, tmp_path):
+    monkeypatch.setattr(gui, "BASE", str(tmp_path))
+    ev = threading.Event()
+    _fake_updater(monkeypatch, ABORT_WRITES=ev,
+                  check_and_update=lambda base: (False, "Up to date (abc1234)."))
+    b = gui._new_boot_state()
+    gui.check_updates(b)
+    assert b["can_abort"] is True
+    gui._abort_update_writes()
+    assert ev.is_set()
+
+
+def test_relaunch_carries_the_marker_and_the_note(monkeypatch):
+    seen = {}
+
+    def fake_popen(argv, cwd=None, env=None, **k):
+        seen.update(argv=argv, cwd=cwd, env=env)
+    monkeypatch.setattr(gui.subprocess, "Popen", fake_popen)
+
+    def fake_exit(code):
+        raise _Stop(code)
+    monkeypatch.setattr(gui.os, "_exit", fake_exit)
+    with pytest.raises(_Stop):
+        gui._relaunch_updated("installed zeroconf")
+    assert seen["argv"] == [sys.executable] + list(sys.argv)
+    assert seen["cwd"] == gui.BASE
+    assert seen["env"]["MKR_UPDATED"] == "1"
+    assert seen["env"]["MKR_UPDATE_NOTE"] == "installed zeroconf"
+
+
+def test_relaunch_that_cannot_start_returns_instead_of_exiting(monkeypatch):
+    def broken(*a, **k):
+        raise OSError("access denied")
+    monkeypatch.setattr(gui.subprocess, "Popen", broken)
+    monkeypatch.setattr(gui.os, "_exit", lambda code: pytest.fail("exited"))
+    assert "access denied" in gui._relaunch_updated()
+
+
+def test_relaunched_copy_skips_the_check(monkeypatch, tmp_path):
+    monkeypatch.setattr(gui, "BASE", str(tmp_path))
+    monkeypatch.setenv("MKR_UPDATED", "1")
+    monkeypatch.setenv("MKR_UPDATE_NOTE", "installed zeroconf")
+    b = gui._new_boot_state()
+    assert gui._take_relaunch_marker(b) is True
+    assert "MKR_UPDATED" not in os.environ and "MKR_UPDATE_NOTE" not in os.environ
+    assert b["done"] and b["msg"].startswith("Restarted on the latest version")
+    assert "installed zeroconf" in b["msg"]
+    assert gui._take_relaunch_marker(gui._new_boot_state()) is False
+
+
+def test_late_result_reaches_the_dashboard():
+    st = _FakeState()
+    b = gui._new_boot_state()
+    t = threading.Thread(target=gui._late_update_msg, args=(st, b), daemon=True)
+    t.start()
+    for _ in range(100):
+        if getattr(st, "_updating", False):
+            break
+        time.sleep(0.01)
+    assert st._updating is True                      # Check for update disabled
+    b.update(msg="Updated 1 file(s) to abc1234: gui.py", changed=True)
+    b["done"] = True
+    b["evt"].set()
+    t.join(5)
+    assert st.update_msg.startswith("Updated 1 file(s)")
+    assert st.update_changed is True and st._updating is False

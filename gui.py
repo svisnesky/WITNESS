@@ -1132,6 +1132,157 @@ def _panel_callback_error(root):
     return handler
 
 
+# --- auto-update at launch ---------------------------------------------------------
+# The thread that ran it was dropped in 1e8ec12 (the splash rework), so the
+# desktop app never updated and the dashboard read "Updater: (no update
+# message)". Restoring the old one-liner would bring back its race: it
+# relaunched from a thread whenever the download finished, which on a slow
+# first sync was after the splash had gone, the window was up and :8000 was
+# bound, so a second copy started next to the first. Now the check only
+# STAGES files, and the relaunch happens only from the splash, before
+# `import main` and before start_web.
+
+UPDATE_HOLD_CAP = 30.0     # s the splash waits on the launch update check
+# ...while pip adds a package for files already written, or when the updater
+# has no ABORT_WRITES yet: then a check cut off at 30 s would go on to write
+# files under the running app, so waiting longer is the lesser evil.
+LONG_HOLD_CAP = 120.0
+
+
+def _new_boot_state() -> dict:
+    return {"done": False, "changed": False, "msg": "", "note": "",
+            "phase": "checking", "can_abort": False, "evt": threading.Event()}
+
+
+def _write_update_status(msg: str, append: bool = False) -> None:
+    """update_status.txt, the updater's diagnosis file (no console here)."""
+    try:
+        with open(os.path.join(BASE, "update_status.txt"), "a" if append else "w",
+                  encoding="utf-8") as f:
+            f.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')}\n{msg}\n")
+    except Exception:
+        pass
+
+
+def check_updates(boot: dict) -> None:
+    """Runs on a thread behind the splash. Stage only: updater.check_and_update
+    downloads and writes; it never relaunches from here. If requirements.txt
+    changed, new packages are installed before the relaunch, so the fresh copy
+    can import them."""
+    try:
+        import updater
+        boot["can_abort"] = getattr(updater, "ABORT_WRITES", None) is not None
+        changed, msg = updater.check_and_update(BASE)
+        boot["msg"] = msg
+        _write_update_status(msg)
+        files = getattr(updater, "LAST_CHANGED_FILES", None) or ()
+        if changed and "requirements.txt" in files:
+            ensure = getattr(updater, "ensure_requirements", None)
+            if ensure is not None:
+                boot["phase"] = "installing"
+                try:
+                    _ok, note = ensure(BASE)
+                    boot["note"] = str(note or "")
+                except Exception as e:
+                    boot["note"] = (f"New components will install on the next "
+                                    f"launch ({type(e).__name__}: {e})")
+        boot["changed"] = bool(changed)     # only now: hold() relaunches on it
+    except Exception as e:
+        boot["msg"] = f"Update check skipped: {e}"
+    finally:
+        boot["done"] = True
+        boot["evt"].set()
+
+
+def _take_relaunch_marker(boot: dict) -> bool:
+    """True when this process is the fresh copy an update just started. Then
+    there is no second check (no loop): record it and carry the note on."""
+    if os.environ.get("MKR_UPDATED") != "1":
+        return False
+    os.environ.pop("MKR_UPDATED", None)            # not inherited by teach_gui etc.
+    note = os.environ.pop("MKR_UPDATE_NOTE", "")
+    msg = "Restarted on the latest version (update applied)."
+    if note:
+        msg += "  " + note
+    boot["msg"] = msg
+    _write_update_status(msg, append=True)
+    boot["done"] = True
+    boot["evt"].set()
+    return True
+
+
+def _splash_step(elapsed: float, intro_over: bool, boot: dict) -> str:
+    """What the splash does next. Pure, so it is testable without a window.
+      'relaunch' the update wrote new files: restart on them NOW, while
+                 nothing from main/webserver is imported and no port is bound
+      'leave'    the intro has played and the check is finished
+      'abort'    the check overran its cap: stop it writing, go in
+      'wait'     intro still playing, or the check still running"""
+    if boot.get("done"):
+        if boot.get("changed"):
+            return "relaunch"
+        return "leave" if intro_over else "wait"
+    if not intro_over:
+        return "wait"
+    short = boot.get("can_abort") and boot.get("phase") != "installing"
+    cap = UPDATE_HOLD_CAP if short else LONG_HOLD_CAP
+    return "abort" if elapsed >= cap else "wait"
+
+
+def _relaunch_updated(note: str = ""):
+    """Start a fresh copy on the files the updater just wrote, then end this
+    one. Returns an error string only if the new copy could not be started."""
+    try:
+        env = dict(os.environ, MKR_UPDATED="1", MKR_UPDATE_NOTE=str(note or ""))
+        subprocess.Popen([sys.executable] + list(sys.argv), cwd=BASE, env=env)
+    except Exception as e:
+        return f"{type(e).__name__}: {e}"
+    os._exit(0)
+
+
+def _abort_update_writes() -> None:
+    """Cap hit: tell the updater to write nothing (it finishes downloading in
+    the background and tries again next launch). ABORT_WRITES arrives with the
+    updater package; without it this is a no-op and a late check can still
+    write, which the dashboard then reports as RESTART WITNESS to apply."""
+    try:
+        import updater
+        ev = getattr(updater, "ABORT_WRITES", None)
+        if ev is not None:
+            ev.set()
+    except Exception:
+        pass
+
+
+def _late_update_msg(st, boot: dict, timeout: float = 600.0) -> None:
+    """The launch check outlived the splash: copy its result onto the
+    dashboard when it lands. Never relaunches: a session may be running by
+    then. `_updating` disables the Check for update button meanwhile."""
+    _set_attr(st, "_updating", True)
+    try:
+        if not boot["evt"].wait(timeout):
+            return
+        _set_attr(st, "update_msg", boot.get("msg", ""))
+        if boot.get("changed"):
+            _set_attr(st, "update_changed", True)
+    finally:
+        _set_attr(st, "_updating", False)
+
+
+def _splash_note(sp, text: str) -> None:
+    """A small line along the bottom of the splash ('Checking for updates...')."""
+    try:
+        lbl = getattr(sp, "_note", None)
+        if lbl is None:
+            lbl = tk.Label(sp, text=text, bg=BG, fg=MUTED, font=("Consolas", 9))
+            lbl.place(relx=0.5, rely=1.0, y=-12, anchor="s")
+            sp._note = lbl
+        elif lbl.cget("text") != text:
+            lbl.config(text=text)
+    except Exception:
+        pass
+
+
 def _boot():
     _claim_app_identity()
     # One copy at a time, checked before anything else: before the update
@@ -1145,19 +1296,10 @@ def _boot():
     root.report_callback_exception = _boot_callback_error(root)
 
     # Update check runs BEHIND the splash so the cinematic actually plays.
-    state = {"done": False, "relaunch": False, "msg": ""}
-
-    def check_updates():
-        try:
-            import updater
-            state["msg"] = updater.update_and_relaunch_if_needed(BASE)
-        except SystemExit:
-            # updater spawned the fresh process and asked us to die —
-            # sys.exit in a thread doesn't kill the app, so signal it
-            state["relaunch"] = True
-        except Exception as e:
-            state["msg"] = f"Update check skipped: {e}"
-        state["done"] = True
+    # Started before the splash so the network round-trip overlaps it.
+    state = _new_boot_state()
+    if not _take_relaunch_marker(state):
+        threading.Thread(target=check_updates, args=(state,), daemon=True).start()
 
     try:
         frames = _load_splash_frames()
@@ -1221,8 +1363,6 @@ def _boot():
         _fade(splash, 1.0, 0.0, 220, finish)
 
     def play(i=0):
-        if state["relaunch"]:
-            os._exit(0)
         if not frames or not splash.winfo_exists():
             return
         splash._lbl.config(image=frames[min(i, len(frames) - 1)])
@@ -1234,19 +1374,35 @@ def _boot():
             anim["done"] = True     # hold on the last frame
 
     def hold():
-        if state["relaunch"]:
-            os._exit(0)          # replaced by the freshly-updated process
+        if phase["leaving"]:
+            return
         elapsed = time.monotonic() - born
-        # Once the animation has played and the sound has had time to breathe,
-        # go — don't make the user stare at a frozen last frame waiting on a
-        # network round-trip. The update thread still relaunches independently
-        # if it finds new code. Only hold longer if the update is mid-flight.
-        played = anim["done"] and elapsed >= MIN_HOLD
-        ready = played and (state["done"] or elapsed >= 2.6)
-        # hard cap so a hung update check can never strand the splash.
-        if skip["on"] or ready or elapsed >= 4.0:
+        # The intro is over once the animation has played and the sound has
+        # had time to breathe (or on a click, or at 4 s if frames stall).
+        # After that the splash only waits for the update check, and says so.
+        intro_over = (skip["on"] or (anim["done"] and elapsed >= MIN_HOLD)
+                      or elapsed >= 4.0)
+        step = _splash_step(elapsed, intro_over, state)
+        if step == "relaunch":
+            # Still on the splash: main/webserver not imported, no port bound,
+            # so the fresh copy can't collide with this one or mix old and
+            # new code. _relaunch_updated returns only if Popen failed.
+            err = _relaunch_updated(state.get("note", ""))
+            state["changed"] = False
+            state["restart_needed"] = True
+            state["msg"] = (f"{state.get('msg', '')}  (could not restart by "
+                            f"itself: {err})").strip()
+            step = _splash_step(elapsed, intro_over, state)
+        if step == "abort":
+            _abort_update_writes()
+            leave()
+        elif step == "leave":
             leave()
         else:
+            if intro_over and not state["done"]:
+                _splash_note(splash, "Installing new components..."
+                             if state.get("phase") == "installing"
+                             else "Checking for updates...")
             splash.after(80, hold)
 
     _fade(splash, 0.0, 1.0, 260, lambda: None)
@@ -1261,7 +1417,7 @@ def _boot():
 
     # The command center is the HTML dashboard in a native window (webview).
     # If that engine isn't available, fall back to the tk control panel.
-    if not _run_webview():
+    if not _run_webview(state):
         _run_tk_fallback()
 
 
@@ -1329,10 +1485,11 @@ class _WebSession:
             self.stop_event.set()
 
 
-def _run_webview():
+def _run_webview(boot=None):
     """Serve the dashboard and show it in a native window. run_live reuses the
     already-running server, so START/STOP inside the HTML drive the session.
-    Returns False (→ tk fallback) if pywebview / the webview engine is absent."""
+    Returns False (→ tk fallback) if pywebview / the webview engine is absent.
+    `boot` is the launch update check's state (see check_updates)."""
     try:
         import webview
     except ImportError:
@@ -1373,7 +1530,14 @@ def _run_webview():
         app._web_state = st
         app._web_server = srv
         st.bind_config(cfg, app.save_setting_overrides)
-        st.update_msg = UPDATE_MSG or "(no update message)"
+        # Empty means nothing to say: the page hides the Updater line.
+        st.update_msg = UPDATE_MSG
+        if boot is not None:
+            if boot.get("restart_needed"):
+                st.update_changed = True
+            if not boot["evt"].is_set():       # the check outlived the splash
+                threading.Thread(target=_late_update_msg, args=(st, boot),
+                                 daemon=True).start()
         try:                       # so Archive/Reels show past sessions on open
             st.record_dir = app.cached_record_dir()
         except Exception:
