@@ -298,26 +298,28 @@ class LiveState:
             self._exporting = True
         cfg = self._cfg or {}
 
+        def rc(**kw):            # tagged, so the Live page words it as an export
+            kw.setdefault("kind", "export")
+            self.set_recap(**kw)
+
         def work():
             try:
                 import main
                 sdir = main._resolve_session_dir(cfg, session)
                 if not sdir:
-                    self.set_recap(status="error",
-                                   note="couldn't find that session folder")
+                    rc(status="error", note="couldn't find that session folder")
                     return
                 import export_reel
-                self.set_recap(status="building", note="starting export…")
+                rc(status="building", note="starting export…")
                 out = export_reel.build(sdir, selection, opts=opts, cfg=cfg,
-                                        on_note=self.set_recap)
+                                        on_note=rc)
                 if out:
-                    self.set_recap(status="ready",
-                                   note=f"exported {os.path.basename(out)}")
+                    rc(status="ready", note=f"exported {os.path.basename(out)}")
                 else:
-                    self.set_recap(status="error", note="export failed")
+                    rc(status="error", note="export failed")
             except Exception as e:
                 print(f"  [export] failed: {e}")
-                self.set_recap(status="error", note=f"export failed: {e}")
+                rc(status="error", note=f"export failed: {e}")
             finally:
                 with self._lock:
                     self._exporting = False
@@ -330,29 +332,52 @@ class LiveState:
 
         Rendering takes minutes, and the dashboard poll would time out waiting —
         so this reports 'started' and progress shows up on the recap banner the
-        same way an end-of-session build does."""
+        same way an end-of-session build does.
+
+        REFUSES while a session is running, like request_export: a rebuild runs
+        the whole ffmpeg pipeline during gameplay and ends by tidying the folder,
+        which moves the live session's clips out from under its match reels.
+        Deliberately NOT refused on recap status 'building': a resume that
+        raised leaves 'building' set forever, and this button is the way out."""
         import threading
         with self._lock:
+            if self.running:
+                return {"ok": False,
+                        "error": "stop the session first — rebuilding while "
+                                 "recording competes with the live reels"}
             if getattr(self, "_rebuilding", False):
                 return {"ok": False, "error": "a rebuild is already running"}
             self._rebuilding = True
         cfg = self._cfg or {}
 
+        def rc(**kw):            # tagged, so the Live page words it as a rebuild
+            kw.setdefault("kind", "rebuild")
+            self.set_recap(**kw)
+
         def work():
             try:
                 import main
                 # set_recap takes KEYWORDS, not a dict.
-                self.set_recap(status="building", note="starting rebuild…")
-                # Pass set_recap through so each stage ("building session
+                rc(status="building", note="starting rebuild…")
+                # Pass the callback through so each stage ("building session
                 # montage…", "cutting Play of the Night…", "rendering vertical
                 # Shorts…") reaches the UI. Without this the status sat on one
                 # message for the several minutes a render takes, which is
                 # indistinguishable from being hung.
-                main.rebuild_session(cfg, session, rc=self.set_recap)
-                self.set_recap(status="ready", note="rebuild complete")
+                main.rebuild_session(cfg, session, rc=rc)
+                # rebuild_session sets the final status itself on every path
+                # ('ready' / 'error' with the failed stages). This used to set
+                # 'ready — rebuild complete' unconditionally right after, which
+                # overwrote every failure: the Archive said "Done — reloading"
+                # over a rebuild that had built nothing.
+                with self._lock:
+                    hung = self.recap.get("status") == "building"
+                if hung:             # never left without an answer
+                    rc(status="error", note="rebuild ended without reporting a "
+                                            "result — see the session log")
             except Exception as e:
                 print(f"  [rebuild] failed: {e}")
-                self.set_recap(status="error", note=f"rebuild failed: {e}")
+                rc(status="error", note=f"rebuild failed: {e}")
             finally:
                 with self._lock:
                     self._rebuilding = False
@@ -457,7 +482,15 @@ class LiveState:
 
     def set_recap(self, **kw):
         """End-of-session build status, so the dashboard can show 'building…' /
-        'ready' and the WITNESS Report instead of relying on a browser popup."""
+        'ready' / 'error' and the WITNESS Report instead of relying on a browser
+        popup.
+
+        `kind` says who wrote it — 'recap' (the end-of-session build or the
+        launch resume: the default), 'rebuild' or 'export' — so the Live page
+        can word a failure correctly. Every write sets it, so an old export's
+        tag can't stick to the next night's recap. Status values are unchanged:
+        the Archive and Clips pollers stop on 'ready' / 'error'."""
+        kw.setdefault("kind", "recap")
         with self._lock:
             self.recap.update(kw)
 
@@ -1729,6 +1762,8 @@ PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
   .rc-dot { width:11px; height:11px; border-radius:50%; background:var(--accent); flex:none; }
   .rc-dot.pulse { animation:rcpulse 1s ease-in-out infinite; }
   .rc-dot.done { background:var(--green); box-shadow:0 0 10px var(--green); animation:none; }
+  .recap.err { border-color:var(--danger); background:linear-gradient(180deg,rgba(255,77,61,.12),var(--surface)); }
+  .rc-dot.err { background:var(--danger); box-shadow:0 0 10px var(--danger); animation:none; }
   @keyframes rcpulse { 0%,100%{ opacity:1; } 50%{ opacity:.3; } }
   .rc-note { color:var(--sec); font:500 13px var(--ui); margin-top:6px; }
   .rc-report { margin:12px 0 4px; padding:14px 16px; background:#0e0b16;
@@ -2122,23 +2157,39 @@ PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
           (v.vram_mb ? (v.vram_mb/1024).toFixed(1)+' GB VRAM' : (v.device==='CPU'?'CPU':'')) +
           ' \\u00b7 live';
       }
-      // End-of-session recap status — only when NOT running (a fresh START hides it)
+      // End-of-session recap / rebuild / export status — only when NOT running
+      // (a fresh START hides it). 'error' has its own red box: a failed build
+      // used to vanish (only building/ready were drawn), and 'ready' always
+      // said "Everything built", even over a night that built nothing.
       var rc = d.recap || {};
       var rcbox = document.getElementById('recap');
-      if (!d.running && (rc.status === 'building' || rc.status === 'ready')){
+      var rck = RC_TITLES[rc.kind] ? rc.kind : 'recap';
+      if (!d.running && (rc.status === 'building' || rc.status === 'ready'
+                         || rc.status === 'error')){
         rcbox.style.display = 'block';
-        var built = rc.status === 'ready';
-        rcbox.className = 'recap' + (built ? ' done' : '');
-        document.getElementById('rcdot').className = 'rc-dot ' + (built ? 'done' : 'pulse');
+        var built = rc.status === 'ready', failed = rc.status === 'error';
+        rcbox.className = 'recap' + (built ? ' done' : (failed ? ' err' : ''));
+        document.getElementById('rcdot').className =
+          'rc-dot ' + (built ? 'done' : (failed ? 'err' : 'pulse'));
         document.getElementById('rctitle').textContent =
-          built ? 'Recap ready' : 'Building your recap\\u2026';
-        document.getElementById('rcnote').textContent = built
-          ? 'Everything built \\u2014 watch your reels in the Archive. Safe to close.'
-          : ((rc.note || 'working\\u2026') + '   \\u2014   keep WITNESS open until this finishes');
+          RC_TITLES[rck][built ? 1 : (failed ? 2 : 0)];
+        var note;
+        if (failed){
+          note = (rc.note || 'something went wrong') + (rck === 'export'
+            ? ' \\u2014 check the clips you picked and export again'
+            : ' \\u2014 open the Archive and press Rebuild reels after fixing it');
+        } else if (built){
+          note = rc.note || 'Everything built \\u2014 watch your reels in the Archive. Safe to close.';
+        } else {
+          note = (rc.note || 'working\\u2026') + '   \\u2014   keep WITNESS open until this finishes';
+        }
+        document.getElementById('rcnote').textContent = note;
         var rep = document.getElementById('rcreport');
-        if (rc.report){ rep.textContent = rc.report; rep.style.display = 'block'; }
+        // the WITNESS Report belongs to the night's recap, not to an export
+        if (rc.report && rck === 'recap'){ rep.textContent = rc.report; rep.style.display = 'block'; }
         else { rep.style.display = 'none'; }
-        document.getElementById('rcarchive').style.display = built ? 'inline-block' : 'none';
+        document.getElementById('rcarchive').style.display =
+          (built || failed) ? 'inline-block' : 'none';
       } else { rcbox.style.display = 'none'; }
       var rb = document.getElementById('runbtn');
       if (!runBusy){
@@ -2192,6 +2243,11 @@ PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
     setTimeout(tick, 1000);
   }
   var lastReels = -1, reelSig = '', repSig = '', lastCount = -1;
+  // recap box titles per writer: [building, ready, error]
+  var RC_TITLES = {
+    recap:   ['Building your recap\\u2026', 'Recap ready', 'Recap had problems'],
+    rebuild: ['Rebuilding reels\\u2026', 'Rebuild done', 'Rebuild had problems'],
+    export:  ['Exporting your reel\\u2026', 'Export ready', 'Export failed']};
   tick();
 
   // --- kill ding (WebAudio, unlocked by the first tap anywhere) ---
