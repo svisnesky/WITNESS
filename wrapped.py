@@ -15,6 +15,7 @@ import csv
 import os
 import time
 
+import clip_index
 from matchcard import _font, _text_w, BG, PANEL, LINE, TEXT, MUTED, ACCENT
 
 TAG_PRIORITY = ("finisher", "precision", "down", "kill", "assist", "manual")
@@ -61,13 +62,15 @@ def best_play(record_dir: str, days: int = 7):
         for f in os.listdir(sdir):
             if not f.lower().endswith((".mkv", ".mp4")) or f.startswith("highlights"):
                 continue
-            parts = f.split("_")
-            if len(parts) < 3:
+            # The shared, end-anchored parser: a '+1 KILL' clip is tagged
+            # 'manual_kill', which a split on '_' cut down to 'manual'.
+            _n, tags, _clock = clip_index.parse_name(f)
+            if not tags:
                 continue
-            tag = parts[1]
-            kills = sum(1 for t in tag.split("+") if t in ("down", "precision"))
+            tag = "+".join(tags)
+            kills = sum(1 for t in tags if t in ("down", "precision", "manual_kill"))
             kills = max(1, kills)
-            rank = -TAG_PRIORITY.index(tag.split("+")[0]) if tag.split("+")[0] in TAG_PRIORITY else -99
+            rank = -TAG_PRIORITY.index(tags[0]) if tags[0] in TAG_PRIORITY else -99
             key = (kills, rank)
             if best is None or key > best[0]:
                 best = (key, kills, tag, sess)
@@ -149,7 +152,7 @@ def build_wrapped(base_dir: str, record_dir: str = "", days: int = 7):
     y += 28
     if bp:
         kills, tag, sess = bp
-        tag_txt = tag.replace("+", " + ").upper()
+        tag_txt = tag.replace("+", " + ").replace("_", " ").upper()
         d.text((pad, y), "BEST PLAY", font=_font("mono", 20), fill=MUTED)
         d.text((pad, y + 34), f"{kills} KILL{'S' if kills != 1 else ''} — {tag_txt}",
                font=_font("black", 44), fill=ACCENT)
