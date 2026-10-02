@@ -2323,7 +2323,11 @@ def _end_session(cfg, tags, start_monotonic, start_wall, dry_run, obs=None,
         "precision": c.get("precision", 0),
         "finisher": c.get("finisher", 0),
         "assist": c.get("assist", 0),
-        "down": c.get("down", 0) + c.get("kill", 0),
+        # The count_events downs printed on the 'Session over' line (and the
+        # game's 'Runners Downed'). It used to be down+kill, the retired rule
+        # that filed every RUNNER ELIM under downs (3/13 audited matches exact,
+        # vs 13/13 for this). The CSV column changes meaning with no back-fill.
+        "down": s_downs,
         "kpm": round(total / dur_min, 2),
     }
     try:
