@@ -6,7 +6,9 @@ Preprocess (upscale + grayscale + threshold) then read text with either EasyOCR
 
 from __future__ import annotations
 
+import os
 import re
+import shutil
 from typing import List
 
 import cv2
@@ -128,6 +130,26 @@ def _first_line(err) -> str:
     return (lines[0] if lines else type(err).__name__)[:160]
 
 
+# Where the UB-Mannheim installer puts tesseract.exe. It does not add itself to
+# PATH by default, and pytesseract only looks on PATH.
+_TESSERACT_WIN_PATHS = ("C:/Program Files/Tesseract-OCR/tesseract.exe",
+                        "C:/Program Files (x86)/Tesseract-OCR/tesseract.exe")
+
+TESSERACT_MISSING_MSG = (
+    "ocr_engine is 'tesseract' but tesseract.exe was not found - install it "
+    "(github.com/UB-Mannheim/tesseract/wiki) or switch back to easyocr")
+
+
+def _find_tesseract() -> str:
+    found = shutil.which("tesseract")
+    if found:
+        return found
+    for path in _TESSERACT_WIN_PATHS:
+        if os.path.isfile(path):
+            return path
+    return ""
+
+
 class OCREngine:
     """Wrapper that lazily loads whichever backend is configured."""
 
@@ -149,7 +171,7 @@ class OCREngine:
         if self.engine_name == "easyocr":
             self._load_easyocr()
         elif self.engine_name == "tesseract":
-            import pytesseract  # noqa: F401  (import validates availability)
+            self._load_tesseract()
         else:
             raise ValueError(f"Unknown ocr_engine: {self.engine_name!r}")
         self._loaded = True
@@ -206,6 +228,27 @@ class OCREngine:
         """'cuda' / 'cpu' / 'mps' as easyocr chose it ('cuda:0' -> 'cuda')."""
         dev = str(getattr(self._reader, "device", "") or "")
         return "cuda" if dev.startswith("cuda") else dev
+
+    def _load_tesseract(self):
+        import pytesseract
+
+        # Fail at load with a fix-it message, not with TesseractNotFoundError
+        # on the first frame of the session.
+        cmd = _find_tesseract()
+        if cmd:
+            pytesseract.pytesseract.tesseract_cmd = cmd
+        not_found = getattr(pytesseract, "TesseractNotFoundError", OSError)
+        try:
+            pytesseract.get_tesseract_version()
+        except not_found:
+            raise RuntimeError(TESSERACT_MISSING_MSG) from None
+        except (Exception, SystemExit) as e:
+            # The binary IS there, which is all this check is for. pytesseract
+            # raises SystemExit on a version string it can't parse; that must
+            # not end a session that image_to_string would have run fine.
+            print(f"  [ocr] tesseract version check failed ({e}) - continuing")
+        self.device = "cpu"
+        print("OCR device: cpu (tesseract)")
 
     def _cap(self, max_dim):
         """Per-call size cap.

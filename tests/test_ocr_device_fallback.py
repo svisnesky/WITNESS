@@ -212,3 +212,74 @@ def test_is_kernel_incompat_is_narrow():
     assert not ocr._is_kernel_incompat(RuntimeError("CUDA error: unspecified launch failure"))
     assert not ocr._is_kernel_incompat(RuntimeError("device-side assert triggered"))
     assert not ocr._is_kernel_incompat(ValueError("bad option sm_count"))  # needs digits
+
+
+# --- Tesseract: fail at load with a fix-it message ---------------------------
+
+class _NotFound(EnvironmentError):
+    pass
+
+
+def _fake_pytesseract(monkeypatch, version_error=None):
+    pt = types.ModuleType("pytesseract")
+    pt.pytesseract = types.SimpleNamespace(tesseract_cmd="tesseract")
+    pt.TesseractNotFoundError = _NotFound
+    calls = []
+
+    def get_tesseract_version():
+        calls.append(pt.pytesseract.tesseract_cmd)
+        if version_error is not None:
+            raise version_error
+        return "5.3.0"
+
+    pt.get_tesseract_version = get_tesseract_version
+    monkeypatch.setitem(sys.modules, "pytesseract", pt)
+    return pt, calls
+
+
+def _no_tesseract_anywhere(monkeypatch, present=()):
+    monkeypatch.setattr(ocr.shutil, "which", lambda name: None)
+    monkeypatch.setattr(ocr.os.path, "isfile", lambda p: p in present)
+
+
+def test_missing_tesseract_raises_the_friendly_error_at_load(monkeypatch):
+    _fake_pytesseract(monkeypatch, version_error=_NotFound())
+    _no_tesseract_anywhere(monkeypatch)
+    eng = ocr.OCREngine("tesseract")
+    with pytest.raises(RuntimeError) as ei:
+        eng._ensure_loaded()
+    msg = str(ei.value)
+    assert "ocr_engine is 'tesseract' but tesseract.exe was not found" in msg
+    assert "github.com/UB-Mannheim/tesseract/wiki" in msg
+    assert "switch back to easyocr" in msg
+    assert "http" not in msg                    # bare host path, per SECURITY.md
+    assert eng._loaded is False
+
+
+def test_tesseract_found_in_program_files_when_not_on_path(monkeypatch, capsys):
+    """The UB-Mannheim installer doesn't add itself to PATH."""
+    pt, calls = _fake_pytesseract(monkeypatch)
+    _no_tesseract_anywhere(monkeypatch, present=(ocr._TESSERACT_WIN_PATHS[1],))
+    eng = ocr.OCREngine("tesseract")
+    eng._ensure_loaded()
+    assert pt.pytesseract.tesseract_cmd == ocr._TESSERACT_WIN_PATHS[1]
+    assert calls == [ocr._TESSERACT_WIN_PATHS[1]]
+    assert eng.device == "cpu"
+    assert "OCR device: cpu (tesseract)" in capsys.readouterr().out
+
+
+def test_tesseract_on_path_wins(monkeypatch):
+    pt, _calls = _fake_pytesseract(monkeypatch)
+    monkeypatch.setattr(ocr.shutil, "which", lambda name: "/usr/bin/tesseract")
+    ocr.OCREngine("tesseract")._ensure_loaded()
+    assert pt.pytesseract.tesseract_cmd == "/usr/bin/tesseract"
+
+
+def test_an_odd_tesseract_version_string_does_not_end_the_session(monkeypatch):
+    """pytesseract raises SystemExit on a version it can't parse; the binary
+    is there, so loading carries on as it always did."""
+    _fake_pytesseract(monkeypatch, version_error=SystemExit("Invalid tesseract version"))
+    monkeypatch.setattr(ocr.shutil, "which", lambda name: "/usr/bin/tesseract")
+    eng = ocr.OCREngine("tesseract")
+    eng._ensure_loaded()
+    assert eng._loaded and eng.device == "cpu"
