@@ -478,3 +478,168 @@ def test_an_unwritable_file_does_not_strand_the_rest(tmp_path, monkeypatch):
     assert updater.LAST_CHANGED_FILES == ["main.py"]
     assert _read(tmp_path, "main.py") == b"print('fixed')\n"
     assert not os.path.exists(tmp_path / updater.VERSION_FILE)
+
+
+# --------------------------------------------------------------------------
+# New dependencies install themselves
+
+class FakeRun:
+    def __init__(self, returncode=0, stdout=b"", stderr=b"", exc=None):
+        self.returncode, self.stdout, self.stderr, self.exc = (
+            returncode, stdout, stderr, exc)
+        self.calls = []
+
+    def __call__(self, cmd, **kw):
+        self.calls.append((cmd, kw))
+        if self.exc:
+            raise self.exc
+        import subprocess
+        return subprocess.CompletedProcess(cmd, self.returncode,
+                                           self.stdout, self.stderr)
+
+
+def _in_venv(monkeypatch):
+    monkeypatch.setattr(sys, "base_prefix", sys.prefix + "-base", raising=False)
+
+
+def test_ensure_requirements_installs_missing_only(tmp_path, monkeypatch):
+    import subprocess
+    _write(tmp_path, "requirements.txt", b"PyYAML>=6.0\n")
+    _in_venv(monkeypatch)
+    run = FakeRun(0)
+    monkeypatch.setattr(subprocess, "run", run)
+    ok, note = updater.ensure_requirements(str(tmp_path))
+    assert ok is True and "installed" in note
+    (cmd, kw), = run.calls
+    assert cmd == [sys.executable, "-m", "pip", "install", "-r", "requirements.txt"]
+    assert not any("upgrade" in a for a in cmd)   # never touch loaded .pyd files
+    assert kw["cwd"] == str(tmp_path)
+    assert kw["timeout"] and kw["timeout"] > 0
+    assert "creationflags" in kw                   # CREATE_NO_WINDOW on Windows
+    assert kw.get("stdin") is subprocess.DEVNULL   # pip can never wait on input
+
+
+def test_ensure_requirements_reports_pips_error_not_its_notice(tmp_path, monkeypatch):
+    import subprocess
+    _write(tmp_path, "requirements.txt", b"nosuchpkg\n")
+    _in_venv(monkeypatch)
+    run = FakeRun(1, stderr=(b"ERROR: No matching distribution found for nosuchpkg\n"
+                             b"[notice] A new release of pip is available\n"))
+    monkeypatch.setattr(subprocess, "run", run)
+    ok, note = updater.ensure_requirements(str(tmp_path))
+    assert ok is False
+    assert "No matching distribution" in note and "notice" not in note
+    assert ".bat" in note                          # says how it gets retried
+
+
+def test_ensure_requirements_survives_a_timeout(tmp_path, monkeypatch):
+    import subprocess
+    _write(tmp_path, "requirements.txt", b"PyYAML\n")
+    _in_venv(monkeypatch)
+    monkeypatch.setattr(subprocess, "run",
+                        FakeRun(exc=subprocess.TimeoutExpired("pip", 900)))
+    ok, note = updater.ensure_requirements(str(tmp_path))
+    assert ok is False and "did NOT install" in note
+
+
+def test_ensure_requirements_never_touches_a_system_python(tmp_path, monkeypatch):
+    import subprocess
+    _write(tmp_path, "requirements.txt", b"PyYAML\n")
+    monkeypatch.setattr(sys, "base_prefix", sys.prefix, raising=False)
+    run = FakeRun(0)
+    monkeypatch.setattr(subprocess, "run", run)
+    ok, note = updater.ensure_requirements(str(tmp_path))
+    assert ok is False and run.calls == []
+    assert "pip install -r requirements.txt" in note
+
+
+def test_requirements_change_note_no_longer_asks_for_a_pip_command(tmp_path, monkeypatch):
+    _fresh_zip(tmp_path)
+    _write(tmp_path, "requirements.txt", b"PyYAML>=6.0\n")
+    repo = dict(REPO, **{"requirements.txt": b"PyYAML>=6.0\nzeroconf>=0.130\n"})
+    monkeypatch.setattr(updater, "_get", FakeGitHub(repo))
+    changed, msg = updater.check_and_update(str(tmp_path))
+    assert changed is True
+    assert "new components install automatically" in msg
+    assert "pip install" not in msg
+    assert updater.LAST_CHANGED_FILES == ["requirements.txt"]
+
+
+class Relaunch:
+    """Records how the launcher would restart itself."""
+
+    def __init__(self):
+        self.popen = []
+
+    def Popen(self, cmd, **kw):
+        self.popen.append((cmd, kw))
+
+
+def _fake_update(monkeypatch, changed, msg, files):
+    def fake(base_dir, force=False):
+        updater.LAST_CHANGED_FILES = list(files)
+        return changed, msg
+    monkeypatch.setattr(updater, "check_and_update", fake)
+
+
+def _gui_process(monkeypatch):
+    """Look like pythonw.exe: no console, so the old Popen + exit path."""
+    monkeypatch.setattr(sys, "executable", r"C:\WITNESS\.venv\Scripts\pythonw.exe")
+    monkeypatch.setattr(sys, "stdin", None)
+
+
+def test_relaunch_installs_new_requirements_first(tmp_path, monkeypatch):
+    import subprocess
+    monkeypatch.delenv("MKR_UPDATED", raising=False)
+    monkeypatch.delenv("MKR_UPDATE_NOTE", raising=False)
+    _fake_update(monkeypatch, True, "Updated 2 file(s) to ccccccc",
+                 ["main.py", "requirements.txt"])
+    seen = []
+    monkeypatch.setattr(updater, "ensure_requirements",
+                        lambda b: seen.append(b) or (True, "New components installed."))
+    rl = Relaunch()
+    monkeypatch.setattr(subprocess, "Popen", rl.Popen)
+    _gui_process(monkeypatch)
+    with pytest.raises(SystemExit) as ex:
+        updater.update_and_relaunch_if_needed(str(tmp_path), ["gui.py"])
+    assert ex.value.code == 0
+    assert seen == [str(tmp_path)]
+    (cmd, kw), = rl.popen
+    assert cmd == [sys.executable, "gui.py"]
+    assert kw["env"]["MKR_UPDATED"] == "1"
+    assert kw["env"]["MKR_UPDATE_NOTE"] == "New components installed."
+    status = _read(tmp_path, "update_status.txt").decode()
+    assert "Updated 2 file(s)" in status and "New components installed." in status
+
+
+def test_relaunch_without_requirements_change_skips_pip(tmp_path, monkeypatch):
+    import subprocess
+    monkeypatch.delenv("MKR_UPDATED", raising=False)
+    monkeypatch.delenv("MKR_UPDATE_NOTE", raising=False)
+    _fake_update(monkeypatch, True, "Updated 1 file(s)", ["main.py"])
+    monkeypatch.setattr(updater, "ensure_requirements",
+                        lambda b: pytest.fail("pip must not run"))
+    rl = Relaunch()
+    monkeypatch.setattr(subprocess, "Popen", rl.Popen)
+    _gui_process(monkeypatch)
+    with pytest.raises(SystemExit):
+        updater.update_and_relaunch_if_needed(str(tmp_path), ["gui.py"])
+    (_cmd, kw), = rl.popen
+    assert "MKR_UPDATE_NOTE" not in kw["env"]
+
+
+def test_the_relaunched_run_appends_the_note_instead_of_overwriting(tmp_path, monkeypatch):
+    """The updating process wrote what changed; the relaunched one used to
+    overwrite that with 'Restarted...' and the pip result was lost."""
+    _write(tmp_path, "update_status.txt",
+           b"2026-10-02 21:00:00\nUpdated 2 file(s) to ccccccc: main.py, requirements.txt\n")
+    monkeypatch.setenv("MKR_UPDATED", "1")
+    monkeypatch.setenv("MKR_UPDATE_NOTE", "New components installed.")
+    monkeypatch.setattr(updater, "check_and_update",
+                        lambda *a, **k: pytest.fail("must not update again (loop)"))
+    msg = updater.update_and_relaunch_if_needed(str(tmp_path))
+    assert "New components installed." in msg
+    status = _read(tmp_path, "update_status.txt").decode()
+    assert "Updated 2 file(s)" in status                     # kept
+    assert "Restarted on the latest version (update applied). New components installed." in status
+    assert "MKR_UPDATED" not in os.environ and "MKR_UPDATE_NOTE" not in os.environ

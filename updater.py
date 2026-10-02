@@ -282,13 +282,18 @@ def _sync(base_dir: str, changed: list) -> tuple[bool, str]:
             continue
         changed.append(path)
 
+    # pip is run by update_and_relaunch_if_needed (launch path) or by _env.bat
+    # on the next .bat launch (it re-installs whenever requirements.txt no
+    # longer matches its stamp), so nobody has to type a pip command.
+    req_note = ("  NOTE: requirements.txt changed - new components install "
+                "automatically." if "requirements.txt" in changed else "")
     if failed:
         msg = (f"Update incomplete: could not write {', '.join(failed[:3])}"
                + (f" (+{len(failed) - 3} more)" if len(failed) > 3 else "")
                + ". It will retry next launch.")
         if changed:
             msg += f" Updated {len(changed)} other file(s)."
-        return bool(changed), msg
+        return bool(changed), msg + req_note
 
     with open(ver_path, "w", encoding="utf-8") as f:
         f.write(latest)
@@ -298,18 +303,61 @@ def _sync(base_dir: str, changed: list) -> tuple[bool, str]:
     msg = f"Updated {len(changed)} file(s) to {latest[:7]}: {', '.join(changed[:6])}"
     if len(changed) > 6:
         msg += f" (+{len(changed) - 6} more)"
-    if "requirements.txt" in changed:
-        msg += "  NOTE: requirements.txt changed - run: .venv\\Scripts\\python -m pip install -r requirements.txt"
-    return True, msg
+    return True, msg + req_note
 
 
-def _write_status(base_dir: str, msg: str) -> None:
+PIP_TIMEOUT = 900   # seconds; a new small dependency takes well under a minute
+
+
+def ensure_requirements(base_dir: str) -> tuple[bool, str]:
+    """Install whatever requirements.txt lists that this venv is missing.
+
+    Plain `pip install -r requirements.txt`, never --upgrade: packages that are
+    already installed (torch with Stan's CUDA build, loaded .pyd files) are left
+    alone; only missing ones are added. Returns (ok, note) and never raises.
+    Refuses to run outside a virtualenv, so a dev box's system Python is never
+    touched. A failure here is retried by _env.bat on the next .bat launch."""
+    import subprocess
+    import sys
+    if not os.path.exists(os.path.join(base_dir, "requirements.txt")):
+        return False, "requirements.txt not found; nothing installed."
+    if getattr(sys, "base_prefix", sys.prefix) == sys.prefix:
+        return False, ("New components were not installed (not running from "
+                       "the .venv). Run: python -m pip install -r requirements.txt")
+    try:
+        r = subprocess.run(
+            [sys.executable, "-m", "pip", "install", "-r", "requirements.txt"],
+            cwd=base_dir, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE, timeout=PIP_TIMEOUT,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    except subprocess.TimeoutExpired:
+        return False, (f"New components did NOT install (pip took over "
+                       f"{PIP_TIMEOUT // 60} min). Start WITNESS from its .bat "
+                       "launcher to retry.")
+    except Exception as e:
+        return False, (f"New components did NOT install ({type(e).__name__}: "
+                       f"{e}). Start WITNESS from its .bat launcher to retry.")
+    if r.returncode == 0:
+        return True, "New components installed."
+    out = (r.stderr or b"") + b"\n" + (r.stdout or b"")
+    lines = [ln.strip() for ln in out.decode("utf-8", "replace").splitlines()
+             if ln.strip()]
+    # pip ends with "[notice] A new release of pip..." on stderr; the useful
+    # line is its last ERROR.
+    errs = [ln for ln in lines if ln.startswith("ERROR")]
+    why = (errs or lines or ["no output"])[-1]
+    return False, (f"New components did NOT install (pip exit {r.returncode}: "
+                   f"{why[:200]}). Start WITNESS from its .bat launcher to retry.")
+
+
+def _write_status(base_dir: str, msg: str, append: bool = False) -> None:
     """Persist the last update outcome to update_status.txt for diagnosis
-    (the webview has no console to print to)."""
+    (the webview has no console to print to). append=True adds to it: the
+    relaunched process must not wipe what the updating one wrote."""
     try:
         import time
-        with open(os.path.join(base_dir, "update_status.txt"), "w",
-                  encoding="utf-8") as f:
+        with open(os.path.join(base_dir, "update_status.txt"),
+                  "a" if append else "w", encoding="utf-8") as f:
             f.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')}\n{msg}\n")
     except Exception:
         pass
@@ -324,12 +372,23 @@ def update_and_relaunch_if_needed(base_dir: str, argv=None) -> str:
     if os.environ.get("MKR_UPDATED") == "1":
         # Just relaunched after an update — don't loop.
         os.environ.pop("MKR_UPDATED", None)
-        _write_status(base_dir, "Restarted on the latest version (update applied).")
-        return "Restarted on the latest version."
+        note = os.environ.pop("MKR_UPDATE_NOTE", "").strip()
+        tail = f" {note}" if note else ""
+        _write_status(base_dir, "Restarted on the latest version (update "
+                      f"applied).{tail}", append=True)
+        return f"Restarted on the latest version.{tail}"
     changed, msg = check_and_update(base_dir)
-    _write_status(base_dir, msg)
+    note = ""
+    if changed and "requirements.txt" in LAST_CHANGED_FILES:
+        # Before the relaunch, or the fresh process imports a module that is
+        # not installed yet (pywebview once shipped exactly like that).
+        print("  requirements.txt changed - installing new components...")
+        _ok, note = ensure_requirements(base_dir)
+    _write_status(base_dir, f"{msg}  {note}" if note else msg)
     if changed:
         env = dict(os.environ, MKR_UPDATED="1")
+        if note:
+            env["MKR_UPDATE_NOTE"] = note
         subprocess.Popen([sys.executable] + list(argv or sys.argv),
                          cwd=base_dir, env=env)
         sys.exit(0)
