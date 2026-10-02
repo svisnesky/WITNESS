@@ -1,0 +1,106 @@
+# Runs the test suite on every push to main and every pull request, on the two
+# platforms that matter: Windows (where every user runs WITNESS, on the Python
+# 3.12 that _env.bat tells them to install) and Linux. Before this, the suite
+# only ever ran on a Mac with Python 3.9, so cp1252 and path bugs had nowhere
+# to show up before they reached an install.
+#
+# Named .yml, not .yaml, on purpose: the updater syncs *.yaml into every
+# install (updater.py EXTS) and must never copy CI config onto a gaming PC.
+#
+# Every push to main still reaches installs at their next launch. This
+# workflow does not gate that; it reports. To see it green BEFORE main, push a
+# branch and open a pull request, or run it by hand from the Actions tab
+# (workflow_dispatch).
+
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tests-${{ github.ref }}
+  # A newer push to a PR branch makes the older run moot. On main every
+  # commit ships, so every commit keeps its own verdict.
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  test:
+    name: ${{ matrix.os }} / Python ${{ matrix.python }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false        # a Windows-only failure must not hide Linux's result
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+        python: ["3.12"]
+
+    steps:
+      # Installs get every file byte-for-byte from the repo (updater.py fetches
+      # raw blobs), so LF line endings. The Windows runner's git would convert
+      # them to CRLF on checkout; turn that off so tests read what an install has.
+      - name: No CRLF conversion on checkout (Windows)
+        if: runner.os == 'Windows'
+        run: git config --global core.autocrlf false
+
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+
+      - name: Install test dependencies
+        run: python -m pip install -r requirements-dev.txt
+
+      # ffmpeg is not on pip. Without it test_youtube_check's upload test fails
+      # and the iPad mkv-to-mp4 test (test_ios_api) silently skips.
+      - name: Install ffmpeg (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          if ! command -v ffmpeg >/dev/null 2>&1; then
+            sudo apt-get update -q
+            sudo apt-get install -y -q --no-install-recommends ffmpeg
+          fi
+          ffmpeg -hide_banner -version | head -n 1
+
+      - name: Install ffmpeg (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          if (-not (Get-Command ffmpeg -ErrorAction SilentlyContinue)) {
+            choco install ffmpeg -y --no-progress
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+          (ffmpeg -hide_banner -version)[0]
+
+      # No PYTHONUTF8 / PYTHONIOENCODING here on purpose: users run with
+      # Windows' default cp1252, and that is what this has to catch.
+      - name: Test suite
+        run: python -m pytest tests/ -q -rs
+
+      - name: pyflakes (prints every warning, fails only on ones that crash)
+        if: ${{ !cancelled() }}
+        run: python tests/test_undefined_names.py
+
+      # tests/test_checkout_clean.py checks this inside the run too; this is the
+      # outside view. `git diff` alone misses NEW files, hence the status check.
+      - name: The run left the checkout clean
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: |
+          git diff --exit-code --stat
+          dirty="$(git status --porcelain --untracked-files=all)"
+          if [ -n "$dirty" ]; then
+            echo "::error::the test run left files in the checkout; tests must write to tmp_path"
+            echo "$dirty"
+            exit 1
+          fi
