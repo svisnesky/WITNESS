@@ -104,10 +104,10 @@ def _show_error(message: str, title: str = "WITNESS", info: bool = False,
         if parent is None:
             own = parent = tk.Tk()
             own.withdraw()
-        try:
-            parent.attributes("-topmost", True)
-        except Exception:
-            pass
+            try:   # only our throwaway root: never pin the user's window on top
+                own.attributes("-topmost", True)
+            except Exception:
+                pass
         (messagebox.showinfo if info else messagebox.showerror)(
             title, message, parent=parent)
         if own is not None:
@@ -239,19 +239,29 @@ def _configured_port() -> int:
     return port
 
 
-def _witness_already_running(port, timeout: float = 1.0) -> bool:
+def _witness_already_running(port, connect_timeout: float = 0.5,
+                             read_timeout: float = 2.0) -> bool:
     """True when a WITNESS dashboard already answers on this PC's port.
 
     A failed bind can't be relied on to catch a second copy: on Windows,
     ThreadingHTTPServer's SO_REUSEADDR lets it bind :8000 too, and then two OCR
     loops share one GPU and every clip is saved twice. Asks /status on
     127.0.0.1 (an IP-literal Host with no Origin, which the dashboard's request
-    guard allows) and checks that the JSON looks like WITNESS's snapshot."""
+    guard allows) and checks that the JSON looks like WITNESS's snapshot.
+
+    Two timeouts instead of one: Windows retries a refused loopback connect for
+    about a second instead of failing at once, so the usual case (nothing
+    running) costs the whole connect timeout on every launch. A listening
+    copy's kernel accepts at once whatever its OCR loop is doing, so a short
+    connect timeout loses nothing; the reply itself gets longer."""
     import http.client
     import json
     conn = None
     try:
-        conn = http.client.HTTPConnection("127.0.0.1", int(port), timeout=timeout)
+        conn = http.client.HTTPConnection("127.0.0.1", int(port),
+                                          timeout=connect_timeout)
+        conn.connect()
+        conn.sock.settimeout(read_timeout)
         conn.request("GET", "/status")
         resp = conn.getresponse()
         if resp.status != 200:
@@ -1276,6 +1286,8 @@ def check_updates(boot: dict) -> None:
     finally:
         boot["done"] = True
         boot["evt"].set()
+        if boot.get("aborted"):
+            _abort_flag(clear=True)   # this check is over; manual updates work again
 
 
 def _take_relaunch_marker(boot: dict) -> bool:
@@ -1324,18 +1336,33 @@ def _relaunch_updated(note: str = ""):
     os._exit(0)
 
 
-def _abort_update_writes() -> None:
-    """Cap hit: tell the updater to write nothing (it finishes downloading in
-    the background and tries again next launch). ABORT_WRITES arrives with the
-    updater package; without it this is a no-op and a late check can still
-    write, which the dashboard then reports as RESTART WITNESS to apply."""
+def _abort_flag(clear: bool = False) -> None:
     try:
         import updater
         ev = getattr(updater, "ABORT_WRITES", None)
-        if ev is not None:
+        if ev is None:
+            return
+        if clear:
+            ev.clear()
+        else:
             ev.set()
     except Exception:
         pass
+
+
+def _abort_update_writes(boot: dict) -> None:
+    """Cap hit: tell the updater to write nothing (it finishes downloading in
+    the background and tries again next launch). ABORT_WRITES arrives with the
+    updater package; without it this is a no-op and a late check can still
+    write, which the dashboard then reports as RESTART WITNESS to apply.
+
+    The flag is cleared again once this check is over (by whichever of the
+    two threads sees the other's step last), or the dashboard's Check for
+    update button would defer every update for the rest of the session."""
+    boot["aborted"] = True
+    _abort_flag()
+    if boot.get("done"):
+        _abort_flag(clear=True)
 
 
 def _late_update_msg(st, boot: dict, timeout: float = 600.0) -> None:
@@ -1478,7 +1505,7 @@ def _boot():
                             f"itself: {err})").strip()
             step = _splash_step(elapsed, intro_over, state)
         if step == "abort":
-            _abort_update_writes()
+            _abort_update_writes(state)
             leave()
         elif step == "leave":
             leave()

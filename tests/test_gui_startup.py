@@ -531,7 +531,7 @@ def test_check_works_with_the_updater_before_it_learns_new_tricks(monkeypatch, t
     gui.check_updates(b)
     assert b["done"] and not b["changed"] and b["msg"] == "Up to date (abc1234)."
     assert b["can_abort"] is False
-    gui._abort_update_writes()                     # no ABORT_WRITES yet: no-op
+    gui._abort_update_writes(b)                    # no ABORT_WRITES yet: no-op
 
 
 def test_check_failure_is_a_message(monkeypatch, tmp_path):
@@ -546,16 +546,29 @@ def test_check_failure_is_a_message(monkeypatch, tmp_path):
     assert b["msg"].startswith("Update check skipped: no route to host")
 
 
-def test_abort_sets_the_updaters_flag(monkeypatch, tmp_path):
+def test_abort_sets_the_updaters_flag_until_the_check_ends(monkeypatch, tmp_path):
     monkeypatch.setattr(gui, "BASE", str(tmp_path))
     ev = threading.Event()
-    _fake_updater(monkeypatch, ABORT_WRITES=ev,
-                  check_and_update=lambda base: (False, "Up to date (abc1234)."))
+    seen = []
+
+    def check(base):
+        gui._abort_update_writes(b)      # the splash gives up mid-check
+        seen.append(ev.is_set())         # the updater sees it before writing
+        return False, "Update deferred to next launch"
+    _fake_updater(monkeypatch, ABORT_WRITES=ev, check_and_update=check)
     b = gui._new_boot_state()
     gui.check_updates(b)
-    assert b["can_abort"] is True
-    gui._abort_update_writes()
-    assert ev.is_set()
+    assert b["can_abort"] is True and seen == [True]
+    assert not ev.is_set()       # cleared: the dashboard's button works again
+
+
+def test_abort_after_the_check_already_finished_leaves_no_flag(monkeypatch):
+    ev = threading.Event()
+    _fake_updater(monkeypatch, ABORT_WRITES=ev)
+    b = gui._new_boot_state()
+    b["done"] = True                     # finished between the splash's two reads
+    gui._abort_update_writes(b)
+    assert not ev.is_set()
 
 
 def test_relaunch_carries_the_marker_and_the_note(monkeypatch):
