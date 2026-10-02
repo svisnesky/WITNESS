@@ -213,3 +213,31 @@ def test_legacy_nvenc_success_still_wins(tmp_path, monkeypatch, capsys):
     assert runs == ["p4", "hq"]
     assert "succeeded with legacy NVENC" in capsys.readouterr().out
     assert mr._ENCODER_CACHE["FF"] is True
+
+
+# ---- letterbox -------------------------------------------------------------
+
+def test_reels_letterbox_instead_of_squashing(tmp_path, monkeypatch):
+    """scale=1920:1080 alone squashed 21:9/32:9 clips. Fit, then pad to exactly
+    1920x1080 (xfade and concat need every segment the same size). No
+    force_divisible_by: it needs ffmpeg 4.3+, and an older build would fail
+    every reel."""
+    _stub_reel(monkeypatch)
+    mr._ENCODER_CACHE["FF"] = False
+    graphs = []
+
+    def run(cmd):
+        graphs.append(cmd[cmd.index("-filter_complex") + 1])
+        with open(cmd[-1], "wb") as f:
+            f.write(b"mp4")
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+    monkeypatch.setattr(mr, "_run", run)
+    mr.build_match_reel(_two_clips(tmp_path), str(tmp_path / "reels" / "r.mp4"),
+                        "FF", "T", 2, [])
+    g = graphs[0]
+    fit = ("scale=1920:1080:force_original_aspect_ratio=decrease,"
+           "pad=1920:1080:(ow-iw)/2:(oh-ih)/2:color=black,setsar=1,")
+    # title card + POTG card + 2 clips + end card: every segment is fitted
+    assert g.count(fit) == 5
+    assert "scale=1920:1080,setsar" not in g
+    assert "force_divisible_by" not in g

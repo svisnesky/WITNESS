@@ -168,6 +168,18 @@ def _lighten(c, f=0.45):
     return tuple(int(c[i] + (255 - c[i]) * f) for i in range(3))
 
 CARD_SECONDS = 2.8
+
+# Fit ANY frame shape into 1920x1080 without distorting it. A plain
+# scale=1920:1080 squashed ultrawide (21:9, 32:9) clips sideways in every match,
+# session and Play of the Night reel; this scales to fit and pads the rest
+# black. A 16:9 source (Stan's 4K, 1440p, 1080p) scales to exactly 1920x1080 and
+# the pad adds nothing, so every segment still ends at 1920x1080 — which xfade
+# and concat both require.
+# No force_divisible_by: that option needs ffmpeg 4.3+, and imageio-ffmpeg 0.4.x
+# ships 4.2.2, where it would fail EVERY reel. pad already snaps an odd scaled
+# size to the chroma grid (tested: 3456x2234 -> 1671x1080 -> padded 1920x1080).
+_FIT_1080 = ("scale=1920:1080:force_original_aspect_ratio=decrease,"
+             "pad=1920:1080:(ow-iw)/2:(oh-ih)/2:color=black")
 MUSIC_EXTS = (".mp3", ".wav", ".m4a", ".aac", ".ogg", ".flac")
 
 # flashier tags win Play of the Game ties
@@ -776,7 +788,7 @@ def build_match_reel(clips, out_path: str, ffmpeg: str,
                 fade = ",fade=t=in:d=0.4" if si == 0 else ""
             else:
                 fade = f",fade=t=in:d=0.4,fade=t=out:st={seg['dur'] - 0.4}:d=0.4"
-            chains.append(f"[{in_i}:v]scale=1920:1080,setsar=1,fps=60,format=yuv420p{fade}[v{si}];"
+            chains.append(f"[{in_i}:v]{_FIT_1080},setsar=1,fps=60,format=yuv420p{fade}[v{si}];"
                           f"[{in_i + 1}:a]anull[a{si}]")
             in_i += 2
         else:
@@ -784,7 +796,7 @@ def build_match_reel(clips, out_path: str, ffmpeg: str,
             # rather than falling back to "KILL #3" bookkeeping.
             who = sidecar_victim(seg["path"]) if use_chyrons else ""
             dt = _chyron(who) if who else ""
-            chains.append(f"[{in_i}:v]scale=1920:1080,setsar=1,fps=60,format=yuv420p{dt}[v{si}];"
+            chains.append(f"[{in_i}:v]{_FIT_1080},setsar=1,fps=60,format=yuv420p{dt}[v{si}];"
                           f"[{in_i}:a]aformat=sample_rates=48000:channel_layouts=stereo[a{si}]")
             in_i += 1
 
