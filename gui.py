@@ -209,6 +209,77 @@ def reload_config_into(cfg: dict, load, lock=None, keep=()) -> str:
     return ""
 
 
+# --- one copy at a time ---------------------------------------------------------
+
+def _read_yaml(path: str) -> dict:
+    """A user-editable YAML file as a dict. utf-8-sig so a Notepad BOM is fine;
+    falls back to the Windows locale encoding for a file saved as ANSI."""
+    import yaml
+    try:
+        with open(path, encoding="utf-8-sig") as f:
+            return yaml.safe_load(f) or {}
+    except UnicodeDecodeError:
+        import locale
+        with open(path, encoding=locale.getpreferredencoding(False)) as f:
+            return yaml.safe_load(f) or {}
+
+
+def _configured_port() -> int:
+    """web_port before main.py is imported (settings_override.yaml wins, as in
+    load_config). 8000 when the files or yaml itself can't be read."""
+    port = 8000
+    for name in ("config.yaml", "settings_override.yaml"):
+        try:
+            d = _read_yaml(os.path.join(BASE, name))
+            if isinstance(d, dict) and "web_port" in d:
+                port = int(d["web_port"])
+        except Exception:
+            pass
+    return port
+
+
+def _witness_already_running(port, timeout: float = 1.0) -> bool:
+    """True when a WITNESS dashboard already answers on this PC's port.
+
+    A failed bind can't be relied on to catch a second copy: on Windows,
+    ThreadingHTTPServer's SO_REUSEADDR lets it bind :8000 too, and then two OCR
+    loops share one GPU and every clip is saved twice. Asks /status on
+    127.0.0.1 (an IP-literal Host with no Origin, which the dashboard's request
+    guard allows) and checks that the JSON looks like WITNESS's snapshot."""
+    import http.client
+    import json
+    conn = None
+    try:
+        conn = http.client.HTTPConnection("127.0.0.1", int(port), timeout=timeout)
+        conn.request("GET", "/status")
+        resp = conn.getresponse()
+        if resp.status != 200:
+            return False
+        data = json.loads(resp.read().decode("utf-8", "replace"))
+        return isinstance(data, dict) and "running" in data and "count" in data
+    except Exception:
+        return False
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+
+_ALREADY_RUNNING = ("WITNESS is already running.\n\nLook for its window, or its "
+                    "icon on the taskbar. Close it first if you want to restart it.")
+
+
+def _bind_host(cfg) -> str:
+    """Serve the Wi-Fi only when BOTH web_lan and web_dashboard allow it. The
+    window app always needs its own server (the window IS the dashboard), so
+    either switch off means this-PC-only, never 'off'."""
+    if cfg.get("web_lan", True) and cfg.get("web_dashboard", True):
+        return "0.0.0.0"
+    return "127.0.0.1"
+
+
 def _set_attr(obj, name, value) -> None:
     """Set a plain attribute on the dashboard's LiveState under its lock (the
     web-dashboard code reads them with getattr inside snapshot())."""
@@ -1063,6 +1134,12 @@ def _panel_callback_error(root):
 
 def _boot():
     _claim_app_identity()
+    # One copy at a time, checked before anything else: before the update
+    # check (which would rewrite files under the copy that's running) and
+    # before a second splash.
+    if _witness_already_running(_configured_port()):
+        _show_error(_ALREADY_RUNNING, info=True)
+        return
     root = tk.Tk()
     root.withdraw()
     root.report_callback_exception = _boot_callback_error(root)
@@ -1274,9 +1351,24 @@ def _run_webview():
     try:
         import webserver
         port = cfg.get("web_port", 8000)
-        host = "0.0.0.0" if cfg.get("web_lan", True) else "127.0.0.1"
+        host = _bind_host(cfg)
+        # The window IS the dashboard, so the session must feed it even when
+        # web_dashboard is false; "false" here means this-PC-only (host above).
+        # Without this, run_live passed web=None and the window went dead.
+        cfg["web_dashboard"] = True
+        # Second check, with the port load_config settled on: covers two
+        # launches racing past the one at the top of _boot.
+        if _witness_already_running(port):
+            _fatal(_ALREADY_RUNNING, info=True, code=0)
         st = webserver.LiveState()
-        srv = webserver.start_web(st, port, BASE, host=host)
+        try:
+            srv = webserver.start_web(st, port, BASE, host=host)
+        except OSError as e:
+            # Never hop to another port: the iPad bookmark and the iOS app
+            # expect this one, and a silently-working second copy would run a
+            # second OCR loop. Never drop to the tk panel for this either.
+            _fatal(f"Port {port} is in use. WITNESS may already be running, or "
+                   f"change web_port in config.yaml.\n\n({e})")
         # hand the running server to run_live so it reuses it (no 2nd server)
         app._web_state = st
         app._web_server = srv

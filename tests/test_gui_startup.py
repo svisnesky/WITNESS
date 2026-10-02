@@ -26,8 +26,10 @@ pytest.importorskip("tkinter")
 import gui  # noqa: E402
 
 
-class _Stop(Exception):
-    """Raised by the stand-in _fatal so a test can see what would be shown."""
+class _Stop(BaseException):
+    """Raised by the stand-in _fatal so a test can see what would be shown.
+    BaseException, like the os._exit it replaces: no `except Exception` in
+    the code under test may swallow it."""
 
 
 @pytest.fixture
@@ -323,3 +325,126 @@ def test_tk_panel_keeps_an_error_line(monkeypatch):
     assert panel._last_error.startswith("ERROR: Can't reach OBS")
     assert shown and shown[0][1] == gui.RED
     panel._log("Setting saved: kill_sound = True")   # no widgets yet: no crash
+
+
+# --- one copy at a time, and the port -------------------------------------------
+
+def test_bind_host_needs_both_switches_for_the_wifi():
+    assert gui._bind_host({}) == "0.0.0.0"          # Stan's config: keys absent
+    assert gui._bind_host({"web_lan": True, "web_dashboard": True}) == "0.0.0.0"
+    assert gui._bind_host({"web_lan": False}) == "127.0.0.1"
+    assert gui._bind_host({"web_dashboard": False}) == "127.0.0.1"
+
+
+@pytest.fixture
+def real_witness():
+    """The real dashboard server on a free port (port 0), shut down after."""
+    webserver = pytest.importorskip("webserver")
+    st = webserver.LiveState()
+    srv = webserver.start_web(st, 0, os.path.dirname(gui.__file__), host="127.0.0.1")
+    yield srv.server_address[1]
+    srv.shutdown()
+    srv.server_close()
+
+
+def test_probe_finds_a_running_witness(real_witness):
+    assert gui._witness_already_running(real_witness) is True
+
+
+def test_probe_ignores_some_other_server():
+    import http.server
+
+    class Other(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            body = b'{"status": "ok"}'
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *a):
+            pass
+    srv = http.server.HTTPServer(("127.0.0.1", 0), Other)
+    t = threading.Thread(target=srv.serve_forever, daemon=True)
+    t.start()
+    try:
+        assert gui._witness_already_running(srv.server_address[1]) is False
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+
+def test_probe_on_a_closed_port_is_false():
+    import socket
+    s = socket.socket()
+    s.bind(("127.0.0.1", 0))
+    port = s.getsockname()[1]
+    s.close()                        # nothing listens there now
+    assert gui._witness_already_running(port) is False
+
+
+def test_configured_port_reads_the_files(monkeypatch, tmp_path):
+    monkeypatch.setattr(gui, "BASE", str(tmp_path))
+    assert gui._configured_port() == 8000
+    (tmp_path / "config.yaml").write_bytes(
+        "﻿# WITNESS — config\nweb_port: 8123\n".encode("utf-8"))
+    assert gui._configured_port() == 8123
+    (tmp_path / "settings_override.yaml").write_text("web_port: 8124\n",
+                                                     encoding="utf-8")
+    assert gui._configured_port() == 8124
+
+
+def _webview_env(monkeypatch, cfg):
+    monkeypatch.setitem(sys.modules, "webview", types.ModuleType("webview"))
+    monkeypatch.setattr(gui, "app", types.SimpleNamespace(load_config=lambda: cfg))
+
+
+def test_port_in_use_is_a_message_not_a_hop_or_the_tk_panel(monkeypatch, fatal):
+    webserver = pytest.importorskip("webserver")
+    _webview_env(monkeypatch, {"web_port": 8000})
+    monkeypatch.setattr(gui, "_witness_already_running", lambda *a, **k: False)
+    ports = []
+
+    def busy(state, port, base, host="0.0.0.0"):
+        ports.append(port)
+        raise OSError(10048, "Only one usage of each socket address")
+    monkeypatch.setattr(webserver, "start_web", busy)
+    with pytest.raises(_Stop):
+        gui._run_webview()
+    assert ports == [8000]                       # tried once, no 8001..8010
+    assert fatal[0].startswith("Port 8000 is in use. WITNESS may already be "
+                               "running, or change web_port in config.yaml.")
+
+
+def test_second_copy_stops_before_binding(monkeypatch, fatal):
+    webserver = pytest.importorskip("webserver")
+    _webview_env(monkeypatch, {"web_port": 8000})
+    monkeypatch.setattr(gui, "_witness_already_running", lambda *a, **k: True)
+    monkeypatch.setattr(webserver, "start_web",
+                        lambda *a, **k: pytest.fail("bound a second server"))
+    with pytest.raises(_Stop):
+        gui._run_webview()
+    assert fatal[0].startswith("WITNESS is already running.")
+
+
+def test_web_dashboard_false_binds_loopback_and_keeps_the_window_fed(monkeypatch, fatal):
+    webserver = pytest.importorskip("webserver")
+    cfg = {"web_port": 8000, "web_lan": True, "web_dashboard": False}
+    _webview_env(monkeypatch, cfg)
+    monkeypatch.setattr(gui, "_witness_already_running", lambda *a, **k: False)
+    hosts = []
+
+    def capture(state, port, base, host="0.0.0.0"):
+        hosts.append(host)
+        raise OSError(98, "stop here")
+    monkeypatch.setattr(webserver, "start_web", capture)
+    with pytest.raises(_Stop):
+        gui._run_webview()
+    assert hosts == ["127.0.0.1"]
+    assert cfg["web_dashboard"] is True
+
+
+def test_boot_checks_for_a_running_copy_before_the_update_check():
+    src = inspect.getsource(gui._boot)
+    assert "_witness_already_running(_configured_port())" in src
+    assert src.index("_witness_already_running(") < src.index("tk.Tk()")
