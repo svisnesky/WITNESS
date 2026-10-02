@@ -313,3 +313,23 @@ def test_every_clutch_exit_releases_the_held_warning():
     for fn in (main._check_clutch, main._end_clutch_quietly,
                main._maybe_capture_exfil):
         assert "_fire_deferred_black" in inspect.getsource(fn), fn.__name__
+
+
+def test_a_black_capture_test_cannot_reach_the_real_screen_or_speakers(blocked_side_effects):
+    """Regression: this module's black-capture tests ran the REAL banner and voice,
+    so every `pytest` on Stan's Mac popped a Python window and said "Warning. O B
+    S is not recording." out loud, over and over while review agents re-ran the
+    suite. conftest.py blocks both at the process boundary. This drives the same
+    path with every default left ON, and waits for the voice thread too."""
+    import threading
+    import time
+
+    import main
+    before = set(threading.enumerate())
+    assert main.check_obs_not_black({}, _Obs(_png(_img(0)))) is False
+    for t in set(threading.enumerate()) - before:
+        t.join(timeout=10)            # the call-out renders + plays on a thread
+    time.sleep(0.1)
+    hits = blocked_side_effects()
+    assert any("overlay.py" in " ".join(map(str, a)) for a in hits), \
+        "the banner launch should have been intercepted, not shown"
