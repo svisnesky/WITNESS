@@ -369,3 +369,112 @@ def test_real_repo_blobs_hash_to_gits_own_ids(tmp_path):
         assert updater._local_matches(dest, path, sha), path
         checked += 1
     assert checked >= 5
+
+
+# --------------------------------------------------------------------------
+# ABORT_WRITES, LAST_CHANGED_FILES, one run at a time
+
+def _two_changes():
+    return dict(REPO, **{"main.py": b"print('fixed')\n",
+                         "games/marathon.yaml": b"name: v2\n"})
+
+
+def test_abort_writes_set_means_zero_files_written(tmp_path, monkeypatch):
+    """The desktop splash gave up waiting and the app is loading: nothing may
+    be swapped under it."""
+    _fresh_zip(tmp_path)
+    gh = FakeGitHub(_two_changes())
+
+    def get_then_abort(url, timeout=10):
+        data = gh(url, timeout)
+        if url.startswith(updater.RAW):
+            updater.ABORT_WRITES.set()          # cap hit mid-download
+        return data
+
+    monkeypatch.setattr(updater, "_get", get_then_abort)
+    before = _snapshot(tmp_path)
+    changed, msg = updater.check_and_update(str(tmp_path))
+    assert (changed, msg) == (False, "Update deferred to next launch")
+    assert _snapshot(tmp_path) == before        # not even .app_version
+    assert len(gh.raw_fetches()) == 1           # stopped downloading too
+    assert updater.LAST_CHANGED_FILES == []
+    assert not updater.ABORT_WRITES.is_set()    # the next check runs normally
+
+
+def test_abort_set_before_the_run_writes_nothing(tmp_path, monkeypatch):
+    _fresh_zip(tmp_path)
+    gh = FakeGitHub(_two_changes())
+    monkeypatch.setattr(updater, "_get", gh)
+    updater.ABORT_WRITES.set()
+    before = _snapshot(tmp_path)
+    try:
+        changed, msg = updater.check_and_update(str(tmp_path))
+    finally:
+        updater.ABORT_WRITES.clear()
+    assert changed is False and msg == "Update deferred to next launch"
+    assert _snapshot(tmp_path) == before
+
+
+def test_abort_between_writes_stops_and_says_so(tmp_path, monkeypatch):
+    _fresh_zip(tmp_path)
+    gh = FakeGitHub(_two_changes())
+    monkeypatch.setattr(updater, "_get", gh)
+    real = updater._for_disk
+
+    def write_one_then_abort(path, data):
+        updater.ABORT_WRITES.set()
+        return real(path, data)
+
+    monkeypatch.setattr(updater, "_for_disk", write_one_then_abort)
+    changed, msg = updater.check_and_update(str(tmp_path))
+    assert msg.startswith("Update deferred to next launch")
+    assert "1 of 2" in msg and changed is True
+    assert len(updater.LAST_CHANGED_FILES) == 1
+    assert not os.path.exists(tmp_path / updater.VERSION_FILE)
+    assert not updater.ABORT_WRITES.is_set()
+
+
+def test_last_changed_files_lists_what_was_written(tmp_path, monkeypatch):
+    _fresh_zip(tmp_path)
+    monkeypatch.setattr(updater, "_get", FakeGitHub(_two_changes()))
+    updater.check_and_update(str(tmp_path))
+    assert sorted(updater.LAST_CHANGED_FILES) == ["games/marathon.yaml", "main.py"]
+    monkeypatch.setattr(updater, "_get", FakeGitHub(_two_changes()))
+    updater.check_and_update(str(tmp_path))     # now current
+    assert updater.LAST_CHANGED_FILES == []
+
+
+def test_a_second_concurrent_run_is_refused(tmp_path, monkeypatch):
+    _fresh_zip(tmp_path)
+    gh = FakeGitHub(_two_changes())
+    monkeypatch.setattr(updater, "_get", gh)
+    assert updater._RUN_LOCK.acquire(blocking=False)
+    try:
+        changed, msg = updater.check_and_update(str(tmp_path))
+    finally:
+        updater._RUN_LOCK.release()
+    assert changed is False and "already running" in msg
+    assert gh.urls == []
+
+
+def test_an_unwritable_file_does_not_strand_the_rest(tmp_path, monkeypatch):
+    """A locked file used to raise out of the write loop half way through.
+    Now the others are written, the failure is named, and .app_version stays
+    old so the next launch retries just that file."""
+    _fresh_zip(tmp_path)
+    monkeypatch.setattr(updater, "_get", FakeGitHub(_two_changes()))
+    real_open = open
+
+    def locked(path, mode="r", *a, **k):
+        if "w" in mode and str(path).endswith("marathon.yaml"):
+            raise PermissionError(13, "Permission denied")
+        return real_open(path, mode, *a, **k)
+
+    monkeypatch.setattr("builtins.open", locked)
+    changed, msg = updater.check_and_update(str(tmp_path))
+    monkeypatch.undo()
+    assert changed is True
+    assert "could not write games/marathon.yaml" in msg
+    assert updater.LAST_CHANGED_FILES == ["main.py"]
+    assert _read(tmp_path, "main.py") == b"print('fixed')\n"
+    assert not os.path.exists(tmp_path / updater.VERSION_FILE)

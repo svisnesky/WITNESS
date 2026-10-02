@@ -24,6 +24,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import threading
 import urllib.parse
 import urllib.request
 
@@ -154,6 +155,21 @@ def _auto_update_enabled(base_dir: str) -> bool:
 
 AUTO_UPDATE_OFF_MSG = ("Auto-update is off (auto_update: false). Double-click "
                        "'Update WITNESS.bat' to update manually.")
+DEFERRED_MSG = "Update deferred to next launch"
+
+# Set by a launcher that has stopped waiting (the desktop splash gives up after
+# its cap and goes on to load the app). The run in flight then writes nothing
+# more: files swapped under code that is already loading would mix old and new
+# modules. Checked during and after the downloads and before every write;
+# cleared when that run ends, so a later "Check for update" works normally.
+ABORT_WRITES = threading.Event()
+
+# Repo paths the most recent run wrote (e.g. to spot requirements.txt).
+LAST_CHANGED_FILES: list = []
+
+# One run at a time: a dashboard click while the launch check is still
+# downloading must not start a second writer.
+_RUN_LOCK = threading.Lock()
 
 
 def check_and_update(base_dir: str, force: bool = False) -> tuple[bool, str]:
@@ -165,9 +181,29 @@ def check_and_update(base_dir: str, force: bool = False) -> tuple[bool, str]:
     'Update WITNESS.bat' passes it: that is a deliberate local action. The
     launchers and the dashboard button keep honouring the opt-out, because the
     dashboard has no login and a guest on the Wi-Fi must not be able to pull
-    new code onto a PC whose owner turned updates off."""
+    new code onto a PC whose owner turned updates off.
+
+    Sets LAST_CHANGED_FILES to the paths it wrote. Honours ABORT_WRITES."""
+    global LAST_CHANGED_FILES
     if not force and not _auto_update_enabled(base_dir):
+        LAST_CHANGED_FILES = []
         return False, AUTO_UPDATE_OFF_MSG
+    if not _RUN_LOCK.acquire(blocking=False):
+        return False, "An update check is already running."
+    try:
+        LAST_CHANGED_FILES = []
+        written = []
+        try:
+            return _sync(base_dir, written)
+        finally:
+            LAST_CHANGED_FILES = list(written)
+            ABORT_WRITES.clear()
+    finally:
+        _RUN_LOCK.release()
+
+
+def _sync(base_dir: str, changed: list) -> tuple[bool, str]:
+    """The body of check_and_update. Appends each path it writes to changed."""
     try:
         latest = json.loads(_get(f"{API}/commits/{BRANCH}", timeout=6))["sha"]
     except Exception as e:
@@ -209,12 +245,22 @@ def check_and_update(base_dir: str, force: bool = False) -> tuple[bool, str]:
         # Download EVERYTHING that differs first; only then write.
         fetched = []
         for p in todo:
+            if ABORT_WRITES.is_set():
+                return False, DEFERRED_MSG
             fetched.append((p, _get(f"{RAW}/{latest}/{urllib.parse.quote(p)}", timeout=30)))
     except Exception as e:
         return False, f"Update aborted, nothing changed: {type(e).__name__}: {e}"
+    if ABORT_WRITES.is_set():
+        return False, DEFERRED_MSG
 
-    changed = []
+    failed = []
     for path, data in fetched:
+        if ABORT_WRITES.is_set():
+            # Rare: the launcher gave up mid-write. Say so; .app_version is not
+            # written, so the next launch fetches whatever is still missing.
+            return bool(changed), (
+                f"{DEFERRED_MSG} ({len(changed)} of {len(fetched)} file(s) "
+                "were already written; restart WITNESS to finish).")
         dest = _dest(base_dir, path)
         if os.path.basename(path) in SKIP_IF_EXISTS and os.path.exists(dest):
             continue  # user-owned file: never overwrite after first install
@@ -224,10 +270,25 @@ def check_and_update(base_dir: str, force: bool = False) -> tuple[bool, str]:
                     continue  # differs only in line endings: leave it alone
         except OSError:
             pass  # new file
-        os.makedirs(os.path.dirname(dest) or base_dir, exist_ok=True)
-        with open(dest, "wb") as f:
-            f.write(_for_disk(path, data))
+        try:
+            os.makedirs(os.path.dirname(dest) or base_dir, exist_ok=True)
+            with open(dest, "wb") as f:
+                f.write(_for_disk(path, data))
+        except OSError as e:
+            # A locked or read-only file must not abandon the rest halfway
+            # through with no message. Keep going, report it, and leave
+            # .app_version alone so the next launch retries just these.
+            failed.append(f"{path} ({e.strerror or type(e).__name__})")
+            continue
         changed.append(path)
+
+    if failed:
+        msg = (f"Update incomplete: could not write {', '.join(failed[:3])}"
+               + (f" (+{len(failed) - 3} more)" if len(failed) > 3 else "")
+               + ". It will retry next launch.")
+        if changed:
+            msg += f" Updated {len(changed)} other file(s)."
+        return bool(changed), msg
 
     with open(ver_path, "w", encoding="utf-8") as f:
         f.write(latest)
