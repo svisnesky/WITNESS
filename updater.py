@@ -88,12 +88,22 @@ def _auto_update_enabled(base_dir: str) -> bool:
         return True
 
 
-def check_and_update(base_dir: str) -> tuple[bool, str]:
+AUTO_UPDATE_OFF_MSG = ("Auto-update is off (auto_update: false). Double-click "
+                       "'Update WITNESS.bat' to update manually.")
+
+
+def check_and_update(base_dir: str, force: bool = False) -> tuple[bool, str]:
     """Returns (files_changed, message). Quietly no-ops when offline or when
     auto_update: false. All downloads complete before anything is written, so
-    a dropped connection can't leave the app half-updated."""
-    if not _auto_update_enabled(base_dir):
-        return False, "Auto-update is off (auto_update: false)."
+    a dropped connection can't leave the app half-updated.
+
+    force=True ignores auto_update: false. Only the double-clicked
+    'Update WITNESS.bat' passes it: that is a deliberate local action. The
+    launchers and the dashboard button keep honouring the opt-out, because the
+    dashboard has no login and a guest on the Wi-Fi must not be able to pull
+    new code onto a PC whose owner turned updates off."""
+    if not force and not _auto_update_enabled(base_dir):
+        return False, AUTO_UPDATE_OFF_MSG
     try:
         latest = json.loads(_get(f"{API}/commits/{BRANCH}", timeout=6))["sha"]
     except Exception as e:
