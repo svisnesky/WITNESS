@@ -156,8 +156,9 @@ def scene_setup(kinds) -> str:
     """What the program scene's source types say about a black picture.
 
       'unknown'    kinds is None (couldn't ask): keep today's warning
-      'no_capture' nothing in the scene captures the screen or the game (empty,
-                   or only audio / text / images): tell them to add a source
+      'no_capture' nothing VISIBLE in the scene captures the screen or the game
+                   (empty, capture source hidden, or only audio / text /
+                   images): tell them to unhide or add a source
       'hook_only'  every capture source is Game or Window Capture: black is
                    NORMAL until the game is running
       'other'      Display Capture, a capture card, a nested scene that couldn't
@@ -179,9 +180,14 @@ def scene_setup(kinds) -> str:
 
 
 _SCENE_LEAD = {
+    # Hidden sources are left out of the scene's kinds (they draw nothing), so
+    # 'no_capture' also means "there is one, but its eye icon is off". That is
+    # a common way to end up black, and adding a second source is the wrong fix.
     "no_capture": (
-        "  Your OBS scene has NO capture source, so there is nothing to record.\n"
-        "  In OBS: Sources > + > Display Capture (the monitor Marathon is on).\n\n"),
+        "  Your OBS scene has no VISIBLE capture source, so there is nothing to\n"
+        "  record. If you have one, its eye icon in the Sources list is off:\n"
+        "  click the eye to show it. If not: Sources > + > Display Capture\n"
+        "  (the monitor Marathon is on).\n\n"),
     "hook_only": (
         "  Your scene captures with Game/Window Capture, which stays black until\n"
         "  Marathon is running. If the game IS running, read on.\n\n"),

@@ -125,9 +125,20 @@ def test_the_warning_covers_both_new_setups_and_keeps_the_old_fix():
         assert kept in txt
 
 
+def test_a_hidden_capture_source_is_named_as_a_cause():
+    """get_scene_input_kinds leaves hidden items out, so a scene whose only
+    Display Capture has its eye icon off reads as 'no_capture'. Saying the
+    scene has NO capture source told that user to add a duplicate instead of
+    unhiding the one they have."""
+    lead = bc.warning_text({"reason": "x", "scene": "no_capture"})
+    assert "NO capture source" not in lead
+    assert "no VISIBLE capture source" in lead
+    assert lead.index("eye icon") < lead.index("Sources > + > Display Capture")
+
+
 def test_the_likeliest_cause_goes_first():
     empty = bc.warning_text({"reason": "x", "scene": "no_capture"})
-    assert empty.index("NO capture source") < empty.index("re-pick the display")
+    assert empty.index("no VISIBLE capture source") < empty.index("re-pick the display")
     hook = bc.warning_text({"reason": "x", "scene": "hook_only"})
     assert hook.index("Marathon is running") < hook.index("re-pick the display")
 

@@ -257,7 +257,7 @@ class OBSClient:
         OBS's program scene, e.g. ['monitor_capture', 'text_gdiplus_v3'].
 
         Lets the black-screen check say WHY the picture is black:
-          []                          the scene is empty: add a capture source
+          []                          nothing visible: unhide or add a capture source
           only game/window capture    normal until the game is running
           monitor_capture / other     today's warning (re-pick the display)
         blackcheck.scene_setup() turns this list into that verdict.
