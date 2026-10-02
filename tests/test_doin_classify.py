@@ -164,3 +164,19 @@ def test_all_corpus_raws_keep_todays_tags():
             pinned += 1
             assert main.classify_event(row["raw"]) == row["tag"], row["id"]
     assert pinned == 102
+
+
+def test_bracket_dropped_assist_reads_stay_assists():
+    """_normalize strips both brackets, so a dropped ']' cannot change the
+    tag. Reading these as own kills fixed 07-27 m6 but broke 07-27 m5 downs
+    (net 0 exact, downs exact 12/13 -> 11/13): they are real assists."""
+    assert main.classify_event("HAPA RUNNER DOIN [ASSIST 5 XP") == "assist"
+    assert main.classify_event("RUNNER ELIM [ASSIST F10 Xp") == "assist"
+    assert main.classify_event("RUNNER DOIN [ASSIST +15 XP") == "assist"
+
+
+def test_kill_counts_treats_a_finisher_after_an_elim_as_a_modifier():
+    assert main._kill_counts(["kill", "finisher"]) == (0, 1)
+    assert main._kill_counts(["finisher"]) == (0, 1)
+    assert main._kill_counts(["finisher", "kill"]) == (0, 2)
+    assert main._kill_counts(["down", "precision", "manual_kill", "assist"]) == (2, 0)

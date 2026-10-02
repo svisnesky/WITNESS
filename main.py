@@ -1197,13 +1197,21 @@ def check_obs_not_black(cfg, obs, web=None, state=None, label="") -> bool:
 
 
 def _kill_counts(tags) -> tuple:
-    """(downs, elims) for a batch of popups — deliberately the SAME two numbers
-    the game's own exfil panel reports, so they can be audited against it.
+    """(downs, elims) for an ORDERED batch of popups — deliberately the SAME
+    two numbers the game's own exfil panel reports, so they can be audited
+    against it. It is exfil_stats.count_events; see that for the evidence.
 
-    Verified exact on three ground-truth matches (tests/test_kill_count.py):
-    downs == count of 'down' popups (precision excluded, it is a modifier),
-    elims == count of 'kill'/'elim'/'finisher' popups. Assists count for
-    nothing."""
+    downs == 'down' and 'manual_kill' events (a +1 press is a down the OCR
+    missed). PRECISION is a modifier on its down, not a down.
+    elims == 'kill'/'elim' events, plus any FINISHER that does NOT follow a
+    pending elim. A FINISHER right after an elim is a modifier on that elim
+    (the same runner, melee-finished), not a second elim, so order matters.
+    Assists count for nothing.
+
+    Do not "fix" a bracket-dropped '[ASSIST' read into an own kill here or in
+    classify_event: those reads are real assists (07-27 m5 rules out the
+    general rule), and the narrow 'bracket-dropped ELIM = own' variant only
+    fit 07-27 m6 because it was built from that one case."""
     import exfil_stats
     return exfil_stats.count_events(tags)
 
