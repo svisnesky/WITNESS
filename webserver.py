@@ -189,8 +189,26 @@ class LiveState:
         self.detect = {}      # live detection health (fps/device/vram), from perf monitor
         self.recap = {}       # end-of-session build status ({status, note, report})
         self.heat = {}        # live killstreak ({streak, label, color})
+        # Active problems the user must see: {key: {level, title, message, since}}.
+        # First-class state rather than text inside the recap banner, so the iOS
+        # app can raise a real alert (and clear it) instead of parsing a sentence.
+        self.alerts = {}
         self._cfg = None       # live config dict (bound per session)
         self._save_cb = None   # persists changed settings to disk
+
+    def set_alert(self, key: str, level: str, title: str, message: str = ""):
+        """Raise (or refresh) an alert. level: 'critical' | 'warning' | 'info'.
+        Keeps the original `since` on a refresh so the app doesn't re-notify
+        every time the same problem is re-detected."""
+        with self._lock:
+            prev = self.alerts.get(key) or {}
+            self.alerts[key] = {"key": key, "level": level, "title": title,
+                                "message": message,
+                                "since": prev.get("since") or time.time()}
+
+    def clear_alert(self, key: str):
+        with self._lock:
+            self.alerts.pop(key, None)
 
     def reset(self):
         """Clear counts/feed for a fresh session (server stays up)."""
@@ -495,6 +513,8 @@ class LiveState:
                     "detect": dict(self.detect),
                     "recap": dict(self.recap),
                     "heat": dict(self.heat),
+                    "alerts": sorted(self.alerts.values(),
+                                     key=lambda a: a.get("since", 0)),
                     "tags": dict(self.tag_counts),
                     "events": list(self.events),
                     "reels": [{"i": i, "label": r["label"], "time": r["time"]}
@@ -511,6 +531,81 @@ import re as _re
 import urllib.parse as _uparse
 
 _SAFE_PART = _re.compile(r"^[A-Za-z0-9 ._+\-]+$")
+
+
+API_VERSION = 1
+
+
+def _record_dir(state) -> str:
+    """Where OBS writes clips. state.record_dir is only set once a session has
+    started this run; before that, fall back to the folder cached from the last
+    run so the Archive, the Clip viewer and the iOS app work right after launch."""
+    rec = getattr(state, "record_dir", "") or ""
+    if rec:
+        return rec
+    try:
+        import main
+        return main.cached_record_dir() or ""
+    except Exception:
+        return ""
+
+
+def _api_info(state) -> dict:
+    """Identity for the iOS app: proves this really is WITNESS, and which
+    API shape it speaks, before the app trusts anything else it says."""
+    return {"app": "witness", "api": API_VERSION,
+            "version": getattr(state, "version", "") or "",
+            "name": socket.gethostname()}
+
+
+def _media_url(session: str, rel: str) -> str:
+    """Playable on Apple devices: /api/play remuxes .mkv to .mp4 on demand."""
+    return f"/api/play?s={_uparse.quote(session)}&f={_uparse.quote(rel)}"
+
+
+def _api_sessions(state, limit: int = 60) -> dict:
+    """Sessions for the iOS app — the same scan the Archive page uses."""
+    rec = _record_dir(state)
+    base = os.path.dirname(os.path.abspath(__file__))
+    out = []
+    for sess in _scan_sessions(base, rec, limit=limit):
+        out.append({
+            "id": sess["id"],
+            "clips": sess["clips"],
+            "size": sess["size"],
+            "size_label": _fmt_size(sess["size"]),
+            "failed": sess.get("failed", False),
+            "recaps": sess["recaps"],
+            "has_report": bool(sess.get("report")),
+            "media": [{"label": lbl, "rel": rel, "kind": _media_kind(rel),
+                       "url": _media_url(sess["id"], rel)}
+                      for lbl, rel in sess["media"]],
+        })
+    return {"record_dir_known": bool(rec), "sessions": out}
+
+
+def _api_session(state, session: str) -> dict:
+    """One session for the iOS app: its media plus every clip with what
+    happened inside it (the clip viewer's data)."""
+    data = _clip_data(state, session)
+    sid = data.get("session") or session
+    for c in data.get("clips", []):
+        c["url"] = _media_url(sid, c["rel"])
+        c["thumb"] = (f"/clipthumb?s={_uparse.quote(sid)}"
+                      f"&f={_uparse.quote(c['rel'])}")
+    listing = _api_sessions(state).get("sessions", [])
+    match = next((x for x in listing if x["id"] == sid), None)
+    data["media"] = match["media"] if match else []
+    data["report"] = ""
+    if match and match.get("has_report"):
+        try:
+            import main
+            sdir = main._resolve_session_dir(state._cfg or {}, sid)
+            with open(os.path.join(sdir, "witness_report.txt"), encoding="utf-8") as f:
+                data["report"] = f.read()
+        except Exception:
+            data["report"] = ""
+    return data
 
 
 def _clip_data(state, session: str) -> dict:
@@ -639,62 +734,92 @@ def _fmt_size(n: float) -> str:
     return ""
 
 
-def _archive_page(base_dir: str, record_dir: str) -> str:
+def _media_kind(rel: str) -> str:
+    """What kind of video/audio a session file is, for the app and the Archive."""
+    low = rel.lower()
+    name = os.path.basename(low)
+    if name == "session_reel.mp4":
+        return "session_reel"
+    if name.startswith("play_of_the_night"):
+        return "potn"
+    if name.startswith("highlights"):
+        return "montage"
+    if low.startswith("shorts/"):
+        return "short"
+    if low.startswith("replays/"):
+        return "replay"
+    if name.endswith((".mp3", ".wav")):
+        return "report_audio"
+    if "_announced" in name:
+        return "announced"
+    return "reel"
+
+
+def _scan_sessions(base_dir: str, record_dir: str, limit: int = 60) -> list:
+    """Every session folder with its media, newest first. Shared by the Archive
+    page and the iOS app's /api/sessions, so the two can never disagree.
+
+    Clip counts come from tidy.iter_session_media, which looks in clips/ too.
+    The Archive used to count only top-level files, so every session the tidy
+    step had organized reported "0 clips"."""
+    import tidy
     root = os.path.join(record_dir, "Marathon Sessions") if record_dir else ""
     sessions = []
-    if root and os.path.isdir(root):
-        recaps = _session_recaps(base_dir)
-        for name in sorted(os.listdir(root), reverse=True)[:60]:
-            sdir = os.path.join(root, name)
-            if not os.path.isdir(sdir) or not _SAFE_PART.match(name):
-                continue
-            media = []
-            sr = os.path.join(sdir, "session_reel.mp4")
-            if os.path.exists(sr):
-                media.append(("Session reel", "session_reel.mp4"))
-            rdir = os.path.join(sdir, "reels")
-            if os.path.isdir(rdir):
-                for f in sorted(os.listdir(rdir)):
-                    if f.endswith(".mp4") and _SAFE_PART.match(f):
-                        label = f.replace(".mp4", "").replace("_", " ").capitalize()
-                        media.append((label, f"reels/{f}"))
-            pdir = os.path.join(sdir, "replays")
-            if os.path.isdir(pdir):
-                for f in sorted(os.listdir(pdir)):
-                    if f.endswith(".mp4") and _SAFE_PART.match(f):
-                        media.append((f.replace(".mp4", "").replace("_", " "), f"replays/{f}"))
-            # Session montage (highlights_*.mkv|mp4)
-            for f in sorted(os.listdir(sdir)):
-                if f.startswith("highlights") and f.lower().endswith((".mkv", ".mp4")) \
-                        and _SAFE_PART.match(f):
-                    media.append(("Session montage", f))
-            # Vertical Shorts
-            shdir = os.path.join(sdir, "shorts")
-            if os.path.isdir(shdir):
-                for f in sorted(os.listdir(shdir)):
-                    if f.endswith(".mp4") and _SAFE_PART.match(f):
-                        media.append((f"Short — {f.replace('.mp4','').replace('_',' ')}",
-                                      f"shorts/{f}"))
-            # Spoken WITNESS Report dossier
-            for cand in ("witness_report_tts.mp3", "witness_report_tts.wav"):
-                if os.path.exists(os.path.join(sdir, cand)):
-                    media.append(("WITNESS Report (spoken)", cand))
-                    break
-            # Written WITNESS Report case file
-            report = ""
-            rp = os.path.join(sdir, "witness_report.txt")
-            if os.path.exists(rp):
-                try:
-                    with open(rp, encoding="utf-8") as f:
-                        report = f.read()
-                except OSError:
-                    report = ""
-            n_clips = sum(1 for f in os.listdir(sdir)
-                          if f.lower().endswith((".mkv", ".mp4"))
-                          and not f.startswith(("highlights", "session_reel")))
-            sessions.append({"id": name, "media": media, "clips": n_clips,
-                             "recaps": recaps.get(name, []), "report": report,
-                             "size": _dir_size(sdir)})
+    if not root or not os.path.isdir(root):
+        return sessions
+    recaps = _session_recaps(base_dir)
+    for name in sorted(os.listdir(root), reverse=True)[:limit]:
+        sdir = os.path.join(root, name)
+        if not os.path.isdir(sdir) or not _SAFE_PART.match(name):
+            continue
+        media = []                       # [(label, rel)]
+        sr = os.path.join(sdir, "session_reel.mp4")
+        if os.path.exists(sr):
+            media.append(("Session reel", "session_reel.mp4"))
+        rdir = os.path.join(sdir, "reels")
+        if os.path.isdir(rdir):
+            for f in sorted(os.listdir(rdir)):
+                if f.endswith(".mp4") and _SAFE_PART.match(f):
+                    label = f.replace(".mp4", "").replace("_", " ").capitalize()
+                    media.append((label, f"reels/{f}"))
+        pdir = os.path.join(sdir, "replays")
+        if os.path.isdir(pdir):
+            for f in sorted(os.listdir(pdir)):
+                if f.endswith(".mp4") and _SAFE_PART.match(f):
+                    media.append((f.replace(".mp4", "").replace("_", " "), f"replays/{f}"))
+        for f in sorted(os.listdir(sdir)):
+            if f.startswith("highlights") and f.lower().endswith((".mkv", ".mp4")) \
+                    and _SAFE_PART.match(f):
+                media.append(("Session montage", f))
+        shdir = os.path.join(sdir, "shorts")
+        if os.path.isdir(shdir):
+            for f in sorted(os.listdir(shdir)):
+                if f.endswith(".mp4") and _SAFE_PART.match(f):
+                    media.append((f"Short — {f.replace('.mp4','').replace('_',' ')}",
+                                  f"shorts/{f}"))
+        for cand in ("witness_report_tts.mp3", "witness_report_tts.wav"):
+            if os.path.exists(os.path.join(sdir, cand)):
+                media.append(("WITNESS Report (spoken)", cand))
+                break
+        report = ""
+        rp = os.path.join(sdir, "witness_report.txt")
+        if os.path.exists(rp):
+            try:
+                with open(rp, encoding="utf-8") as f:
+                    report = f.read()
+            except OSError:
+                report = ""
+        n_clips = sum(1 for _rel, _full in
+                      tidy.iter_session_media(sdir, (".mkv", ".mp4")))
+        sessions.append({"id": name, "media": media, "clips": n_clips,
+                         "recaps": recaps.get(name, []), "report": report,
+                         "size": _dir_size(sdir),
+                         "failed": os.path.exists(os.path.join(sdir, ".recap_failed"))})
+    return sessions
+
+
+def _archive_page(base_dir: str, record_dir: str) -> str:
+    sessions = _scan_sessions(base_dir, record_dir)
 
     blocks = []
     for s in sessions:
@@ -713,7 +838,8 @@ def _archive_page(base_dir: str, record_dir: str) -> str:
                        if s.get("report") else "")
         # A session with clips but no reels had a failed recap. Say so, and offer
         # the fix right here — the clips are all that matter and they survived.
-        has_reels = any(lbl != "Montage" for lbl, _r in s["media"])
+        has_reels = any(_media_kind(r) in ("session_reel", "reel", "potn")
+                        for _l, r in s["media"])
         warn = ("" if has_reels or not s["clips"] else
                 '<div class="rc none" style="color:var(--warn,#f5a623)">'
                 'This session has clips but no reels — the recap failed. '
@@ -949,6 +1075,40 @@ def start_web(state, port, base_dir, host="0.0.0.0"):
                     self._send(apply_theme(_stats_page(base_dir),
                                            state._cfg).encode("utf-8"),
                                "text/html; charset=utf-8", cache=False)
+                elif path == "/api/play":
+                    q = _uparse.parse_qs(self.path.partition("?")[2])
+                    sess = (q.get("s") or [""])[0]
+                    rel = (q.get("f") or [""])[0]
+                    rec = _record_dir(state)
+                    fp = _archive_video_path(rec, sess, rel)
+                    if not fp:
+                        self.send_error(404)
+                    else:
+                        import montage
+                        import playable
+                        sdir = os.path.join(rec, "Marathon Sessions", sess)
+                        out = playable.playable(
+                            sdir, rel, fp,
+                            montage.find_ffmpeg(base_dir, state._cfg or {}))
+                        if out:
+                            self._send_video(out)
+                        else:
+                            self.send_error(415, "could not make this playable")
+                elif path == "/api/info":
+                    self._send(json.dumps(_api_info(state)).encode(),
+                               "application/json", cache=False)
+                elif path == "/api/status":
+                    self._send(json.dumps(state.snapshot()).encode(),
+                               "application/json", cache=False)
+                elif path == "/api/sessions":
+                    self._send(json.dumps(_api_sessions(state)).encode(),
+                               "application/json", cache=False)
+                elif path == "/api/session":
+                    q = _uparse.parse_qs(self.path.split("?", 1)[1]
+                                         if "?" in self.path else "")
+                    self._send(json.dumps(_api_session(
+                        state, (q.get("s") or ["latest"])[0])).encode(),
+                        "application/json", cache=False)
                 elif path == "/clips":
                     self._send(apply_theme(
                         CLIPS_PAGE, state._cfg).encode("utf-8"),
@@ -976,7 +1136,7 @@ def start_web(state, port, base_dir, host="0.0.0.0"):
                                "text/html; charset=utf-8", cache=False)
                 elif path == "/avideo":
                     q = _uparse.parse_qs(self.path.partition("?")[2])
-                    fp = _archive_video_path(getattr(state, "record_dir", ""),
+                    fp = _archive_video_path(_record_dir(state),
                                              (q.get("s") or [""])[0],
                                              (q.get("f") or [""])[0])
                     if fp:
@@ -2362,7 +2522,7 @@ function move(i,d){
 function play(i){
   curr=i; var c=CLIPS[i];
   var v=document.getElementById('vid');
-  v.src='/avideo?s='+encodeURIComponent(SESSION)+'&f='+encodeURIComponent(c.rel);
+  v.src='/api/play?s='+encodeURIComponent(SESSION)+'&f='+encodeURIComponent(c.rel);
   document.getElementById('pmsg').textContent =
     (c.victim||'no name read')+' — '+c.summary;
   document.getElementById('player').showModal();
