@@ -241,3 +241,66 @@ def test_reels_letterbox_instead_of_squashing(tmp_path, monkeypatch):
     assert g.count(fit) == 5
     assert "scale=1920:1080,setsar" not in g
     assert "force_divisible_by" not in g
+
+
+# ---- card PNG cleanup ------------------------------------------------------
+
+def test_card_pngs_are_removed_when_ffmpeg_cannot_start(tmp_path, monkeypatch):
+    """No ffmpeg: _run raises WinError 2 before the old cleanup loop, which left
+    _card/_potg/_end PNGs behind on every failed recap."""
+    _stub_reel(monkeypatch)
+    mr._ENCODER_CACHE["FF"] = False
+
+    def run(cmd):
+        raise FileNotFoundError(2, "The system cannot find the file specified")
+    monkeypatch.setattr(mr, "_run", run)
+    reels = tmp_path / "reels"
+    with pytest.raises(FileNotFoundError):
+        mr.build_match_reel(_two_clips(tmp_path), str(reels / "match_1.mp4"),
+                            "FF", "T", 2, [])
+    assert [f for f in os.listdir(reels) if f.endswith(".png")] == []
+
+
+def test_card_pngs_are_removed_after_every_failed_retry(tmp_path, monkeypatch):
+    _stub_reel(monkeypatch)
+    mr._ENCODER_CACHE["FF"] = False
+    seen_pngs = []
+
+    def run(cmd):
+        seen_pngs.extend(i for i in cmd if str(i).endswith(".png"))
+        return subprocess.CompletedProcess(cmd, 1, "", "render failed")
+    monkeypatch.setattr(mr, "_run", run)
+    reels = tmp_path / "reels"
+    assert mr.build_match_reel(_two_clips(tmp_path), str(reels / "match_1.mp4"),
+                               "FF", "T", 2, []) is False
+    assert seen_pngs, "cards were never used — the test proves nothing"
+    assert [f for f in os.listdir(reels) if f.endswith(".png")] == []
+
+
+# ---- auto reels keep Play of the Game; exports turn it off -----------------
+
+def _render_order(tmp_path, monkeypatch, **kw):
+    _stub_reel(monkeypatch, cards=False)
+    mr._ENCODER_CACHE["FF"] = False
+    order = []
+
+    def run(cmd):
+        order.extend(os.path.basename(i) for i in cmd if str(i).endswith(".mkv"))
+        with open(cmd[-1], "wb") as f:
+            f.write(b"mp4")
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+    monkeypatch.setattr(mr, "_run", run)
+    clips = _two_clips(tmp_path)
+    mr.build_match_reel(clips, str(tmp_path / "reels" / "r.mp4"), "FF", "T", 2,
+                        [], dedupe=False, **kw)
+    return order
+
+
+def test_auto_reels_still_lead_with_play_of_the_game(tmp_path, monkeypatch):
+    assert _render_order(tmp_path, monkeypatch) == [
+        "002_down+down_20-09-00.mkv", "001_down_20-01-00.mkv"]
+
+
+def test_potg_off_keeps_the_given_order(tmp_path, monkeypatch):
+    assert _render_order(tmp_path, monkeypatch, potg_enabled=False) == [
+        "001_down_20-01-00.mkv", "002_down+down_20-09-00.mkv"]

@@ -19,9 +19,70 @@ def _sess(tmp_path, names=("001_down_20-07-34.mkv", "002_down+precision_20-30-32
     return str(d)
 
 
-def test_selection_order_is_preserved():
-    """The whole point: the user's order, not chronological."""
-    pass  # covered by test_resolve_keeps_the_given_order
+_ORDER_NAMES = ("001_down_20-07-34.mkv", "002_down+down_20-30-32.mkv",
+                "003_elim_20-45-00.mkv")
+
+
+def test_selection_order_is_preserved(tmp_path, monkeypatch):
+    """The whole point: the user's order, not chronological, and not "best clip
+    first" either. This used to be a `pass` that pointed at resolve() — but the
+    order was lost later, inside build_match_reel: Play of the Game moved the
+    best clip to the front behind an unrequested card, so 003,001,002 rendered
+    as 002,003,001. And the fallback re-render forgot dedupe=False, so a failed
+    first render could overlap-merge away clips the user chose.
+
+    Drives the REAL renderer with ffmpeg faked at _run: the first render fails,
+    the retry succeeds, and both must see the selection in the given order."""
+    import subprocess
+
+    import match_reel
+    import montage
+    import shorts
+
+    d = _sess(tmp_path, names=_ORDER_NAMES)
+    ff = "FAKE_FFMPEG_EXPORT_ORDER"
+    monkeypatch.setattr(montage, "find_ffmpeg", lambda b, c: ff)
+    monkeypatch.setitem(match_reel._ENCODER_CACHE, ff, False)     # libx264
+    monkeypatch.setattr(match_reel, "probe_duration", lambda p, f: 30.0)
+    monkeypatch.setattr(shorts, "_find_font", lambda: "")         # no chyrons
+    dedupe_calls = []
+    monkeypatch.setattr(match_reel, "drop_overlapping",
+                        lambda clips, f: dedupe_calls.append(clips) or list(clips))
+    renders = []
+
+    def fake_run(cmd):
+        renders.append([cmd[i + 1] for i, a in enumerate(cmd) if a == "-i"])
+        if len(renders) == 1:
+            return subprocess.CompletedProcess(cmd, 1, "", "first render fails")
+        with open(cmd[-1], "wb") as f:
+            f.write(b"mp4")
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+    monkeypatch.setattr(match_reel, "_run", fake_run)
+
+    want = ["003_elim_20-45-00.mkv", "001_down_20-07-34.mkv",
+            "002_down+down_20-30-32.mkv"]
+    sel = [{"rel": n} for n in want]
+    # Meaningful only if POTG WOULD have reordered this selection.
+    assert os.path.basename(
+        match_reel.pick_potg(er.resolve(d, sel))["path"]) == want[2]
+
+    out = er.build(d, sel, opts={"music": False})
+    assert out and os.path.exists(out)
+    assert len(renders) == 2, "expected a failed render, then the retry"
+    for inputs in renders:
+        assert [os.path.basename(i) for i in inputs if i.endswith(".mkv")] == want
+        assert not any(i.endswith("_potg.png") for i in inputs), "POTG card"
+    assert dedupe_calls == [], "overlap-merging ran on a hand-picked export"
+    left = [f for f in os.listdir(os.path.join(d, "reels")) if f.endswith(".png")]
+    assert left == [], f"card PNGs left behind: {left}"
+
+
+def test_export_turns_play_of_the_game_off():
+    import inspect
+
+    import match_reel
+    assert "potg_enabled" in inspect.signature(match_reel.build_match_reel).parameters
+    assert "potg_enabled=False" in inspect.getsource(er.build)
 
 
 def test_resolve_keeps_the_given_order(tmp_path):

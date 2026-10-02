@@ -165,6 +165,9 @@ def build(session_dir: str, selection, opts=None, cfg=None,
         # these; dropping one because its buffer overlaps another would be the
         # app overruling them.
         dedupe=False,
+        # ...and in THEIR order. Play of the Game moved the best clip to the
+        # front behind its own card, so 003,001,002 rendered as 002,003,001.
+        potg_enabled=False,
         render_encoder=str(cfg.get("render_encoder", "auto")))
     if not ok:
         note("render failed")
