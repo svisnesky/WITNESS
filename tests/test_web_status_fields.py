@@ -119,3 +119,48 @@ def test_the_live_page_draws_a_failed_recap():
     assert "open the Archive and press Rebuild reels after fixing it" in p
     # 'ready' shows the note when there is one; the fixed text only without
     assert "rc.note || 'Everything built" in p
+
+
+# --- a START that fails says why ----------------------------------------------
+
+def test_snapshot_carries_the_start_error_and_starting_flag():
+    st = _state()
+    snap = st.snapshot()
+    assert snap["last_error"] == "" and snap["starting"] is False
+    # the desktop launcher assigns these as plain attributes
+    st.starting = True
+    assert st.snapshot()["starting"] is True
+    st.starting = False
+    st.last_error = "OBS: cannot reach the WebSocket server"
+    assert st.snapshot()["last_error"] == "OBS: cannot reach the WebSocket server"
+
+
+def test_snapshot_tolerates_a_state_without_the_new_attributes():
+    """getattr in snapshot(): a LiveState built by older code, or one the
+    launcher hasn't touched, must not raise on the poll every client makes."""
+    st = _state()
+    del st.last_error
+    del st.starting
+    snap = st.snapshot()
+    assert snap["last_error"] == "" and snap["starting"] is False
+
+
+def test_a_session_that_starts_clears_the_last_failure():
+    st = _state()
+    st.last_error = "OBS rejected the WebSocket password"
+    st.starting = True
+    st.set_running(True)
+    snap = st.snapshot()
+    assert snap["last_error"] == "" and snap["starting"] is False
+    st.set_running(False)
+    assert st.snapshot()["last_error"] == ""
+
+
+def test_the_live_page_shows_the_error_and_holds_starting():
+    p = webserver.PAGE
+    assert 'id="errbox"' in p and "d.last_error" in p
+    # the banner is drawn only while idle: it must never cover a live feed
+    assert "d.last_error && !d.running && !d.starting" in p
+    # the 12 s safety release waits while the launcher says it's starting
+    assert "setTimeout(releaseRun, 12000)" in p
+    assert "if (runStarting){ setTimeout(releaseRun" in p

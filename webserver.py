@@ -194,6 +194,13 @@ class LiveState:
         # First-class state rather than text inside the recap banner, so the iOS
         # app can raise a real alert (and clear it) instead of parsing a sentence.
         self.alerts = {}
+        # Why the last START failed ('' = it didn't), and whether a START is in
+        # progress. The desktop launcher (gui._WebSession) sets both as plain
+        # attributes. Before these, an OBS mistake on START left the button on
+        # STARTING… for 12 s, then back to START, with the reason nowhere a
+        # window-app user could see it (pythonw has no console).
+        self.last_error = ""
+        self.starting = False
         self._cfg = None       # live config dict (bound per session)
         self._save_cb = None   # persists changed settings to disk
 
@@ -500,6 +507,9 @@ class LiveState:
             if running:
                 self.started = time.strftime("%H:%M")
                 self._mono = time.monotonic()
+                # it started: the last failure is history, and so is "starting"
+                self.last_error = ""
+                self.starting = False
 
     def record(self, count, tag, text):
         with self._lock:
@@ -549,6 +559,9 @@ class LiveState:
                     "update": self.update_msg, "version": self.version,
                     "update_changed": getattr(self, "update_changed", False),
                     "updating": getattr(self, "_updating", False),
+                    # getattr: the launcher assigns these from outside
+                    "last_error": str(getattr(self, "last_error", "") or ""),
+                    "starting": bool(getattr(self, "starting", False)),
                     "detect": dict(self.detect),
                     "recap": dict(self.recap),
                     "heat": dict(self.heat),
@@ -1769,6 +1782,9 @@ PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
   .rc-report { margin:12px 0 4px; padding:14px 16px; background:#0e0b16;
     border:1px solid rgba(145,132,217,.28); border-radius:10px; overflow-x:auto;
     font:500 12px/1.5 var(--mono); color:var(--sec); white-space:pre-wrap; }
+  .errbox { margin-bottom:22px; border:1px solid var(--danger); border-radius:14px;
+    padding:16px 18px; background:linear-gradient(180deg,rgba(255,77,61,.12),var(--surface)); }
+  .errbox .rc-note { color:var(--text); white-space:pre-wrap; }
   .rc-btn { display:inline-block; margin-top:10px; background:var(--accent); color:#12121a;
     text-decoration:none; border-radius:9px; padding:10px 18px; font:700 12px var(--ui);
     letter-spacing:.04em; }
@@ -1981,6 +1997,11 @@ PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
     <button class="runbtn" id="runbtn" onclick="toggleRun()">START</button>
   </header>
 
+  <section class="errbox" id="errbox" style="display:none">
+    <div class="rc-hd"><span class="rc-dot err"></span><span>START didn&rsquo;t work</span></div>
+    <div class="rc-note" id="errnote"></div>
+  </section>
+
   <section class="recap" id="recap" style="display:none">
     <div class="rc-hd"><span class="rc-dot" id="rcdot"></span><span id="rctitle">Building your recap&hellip;</span></div>
     <div class="rc-note" id="rcnote"></div>
@@ -2104,6 +2125,7 @@ PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
 <script>
   async function tick(){
     try{
+      var asked = Date.now();
       var r = await fetch('/status',{cache:'no-store'});
       var d = await r.json();
       if (d.count > lastCount && lastCount >= 0){ ding(); flashCount(); }
@@ -2131,7 +2153,7 @@ PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
       document.getElementById('statustext').textContent = d.running ? 'WATCHING' : 'READY';
       document.getElementById('sub').textContent =
         d.running && d.elapsed ? 'SESSION  ' + fmtElapsed(d.elapsed)
-        : (d.running ? 'STARTING\\u2026' : 'Press START to begin watching');
+        : (d.running || d.starting ? 'STARTING\\u2026' : 'Press START to begin watching');
       if (d.update){
         var m = document.getElementById('updmsg');
         m.textContent = 'Updater: ' + d.update;
@@ -2191,12 +2213,30 @@ PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
         document.getElementById('rcarchive').style.display =
           (built || failed) ? 'inline-block' : 'none';
       } else { rcbox.style.display = 'none'; }
+      // A START that failed says why (the launcher sets last_error). Shown only
+      // while idle, so it can never cover the kill feed of a running session.
+      var eb = document.getElementById('errbox');
+      if (d.last_error && !d.running && !d.starting){
+        document.getElementById('errnote').textContent = d.last_error;
+        eb.style.display = 'block';
+      } else { eb.style.display = 'none'; }
+      runStarting = !!d.starting;
+      // The START we sent has failed: stop waiting for the 12 s release. Only a
+      // status asked for AFTER the press returned counts, so an old error
+      // can't release a fresh press.
+      if (runBusy && runWant && runPostedAt && asked >= runPostedAt
+          && !d.running && !d.starting && d.last_error){ runBusy = false; }
+      if (runBusy && d.running === runWant){ runBusy = false; }
       var rb = document.getElementById('runbtn');
-      if (!runBusy){
+      if (d.starting && !d.running){
+        // still starting (OBS launch + connect can take a minute): say so on
+        // every device, including one that didn't press the button
+        rb.className = 'runbtn busy';
+        rb.textContent = 'STARTING\\u2026';
+      } else if (!runBusy){
         rb.className = 'runbtn' + (d.running ? ' on' : '');
         rb.textContent = d.running ? 'STOP' : 'START';
       }
-      if (runBusy && d.running === runWant){ runBusy = false; }
       var feed = document.getElementById('feed');
       if(!d.events.length){ feed.innerHTML = '<div class="empty">Waiting for kills...</div>'; }
       else {
@@ -2387,17 +2427,25 @@ PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
     } catch(e){}
   }
 
-  var runBusy = false, runWant = false;
+  var runBusy = false, runWant = false, runPostedAt = 0, runStarting = false;
   async function toggleRun(){
-    if (runBusy) return;
     var rb = document.getElementById('runbtn');
+    if (runBusy || rb.className.indexOf('busy') !== -1) return;
     var starting = rb.textContent === 'START';
-    runWant = starting; runBusy = true;
+    runWant = starting; runBusy = true; runPostedAt = 0;
     rb.className = 'runbtn busy';
     rb.textContent = starting ? 'STARTING\\u2026' : 'STOPPING\\u2026';
     try { await fetch(starting ? '/start' : '/stop', {method:'POST'}); } catch(e){}
-    // tick() clears runBusy once d.running matches what we asked for
-    setTimeout(function(){ runBusy = false; }, 12000);  // safety release
+    runPostedAt = Date.now();
+    // tick() clears runBusy once d.running matches what we asked for, or as
+    // soon as the launcher reports that the START failed
+    setTimeout(releaseRun, 12000);  // safety release
+  }
+  // The safety release waits while the launcher says a START is still in
+  // progress: flipping back to START mid-way just invited a second press.
+  function releaseRun(){
+    if (runStarting){ setTimeout(releaseRun, 2000); return; }
+    runBusy = false;
   }
 
   async function saveClip(){
