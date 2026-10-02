@@ -1,0 +1,1084 @@
+{
+ "_about": "Golden tags for the 104 non-manual popup reads in the detection corpus (Stan's real session logs 2026-07-16..08-08), captured from the code BEFORE the DOIN fold and phrase-based classify_event. 'tag' is classify_event(raw); 'replay' is [tag, emitted raw_line] for each event when the read is held 3 frames then cleared, through is_suppressed -> PopupDetector -> classify_event with 'config' below.",
+ "config": {
+  "popup_trigger_phrases": [
+   "RUNNER DOWN",
+   "PRECISION DOWN",
+   "FINISHER",
+   "RUNNER ELIM"
+  ],
+  "popup_match_threshold": 85,
+  "popup_confirm_frames": 1,
+  "popup_absence_frames": 3,
+  "popup_cooldown_seconds": 2.0,
+  "suppress_phrases": [
+   "SELF REVIVE",
+   "GIVE UP",
+   "RUNNER DAMAGE",
+   "CREW REVIVES",
+   "INVENTORY VALUE"
+  ],
+  "require_reward": true,
+  "poll_fps": 5,
+  "kill_coalesce_seconds": 8.0
+ },
+ "rows": [
+  {
+   "id": "2026-07-16_21-47-21 m1 #1",
+   "raw": "RUNNER DOWN +15 XP F FL PRECISION DOIN 5z +25",
+   "tag": "precision",
+   "replay": [
+    [
+     "down",
+     "runner down 15 xp f fl"
+    ],
+    [
+     "precision",
+     "precision doin 5z 25"
+    ]
+   ]
+  },
+  {
+   "id": "2026-07-16_21-47-21 m1 #2",
+   "raw": "RUNNER ELIM +10 XP FINISHER 5z +50",
+   "tag": "finisher",
+   "replay": [
+    [
+     "kill",
+     "runner elim 10 xp"
+    ],
+    [
+     "finisher",
+     "finisher 5z 50"
+    ]
+   ]
+  },
+  {
+   "id": "2026-07-16_21-47-21 m1 #3",
+   "raw": "RUNNER DOIN +15 XP",
+   "tag": "down",
+   "replay": [
+    [
+     "down",
+     "RUNNER DOIN +15 XP"
+    ]
+   ]
+  },
+  {
+   "id": "2026-07-23_19-03-24 m4 #1",
+   "raw": "RUNNER DOIN +15 XP",
+   "tag": "down",
+   "replay": [
+    [
+     "down",
+     "RUNNER DOIN +15 XP"
+    ]
+   ]
+  },
+  {
+   "id": "2026-07-23_19-03-24 m4 #2",
+   "raw": "RUNNER DOIN +15 XP",
+   "tag": "down",
+   "replay": [
+    [
+     "down",
+     "RUNNER DOIN +15 XP"
+    ]
+   ]
+  },
+  {
+   "id": "2026-07-23_19-03-24 m5 #3",
+   "raw": "RUNNER DOIN +15 XP",
+   "tag": "down",
+   "replay": [
+    [
+     "down",
+     "RUNNER DOIN +15 XP"
+    ]
+   ]
+  },
+  {
+   "id": "2026-07-24_20-07-14 m1 #1",
+   "raw": "RUNNER DOIN [ASSIST +15 XP",
+   "tag": "assist",
+   "replay": [
+    [
+     "assist",
+     "RUNNER DOIN [ASSIST +15 XP"
+    ]
+   ]
+  },
+  {
+   "id": "2026-07-24_20-07-14 m3 #3",
+   "raw": "RUNNER DOIN [ASSIST] +15 XP",
+   "tag": "assist",
+   "replay": [
+    [
+     "assist",
+     "RUNNER DOIN [ASSIST] +15 XP"
+    ]
+   ]
+  },
+  {
+   "id": "2026-07-24_20-07-14 m5 #5",
+   "raw": "RUNNER DOIN [ASSIST] +15 XP",
+   "tag": "assist",
+   "replay": [
+    [
+     "assist",
+     "RUNNER DOIN [ASSIST] +15 XP"
+    ]
+   ]
+  },
+  {
+   "id": "2026-07-24_20-07-14 m5 #7",
+   "raw": "RUNNER DOIN [ASSIST] +15 XP",
+   "tag": "assist",
+   "replay": [
+    [
+     "assist",
+     "RUNNER DOIN [ASSIST] +15 XP"
+    ]
+   ]
+  },
+  {
+   "id": "2026-07-24_20-07-14 m6 #8",
+   "raw": "RUNNER DOIN [ASSIST] +15 XP",
+   "tag": "assist",
+   "replay": [
+    [
+     "assist",
+     "RUNNER DOIN [ASSIST] +15 XP"
+    ]
+   ]
+  },
+  {
+   "id": "2026-07-24_20-07-14 m6 #9",
+   "raw": "RUNNER DOIN [ASSIST] +15 XP",
+   "tag": "assist",
+   "replay": [
+    [
+     "assist",
+     "RUNNER DOIN [ASSIST] +15 XP"
+    ]
+   ]
+  },
+  {
+   "id": "2026-07-24_20-07-14 m6 #11",
+   "raw": "4_ O RUNNER DOIN +15 XP",
+   "tag": "down",
+   "replay": [
+    [
+     "down",
+     "4_ O RUNNER DOIN +15 XP"
+    ]
+   ]
+  },
+  {
+   "id": "2026-07-24_20-07-14 m7 #12",
+   "raw": "RUNNER DOIN +15 XP",
+   "tag": "down",
+   "replay": [
+    [
+     "down",
+     "RUNNER DOIN +15 XP"
+    ]
+   ]
+  },
+  {
+   "id": "2026-07-24_20-07-14 m7 #13",
+   "raw": "RUNNER DOIN [ASSIST] +15 XP",
+   "tag": "assist",
+   "replay": [
+    [
+     "assist",
+     "RUNNER DOIN [ASSIST] +15 XP"
+    ]
+   ]
+  },
+  {
+   "id": "2026-07-24_20-07-14 m8 #14",
+   "raw": "UESC ELIM +5 XP UESC ELIM +5 XP RUNNER DOIN +15 XP",
+   "tag": "down",
+   "replay": [
+    [
+     "down",
+     "UESC ELIM +5 XP UESC ELIM +5 XP RUNNER DOIN +15 XP"
+    ]
+   ]
+  },
+  {
+   "id": "2026-07-27_20-10-09 m1 #1",
+   "raw": "E L_ O S OIMM UMM +15 XP RUNNER DOIN [ASSIST] Ii0 0 TN",
+   "tag": "assist",
+   "replay": [
+    [
+     "assist",
+     "E L_ O S OIMM UMM +15 XP RUNNER DOIN [ASSIST] Ii0 0 TN"
+    ]
+   ]
+  },
+  {
+   "id": "2026-07-27_20-10-09 m1 #2",
+   "raw": "runner elim assist amm 10 xp ommmi ammmi mmmmm",
+   "tag": "assist",
+   "replay": [
+    [
+     "assist",
+     "runner elim assist amm 10 xp ommmi ammmi mmmmm"
+    ]
+   ]
+  },
+  {
+   "id": "2026-07-27_20-10-09 m3 #3",
+   "raw": "runner doin 15 xp",
+   "tag": "down",
+   "replay": [
+    [
+     "down",
+     "runner doin 15 xp"
+    ]
+   ]
+  },
+  {
+   "id": "2026-07-27_20-10-09 m3 #4",
+   "raw": "precision doin 25",
+   "tag": "precision",
+   "replay": []
+  },
+  {
+   "id": "2026-07-27_20-10-09 m3 #5",
+   "raw": "runner doin 15 xp",
+   "tag": "down",
+   "replay": [
+    [
+     "down",
+     "runner doin 15 xp"
+    ]
+   ]
+  },
+  {
+   "id": "2026-07-27_20-10-09 m3 #6",
+   "raw": "precision doin 5tz 25 cr8",
+   "tag": "precision",
+   "replay": []
+  },
+  {
+   "id": "2026-07-27_20-10-09 m3 #7",
+   "raw": "RUNNER ELIM +10 XP",
+   "tag": "kill",
+   "replay": [
+    [
+     "kill",
+     "RUNNER ELIM +10 XP"
+    ]
+   ]
+  },
+  {
+   "id": "2026-07-27_20-10-09 m3 #8",
+   "raw": "runner elim 10 xp",
+   "tag": "kill",
+   "replay": [
+    [
+     "kill",
+     "runner elim 10 xp"
+    ]
+   ]
+  },
+  {
+   "id": "2026-07-27_20-10-09 m3 #9",
+   "raw": "RUNNER DOIN +15 XP",
+   "tag": "down",
+   "replay": [
+    [
+     "down",
+     "RUNNER DOIN +15 XP"
+    ]
+   ]
+  },
+  {
+   "id": "2026-07-27_20-10-09 m3 #10",
+   "raw": "C_ O RUNNER DOIN +15 XP",
+   "tag": "down",
+   "replay": [
+    [
+     "down",
+     "C_ O RUNNER DOIN +15 XP"
+    ]
+   ]
+  },
+  {
+   "id": "2026-07-27_20-10-09 m4 #11",
+   "raw": "runner doin 15 xp",
+   "tag": "down",
+   "replay": [
+    [
+     "down",
+     "runner doin 15 xp"
+    ]
+   ]
+  },
+  {
+   "id": "2026-07-27_20-10-09 m4 #12",
+   "raw": "precision doin 5tz 25",
+   "tag": "precision",
+   "replay": []
+  },
+  {
+   "id": "2026-07-27_20-10-09 m4 #13",
+   "raw": "+8+ +1578  3+ RUNNER DOIN [ASSIST]",
+   "tag": "assist",
+   "replay": [
+    [
+     "assist",
+     "+8+ +1578  3+ RUNNER DOIN [ASSIST]"
+    ]
+   ]
+  },
+  {
+   "id": "2026-07-27_20-10-09 m4 #14",
+   "raw": "runner elim assist 15 xp 10 xp",
+   "tag": "assist",
+   "replay": [
+    [
+     "assist",
+     "runner elim assist 15 xp 10 xp"
+    ]
+   ]
+  },
+  {
+   "id": "2026-07-27_20-10-09 m4 #15",
+   "raw": "RUNNER DOIN [ASSIST] +15 XP",
+   "tag": "assist",
+   "replay": [
+    [
+     "assist",
+     "RUNNER DOIN [ASSIST] +15 XP"
+    ]
+   ]
+  },
+  {
+   "id": "2026-07-27_20-10-09 m4 #16",
+   "raw": "runner elim assist",
+   "tag": "assist",
+   "replay": []
+  },
+  {
+   "id": "2026-07-27_20-10-09 m4 #17",
+   "raw": "finisher assist 15 xp 10 xp 5t 50",
+   "tag": "assist",
+   "replay": [
+    [
+     "assist",
+     "finisher assist 15 xp 10 xp 5t 50"
+    ]
+   ]
+  },
+  {
+   "id": "2026-07-27_20-10-09 m4 #18",
+   "raw": "runner doin 15 xp",
+   "tag": "down",
+   "replay": [
+    [
+     "down",
+     "runner doin 15 xp"
+    ]
+   ]
+  },
+  {
+   "id": "2026-07-27_20-10-09 m4 #19",
+   "raw": "precision doin 5tz 25",
+   "tag": "precision",
+   "replay": []
+  },
+  {
+   "id": "2026-07-27_20-10-09 m4 #20",
+   "raw": "runner elim assist 10 xp",
+   "tag": "assist",
+   "replay": [
+    [
+     "assist",
+     "runner elim assist 10 xp"
+    ]
+   ]
+  },
+  {
+   "id": "2026-07-27_20-10-09 m4 #21",
+   "raw": "I RUNNER DOIN +15 XP",
+   "tag": "down",
+   "replay": [
+    [
+     "down",
+     "I RUNNER DOIN +15 XP"
+    ]
+   ]
+  },
+  {
+   "id": "2026-07-27_20-10-09 m5 #22",
+   "raw": "HAPA RUNNER DOIN [ASSIST 5 XP",
+   "tag": "assist",
+   "replay": [
+    [
+     "assist",
+     "HAPA RUNNER DOIN [ASSIST 5 XP"
+    ]
+   ]
+  },
+  {
+   "id": "2026-07-27_20-10-09 m5 #23",
+   "raw": "RUNNER DOIN 43032 +15 XP",
+   "tag": "down",
+   "replay": [
+    [
+     "down",
+     "RUNNER DOIN 43032 +15 XP"
+    ]
+   ]
+  },
+  {
+   "id": "2026-07-27_20-10-09 m5 #24",
+   "raw": "runner elim assist 10 xp",
+   "tag": "assist",
+   "replay": [
+    [
+     "assist",
+     "runner elim assist 10 xp"
+    ]
+   ]
+  },
+  {
+   "id": "2026-07-27_20-10-09 m5 #25",
+   "raw": "runner doin assist 15 xp",
+   "tag": "assist",
+   "replay": [
+    [
+     "assist",
+     "runner doin assist 15 xp"
+    ]
+   ]
+  },
+  {
+   "id": "2026-07-27_20-10-09 m5 #26",
+   "raw": "precision doin assist tt 25",
+   "tag": "assist",
+   "replay": []
+  },
+  {
+   "id": "2026-07-27_20-10-09 m5 #27",
+   "raw": "runner elim 10 xp",
+   "tag": "kill",
+   "replay": [
+    [
+     "kill",
+     "runner elim 10 xp"
+    ]
+   ]
+  },
+  {
+   "id": "2026-07-27_20-10-09 m6 #28",
+   "raw": "TAD PING +10 + RUNNER DOIN [ASSIST] +15 XP",
+   "tag": "assist",
+   "replay": [
+    [
+     "assist",
+     "TAD PING +10 + RUNNER DOIN [ASSIST] +15 XP"
+    ]
+   ]
+  },
+  {
+   "id": "2026-07-27_20-10-09 m6 #29",
+   "raw": "RUNNER DOIN +15 XP",
+   "tag": "down",
+   "replay": [
+    [
+     "down",
+     "RUNNER DOIN +15 XP"
+    ]
+   ]
+  },
+  {
+   "id": "2026-07-27_20-10-09 m6 #30",
+   "raw": "runner elim 10 xp",
+   "tag": "kill",
+   "replay": [
+    [
+     "kill",
+     "runner elim 10 xp"
+    ]
+   ]
+  },
+  {
+   "id": "2026-07-27_20-10-09 m6 #31",
+   "raw": "finisher 53z 50",
+   "tag": "finisher",
+   "replay": []
+  },
+  {
+   "id": "2026-07-27_20-10-09 m6 #32",
+   "raw": "RUNNER DOIN +15 XP",
+   "tag": "down",
+   "replay": [
+    [
+     "down",
+     "RUNNER DOIN +15 XP"
+    ]
+   ]
+  },
+  {
+   "id": "2026-07-27_20-10-09 m6 #33",
+   "raw": "runner doin assist 15 xp",
+   "tag": "assist",
+   "replay": [
+    [
+     "assist",
+     "runner doin assist 15 xp"
+    ]
+   ]
+  },
+  {
+   "id": "2026-07-27_20-10-09 m6 #34",
+   "raw": "finisher 53z 50",
+   "tag": "finisher",
+   "replay": []
+  },
+  {
+   "id": "2026-07-27_20-10-09 m6 #35",
+   "raw": "RUNNER ELIM [ASSIST F10 Xp",
+   "tag": "assist",
+   "replay": [
+    [
+     "assist",
+     "RUNNER ELIM [ASSIST F10 Xp"
+    ]
+   ]
+  },
+  {
+   "id": "2026-07-27_20-10-09 m6 #36",
+   "raw": "runner doin assist 15 xp",
+   "tag": "assist",
+   "replay": [
+    [
+     "assist",
+     "runner doin assist 15 xp"
+    ]
+   ]
+  },
+  {
+   "id": "2026-07-27_20-10-09 m6 #37",
+   "raw": "precision doin assist",
+   "tag": "assist",
+   "replay": []
+  },
+  {
+   "id": "2026-07-27_20-10-09 m6 #38",
+   "raw": "runner doin assist 15 xp",
+   "tag": "assist",
+   "replay": [
+    [
+     "assist",
+     "runner doin assist 15 xp"
+    ]
+   ]
+  },
+  {
+   "id": "2026-07-29_20-00-14 m1 #1",
+   "raw": "RUNNER DOIN +15 XP",
+   "tag": "down",
+   "replay": [
+    [
+     "down",
+     "RUNNER DOIN +15 XP"
+    ]
+   ]
+  },
+  {
+   "id": "2026-07-29_20-00-14 m1 #2",
+   "raw": "runner doin assist 15 xp",
+   "tag": "assist",
+   "replay": [
+    [
+     "assist",
+     "runner doin assist 15 xp"
+    ]
+   ]
+  },
+  {
+   "id": "2026-07-29_20-00-14 m1 #3",
+   "raw": "runner elim assist 10 xp tm",
+   "tag": "assist",
+   "replay": [
+    [
+     "assist",
+     "runner elim assist 10 xp tm"
+    ]
+   ]
+  },
+  {
+   "id": "2026-07-29_20-00-14 m2 #4",
+   "raw": "UESC ELIM +7 XP RUNNER DOIN +15 XP",
+   "tag": "down",
+   "replay": [
+    [
+     "down",
+     "UESC ELIM +7 XP RUNNER DOIN +15 XP"
+    ]
+   ]
+  },
+  {
+   "id": "2026-07-29_20-00-14 m2 #5",
+   "raw": "runner doin 15 xp",
+   "tag": "down",
+   "replay": [
+    [
+     "down",
+     "runner doin 15 xp"
+    ]
+   ]
+  },
+  {
+   "id": "2026-07-29_20-00-14 m2 #6",
+   "raw": "precision doin 25 mammmm wmmmm ummmi",
+   "tag": "precision",
+   "replay": []
+  },
+  {
+   "id": "2026-07-29_20-00-14 m4 #7",
+   "raw": "Z0o 8 RUNNER DOIN : +15 XP",
+   "tag": "down",
+   "replay": [
+    [
+     "down",
+     "Z0o 8 RUNNER DOIN : +15 XP"
+    ]
+   ]
+  },
+  {
+   "id": "2026-07-29_20-00-14 m4 #8",
+   "raw": "RUNNER DOIN +15 XP",
+   "tag": "down",
+   "replay": [
+    [
+     "down",
+     "RUNNER DOIN +15 XP"
+    ]
+   ]
+  },
+  {
+   "id": "2026-07-29_20-00-14 m4 #9",
+   "raw": "runner elim assist 10 xp",
+   "tag": "assist",
+   "replay": [
+    [
+     "assist",
+     "runner elim assist 10 xp"
+    ]
+   ]
+  },
+  {
+   "id": "2026-07-29_20-00-14 m4 #10",
+   "raw": "RUNNER ELIM +10 XP",
+   "tag": "kill",
+   "replay": [
+    [
+     "kill",
+     "RUNNER ELIM +10 XP"
+    ]
+   ]
+  },
+  {
+   "id": "2026-07-29_20-00-14 m4 #11",
+   "raw": "RUNNER DOIN +15 XP",
+   "tag": "down",
+   "replay": [
+    [
+     "down",
+     "RUNNER DOIN +15 XP"
+    ]
+   ]
+  },
+  {
+   "id": "2026-07-29_20-00-14 m4 #12",
+   "raw": "RUNNER ELIM [ASSIST] +10 XP",
+   "tag": "assist",
+   "replay": [
+    [
+     "assist",
+     "RUNNER ELIM [ASSIST] +10 XP"
+    ]
+   ]
+  },
+  {
+   "id": "2026-07-29_20-00-14 m4 #13",
+   "raw": "RUNNER DOIN +15 XP",
+   "tag": "down",
+   "replay": [
+    [
+     "down",
+     "RUNNER DOIN +15 XP"
+    ]
+   ]
+  },
+  {
+   "id": "2026-07-29_20-00-14 m4 #14",
+   "raw": "runner elim",
+   "tag": "kill",
+   "replay": []
+  },
+  {
+   "id": "2026-07-29_20-00-14 m4 #15",
+   "raw": "finisher 5tz 50",
+   "tag": "finisher",
+   "replay": []
+  },
+  {
+   "id": "2026-07-29_20-00-14 m4 #16",
+   "raw": "runner doin 15 xp",
+   "tag": "down",
+   "replay": [
+    [
+     "down",
+     "runner doin 15 xp"
+    ]
+   ]
+  },
+  {
+   "id": "2026-07-29_20-00-14 m4 #17",
+   "raw": "precision doin 25",
+   "tag": "precision",
+   "replay": []
+  },
+  {
+   "id": "2026-07-29_20-00-14 m4 #18",
+   "raw": "runner elim 10 xp",
+   "tag": "kill",
+   "replay": [
+    [
+     "kill",
+     "runner elim 10 xp"
+    ]
+   ]
+  },
+  {
+   "id": "2026-07-29_20-00-14 m5 #19",
+   "raw": "RUNNER DOIN [ASSIST] +15 XP",
+   "tag": "assist",
+   "replay": [
+    [
+     "assist",
+     "RUNNER DOIN [ASSIST] +15 XP"
+    ]
+   ]
+  },
+  {
+   "id": "2026-07-29_20-00-14 m5 #20",
+   "raw": "runner elim 10 xp",
+   "tag": "kill",
+   "replay": [
+    [
+     "kill",
+     "runner elim 10 xp"
+    ]
+   ]
+  },
+  {
+   "id": "2026-07-29_20-00-14 m5 #21",
+   "raw": "RUNNER DOIN +15 XP",
+   "tag": "down",
+   "replay": [
+    [
+     "down",
+     "RUNNER DOIN +15 XP"
+    ]
+   ]
+  },
+  {
+   "id": "2026-07-29_20-00-14 m5 #22",
+   "raw": "runner elim 10 xp",
+   "tag": "kill",
+   "replay": [
+    [
+     "kill",
+     "runner elim 10 xp"
+    ]
+   ]
+  },
+  {
+   "id": "2026-07-29_20-00-14 m5 #23",
+   "raw": "finisher 5z 50",
+   "tag": "finisher",
+   "replay": []
+  },
+  {
+   "id": "2026-07-29_20-00-14 m5 #24",
+   "raw": "runner doin",
+   "tag": "down",
+   "replay": []
+  },
+  {
+   "id": "2026-07-29_20-00-14 m5 #25",
+   "raw": "runner elim assist vmmmm",
+   "tag": "assist",
+   "replay": []
+  },
+  {
+   "id": "2026-07-29_20-00-14 m6 #26",
+   "raw": "RUNNER DOIN +15 XP",
+   "tag": "down",
+   "replay": [
+    [
+     "down",
+     "RUNNER DOIN +15 XP"
+    ]
+   ]
+  },
+  {
+   "id": "2026-07-29_20-00-14 m6 #27",
+   "raw": "RUNNER ELIM [ASSIST] +10 XP",
+   "tag": "assist",
+   "replay": [
+    [
+     "assist",
+     "RUNNER ELIM [ASSIST] +10 XP"
+    ]
+   ]
+  },
+  {
+   "id": "2026-07-29_20-00-14 m6 #28",
+   "raw": "RUNNER DOIN +15 XP",
+   "tag": "down",
+   "replay": [
+    [
+     "down",
+     "RUNNER DOIN +15 XP"
+    ]
+   ]
+  },
+  {
+   "id": "2026-07-29_20-00-14 m6 #29",
+   "raw": "runner elim 10 xp",
+   "tag": "kill",
+   "replay": [
+    [
+     "kill",
+     "runner elim 10 xp"
+    ]
+   ]
+  },
+  {
+   "id": "2026-07-29_20-00-14 m6 #30",
+   "raw": "finisher 53z 50",
+   "tag": "finisher",
+   "replay": []
+  },
+  {
+   "id": "2026-07-29_20-00-14 m7 #31",
+   "raw": "RUNNER DOIN [ASSIST] +15 XP ISTM E StM",
+   "tag": "assist",
+   "replay": [
+    [
+     "assist",
+     "RUNNER DOIN [ASSIST] +15 XP ISTM E StM"
+    ]
+   ]
+  },
+  {
+   "id": "2026-08-08_21-34-45 m1 #1",
+   "raw": "RUNNER DOIN [ASSIST] +15 XP",
+   "tag": "assist",
+   "replay": [
+    [
+     "assist",
+     "RUNNER DOIN [ASSIST] +15 XP"
+    ]
+   ]
+  },
+  {
+   "id": "2026-08-08_21-34-45 m1 #2",
+   "raw": "runner doin assist 15 xp",
+   "tag": "assist",
+   "replay": [
+    [
+     "assist",
+     "runner doin assist 15 xp"
+    ]
+   ]
+  },
+  {
+   "id": "2026-08-08_21-34-45 m1 #3",
+   "raw": "precision doin assist tt 25 i",
+   "tag": "assist",
+   "replay": []
+  },
+  {
+   "id": "2026-08-08_21-34-45 m1 #4",
+   "raw": "runner elim assist 10 xp",
+   "tag": "assist",
+   "replay": [
+    [
+     "assist",
+     "runner elim assist 10 xp"
+    ]
+   ]
+  },
+  {
+   "id": "2026-08-08_21-34-45 m1 #5",
+   "raw": "RUNNER ELIM [ASSIST] +10 XP",
+   "tag": "assist",
+   "replay": [
+    [
+     "assist",
+     "RUNNER ELIM [ASSIST] +10 XP"
+    ]
+   ]
+  },
+  {
+   "id": "2026-08-08_21-34-45 m1 #6",
+   "raw": "RUNNER DOIN [ASSIST] +15 XP",
+   "tag": "assist",
+   "replay": [
+    [
+     "assist",
+     "RUNNER DOIN [ASSIST] +15 XP"
+    ]
+   ]
+  },
+  {
+   "id": "2026-08-08_21-34-45 m1 #7",
+   "raw": "SMSTE RUNNER ELIM +10 XP",
+   "tag": "kill",
+   "replay": [
+    [
+     "kill",
+     "SMSTE RUNNER ELIM +10 XP"
+    ]
+   ]
+  },
+  {
+   "id": "2026-08-08_21-34-45 m1 #8",
+   "raw": "runner doin 15 xp",
+   "tag": "down",
+   "replay": [
+    [
+     "down",
+     "runner doin 15 xp"
+    ]
+   ]
+  },
+  {
+   "id": "2026-08-08_21-34-45 m1 #9",
+   "raw": "precision doin 5z 25",
+   "tag": "precision",
+   "replay": []
+  },
+  {
+   "id": "2026-08-08_21-34-45 m1 #10",
+   "raw": "RUNNER DOWN [ASSIST] 1 +15 XP",
+   "tag": "assist",
+   "replay": [
+    [
+     "assist",
+     "RUNNER DOWN [ASSIST] 1 +15 XP"
+    ]
+   ]
+  },
+  {
+   "id": "2026-08-08_21-34-45 m1 #11",
+   "raw": "runner elim assist 10 xp",
+   "tag": "assist",
+   "replay": [
+    [
+     "assist",
+     "runner elim assist 10 xp"
+    ]
+   ]
+  },
+  {
+   "id": "2026-08-08_21-34-45 m2 #12",
+   "raw": "RUNNER DOIN [ASSIST] +15 XP",
+   "tag": "assist",
+   "replay": [
+    [
+     "assist",
+     "RUNNER DOIN [ASSIST] +15 XP"
+    ]
+   ]
+  },
+  {
+   "id": "2026-08-08_21-34-45 m2 #13",
+   "raw": "runner elim 10 xp",
+   "tag": "kill",
+   "replay": [
+    [
+     "kill",
+     "runner elim 10 xp"
+    ]
+   ]
+  },
+  {
+   "id": "2026-08-08_21-34-45 m2 #14",
+   "raw": "RUNNER DOIN +15 XP",
+   "tag": "down",
+   "replay": [
+    [
+     "down",
+     "RUNNER DOIN +15 XP"
+    ]
+   ]
+  },
+  {
+   "id": "2026-08-08_21-34-45 m2 #15",
+   "raw": "runner elim 10 xp",
+   "tag": "kill",
+   "replay": [
+    [
+     "kill",
+     "runner elim 10 xp"
+    ]
+   ]
+  },
+  {
+   "id": "2026-08-08_21-34-45 m2 #16",
+   "raw": "RUNNER DOIN +15 XP",
+   "tag": "down",
+   "replay": [
+    [
+     "down",
+     "RUNNER DOIN +15 XP"
+    ]
+   ]
+  },
+  {
+   "id": "2026-08-08_21-34-45 m2 #17",
+   "raw": "RUNNER ELIM +10 XP",
+   "tag": "kill",
+   "replay": [
+    [
+     "kill",
+     "RUNNER ELIM +10 XP"
+    ]
+   ]
+  },
+  {
+   "id": "2026-08-08_21-34-45 m2 #18",
+   "raw": "9i6 RUNNER DOIN [ASSIST] +15 XP ACH ATT^ ATTACH ATTACH ATTACH",
+   "tag": "assist",
+   "replay": [
+    [
+     "assist",
+     "9i6 RUNNER DOIN [ASSIST] +15 XP ACH ATT^ ATTACH ATTACH ATTACH"
+    ]
+   ]
+  },
+  {
+   "id": "2026-08-08_21-34-45 m2 #19",
+   "raw": "runner elim assist 10 xp",
+   "tag": "assist",
+   "replay": [
+    [
+     "assist",
+     "runner elim assist 10 xp"
+    ]
+   ]
+  }
+ ]
+}

@@ -319,7 +319,7 @@ def is_suppressed(cfg: dict, lines) -> bool:
     82 against the "RUNNER DAMAGE" suppress phrase while scoring 91 against the
     real "RUNNER DOWN" trigger. Whichever the text matches better wins."""
     from rapidfuzz import fuzz
-    from detector import _normalize, phrase_matches
+    from detector import _normalize, fold_ocr_tokens, phrase_matches
     phrases = cfg.get("suppress_phrases",
                       ["SELF REVIVE", "GIVE UP", "RUNNER DAMAGE",
                        "CREW REVIVES", "INVENTORY VALUE"])
@@ -333,7 +333,11 @@ def is_suppressed(cfg: dict, lines) -> bool:
     triggers = cfg.get("popup_trigger_phrases",
                        ["RUNNER DOWN", "PRECISION DOWN", "FINISHER", "RUNNER ELIM"])
     t_thresh = cfg.get("popup_match_threshold", 85)
-    best_trigger = max((fuzz.partial_ratio(_normalize(t), blob)
+    # Score the trigger side with DOIN read as DOWN (detector.OCR_TOKEN_FIXES):
+    # otherwise a clean GIVE UP (100) beats every 'RUNNER DOIN' kill (90.9) and a
+    # kill traded on the death screen is dropped. The suppress side is unchanged.
+    tblob = fold_ocr_tokens(blob)
+    best_trigger = max((fuzz.partial_ratio(_normalize(t), tblob)
                         for t in triggers if str(t).strip()), default=0)
     if best_trigger >= t_thresh:
         best_suppress = max(fuzz.partial_ratio(h, blob) for h in hits)
@@ -342,11 +346,24 @@ def is_suppressed(cfg: dict, lines) -> bool:
     return True
 
 
+# The reward each popup pays: +10 elim, +15 down, +25 precision, +50 finisher.
+_REWARD_OF_TAG = {"kill": "10", "down": "15", "precision": "25", "finisher": "50"}
+
+
 def classify_event(raw_line: str) -> str:
     """Tag a kill by type from its popup text (for clip names + the recap).
-    Fuzzy so OCR slips like 'Runner Dorm' still read as a down."""
-    from detector import _normalize, phrase_matches
-    b = _normalize(raw_line)  # brackets stripped, so "[ASSIST]" -> "assist"
+
+    The tag is the trigger phrase that actually matched best, scored on
+    glyph-folded tokens (detector._tokens), not the first keyword found
+    anywhere. The old order-of-checks read a down segment as 'precision' when a
+    garbled PRECISION from the popup below bled into it, and fell through to
+    'kill' (an ELIM) whenever no keyword passed, so reading DOIN as DOWN in
+    the detector would have minted false elims without this."""
+    import re
+
+    from rapidfuzz import fuzz
+
+    from detector import _tokens, phrase_matches, phrase_windows, skel_phrase
 
     # A manual "+1 KILL" press is you correcting a DOWN the OCR missed, so it
     # must be distinguishable from a real RUNNER ELIM popup: both used to tag
@@ -355,22 +372,52 @@ def classify_event(raw_line: str) -> str:
     if raw_line.startswith("MANUAL"):
         return "manual_kill"
 
-    def has(p):
-        return phrase_matches(p, b, 78)
-
-    # The [ASSIST] marker wins over everything: a "PRECISION DOWN [ASSIST]" is
-    # an assist, not your precision kill. Label it distinctly.
-    if has("assist"):
-        return "assist"
-    if has("precision"):
-        return "precision"
-    if has("finisher"):
-        return "finisher"
-    if has("down") or has("runner down"):
-        return "down"
-    if has("elim"):        # solo "RUNNER ELIM" (no assist marker) = your kill
+    toks = _tokens(raw_line)
+    sks = [sk for _, sk in toks]
+    if not sks:
         return "kill"
-    return "kill"
+    phrases = (("runner down", "down"), ("precision down", "precision"),
+               ("runner elim", "kill"), ("finisher", "finisher"))
+    cands = [(score, i, j, tag) for p, tag in phrases
+             for score, i, j in phrase_windows(toks, skel_phrase(p), 80)]
+    if cands:
+        best = max(c[0] for c in cands)
+        top = [c for c in cands if c[0] == best]
+        if len({c[3] for c in top}) > 1:
+            # A garble can score the same against two phrases ('RUNNER ELN' is as
+            # close to DOWN as to ELIM). Let the popup's own reward break the tie.
+            nums = set(re.findall(r"(?<!\d)(10|15|25|50)(?!\d)", raw_line))
+            by_reward = [c for c in top if _REWARD_OF_TAG[c[3]] in nums]
+            if by_reward:
+                top = by_reward
+        _s, i, j, tag = min(top, key=lambda c: c[1])     # earliest on a tie
+        # The [ASSIST] marker is glued to ITS phrase (directly after the phrase
+        # word in 44 of 44 real reads). Look only in the few tokens after this
+        # phrase, stopping at the next phrase: when a stacked frame reads as one
+        # popup, a NEIGHBOUR's [ASSIST] must not turn your own kill into an
+        # assist (and a lost own kill). There is deliberately no loose "any
+        # word between phrase and reward is an assist" rule: real junk like
+        # 'SMSTE' / 'ISTM' sits there and would flip own kills.
+        nxt = min([c[1] for c in cands if c[1] >= j] + [len(sks)])
+        # Score both the folded token and the plain one with a glued reward's
+        # trailing digits removed ('[ASSIT]+15' -> 'assit'), and adjacent pairs
+        # joined, so a split marker ('[AS SIST]') still reads as one.
+        stop = min(nxt, j + 3)
+        norms = [nm for nm, _ in toks]
+        look = (sks[j:stop] + [sks[j - 1]]
+                + [re.sub(r"\d+$", "", nm) for nm in norms[j:stop] + [norms[j - 1]]]
+                + [a + b for a, b in zip(sks[j:stop], sks[j + 1:stop])]
+                + [re.sub(r"\d+$", "", a + b) for a, b in zip(norms[j:stop], norms[j + 1:stop])])
+        if any("assist" in t or (5 <= len(t) <= 8 and fuzz.ratio("assist", t) >= 80)
+               for t in look):
+            return "assist"
+        return tag
+    # No phrase window passed (a heavily garbled read the detector still fired
+    # on): fall back to the closest phrase, never an unconditional 'kill'.
+    blob = " ".join(sks)
+    if phrase_matches("assist", blob, 78):
+        return "assist"
+    return max((fuzz.partial_ratio(skel_phrase(p), blob), tag) for p, tag in phrases)[1]
 
 
 def rename_clip_async(obs, session_id: str, tag: str, count: int, on_done=None) -> None:
