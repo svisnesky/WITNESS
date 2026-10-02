@@ -270,3 +270,38 @@ def test_close_is_final_until_connect():
     assert c.get_record_directory() == ""
     assert c.reconnects == 0
     c.close()                                   # twice is fine
+
+
+# --- replay_buffer_ok -----------------------------------------------------------
+
+class _Fresh:
+    def __init__(self, status):
+        self.status = status
+        self.starts = 0
+
+    def get_version(self):
+        return type("V", (), {"obs_version": "32", "obs_web_socket_version": "5"})()
+
+    def get_replay_buffer_status(self):
+        if isinstance(self.status, Exception):
+            raise self.status
+        return type("S", (), {"output_active": self.status})()
+
+    def start_replay_buffer(self):
+        self.starts += 1
+
+
+def _connected(fake, auto=True):
+    c = obs_client.OBSClient(auto_start_replay_buffer=auto)
+    c._connect_client = lambda: setattr(c, "_client", fake)
+    c.connect()
+    return c
+
+
+def test_replay_buffer_ok_after_connect():
+    assert _connected(_Fresh(True)).replay_buffer_ok is True
+    off = _Fresh(False)
+    assert _connected(off).replay_buffer_ok is True and off.starts == 1
+    disabled = _Fresh(Refused("GetReplayBufferStatus", 604, "not available"))
+    assert _connected(disabled).replay_buffer_ok is False
+    assert _connected(_Fresh(True), auto=False).replay_buffer_ok is None

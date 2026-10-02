@@ -66,6 +66,11 @@ class OBSClient:
         self.counter_source = counter_source
         self.counter_format = counter_format
         self.auto_start_replay_buffer = auto_start_replay_buffer
+        # True/False once connect() has checked (and if need be started) the
+        # Replay Buffer; None when it wasn't checked. False means OBS refused
+        # it, which almost always means Settings > Output > Replay Buffer is
+        # disabled: kills will count but NO clip will save.
+        self.replay_buffer_ok: Optional[bool] = None
         self._client = None
         self._closed = False
         self._bad_counter_format = False
@@ -83,7 +88,7 @@ class OBSClient:
             print(f"Connected to OBS {version.obs_version} "
                   f"(websocket {version.obs_web_socket_version}).")
             if self.auto_start_replay_buffer:
-                self._ensure_replay_buffer()
+                self.replay_buffer_ok = self._ensure_replay_buffer()
 
     def _connect_client(self):
         import obsws_python as obs
@@ -151,7 +156,8 @@ class OBSClient:
                     print(f"OBS {label} failed: {e}")
                     return default
 
-    def _ensure_replay_buffer(self):
+    def _ensure_replay_buffer(self) -> bool:
+        """Start the Replay Buffer if it is off. True when it is running."""
         try:
             status = self._client.get_replay_buffer_status()
             if not status.output_active:
@@ -159,9 +165,11 @@ class OBSClient:
                 print("Replay Buffer was off — started it.")
             else:
                 print("Replay Buffer already running.")
+            return True
         except Exception as e:
             print(f"WARNING: could not verify/start Replay Buffer: {e}")
             print("  -> In OBS: Settings > Output > Replay Buffer must be enabled.")
+            return False
 
     def save_replay(self) -> bool:
         """Write the current Replay Buffer to a clip. Returns True on success.
@@ -194,6 +202,7 @@ class OBSClient:
                 lambda: (self._client.start_replay_buffer(), True)[1],
                 default=False, label="restart replay buffer")
             if started:
+                self.replay_buffer_ok = True
                 print("  [obs] Replay Buffer had STOPPED — restarted it. That "
                       "clip is lost; the rest of the session will record.")
             return bool(started)
@@ -289,6 +298,8 @@ class OBSClient:
 
 class DryRunOBS:
     """Stand-in used by --dry-run: logs actions instead of hitting OBS."""
+
+    replay_buffer_ok = True
 
     def connect(self):
         print("[dry-run] (not connecting to OBS)")
