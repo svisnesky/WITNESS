@@ -612,3 +612,96 @@ def test_late_result_reaches_the_dashboard():
     t.join(5)
     assert st.update_msg.startswith("Updated 1 file(s)")
     assert st.update_changed is True and st._updating is False
+
+
+# --- the tk panel's tiles come from the tally ------------------------------------
+
+# Event lines from a real session log (2026-08-08), in order. The game's
+# panels said 2 + 2 downs; the log's own tally was downs 4, precision 1,
+# assists 11. The old tiles (KILL # lines only, DOWNS = down + kill) showed
+# 6 / 0 / 0 / 0.
+REAL_0808 = [
+    "(not a kill: assist) [assist]: 'RUNNER DOIN [ASSIST] +15 XP'",
+    "(not a kill: assist) [assist]: 'runner doin assist 15 xp'",
+    "(not a kill: assist) [assist]: 'precision doin assist tt 25 i'",
+    "(not a kill: assist) [assist]: 'runner elim assist 10 xp'",
+    "(not a kill: assist) [assist]: 'RUNNER ELIM [ASSIST] +10 XP'",
+    "(not a kill: assist) [assist]: 'RUNNER DOIN [ASSIST] +15 XP'",
+    "KILL #1 [kill]: 'SMSTE RUNNER ELIM +10 XP'",
+    "KILL #2 [down]: 'runner doin 15 xp'",
+    "(not a kill: precision) [precision]: 'precision doin 5z 25'",
+    "(not a kill: assist) [assist]: 'RUNNER DOWN [ASSIST] 1 +15 XP'",
+    "(not a kill: assist) [assist]: 'runner elim assist 10 xp'",
+    "  [exfil] match stats: 1 runner elims, 2 downs, 29 combatants, 698 dmg",
+    "  [reconcile] game credited more downs than detected — added 1, count now 3",
+    "(not a kill: assist) [assist]: 'RUNNER DOIN [ASSIST] +15 XP'",
+    "KILL #4 [kill]: 'runner elim 10 xp'",
+    "KILL #5 [down]: 'RUNNER DOIN +15 XP'",
+    "(not a kill: kill) [kill]: 'runner elim 10 xp'",
+    "KILL #6 [down]: 'RUNNER DOIN +15 XP'",
+    "KILL #7 [kill]: 'RUNNER ELIM +10 XP'",
+    "(not a kill: assist) [assist]: '9i6 RUNNER DOIN [ASSIST] +15 XP ACH ATT^ ATTACH'",
+    "(not a kill: assist) [assist]: 'runner elim assist 10 xp'",
+    "  [exfil] match stats: 3 runner elims, 2 downs, 16 combatants, 585 dmg",
+]
+
+
+def test_gui_tiles_follow_the_tally():
+    tags = []
+    for line in REAL_0808:
+        gui.parse_console_line(line, tags)
+    assert gui.tile_values(tags) == {"downs": 4, "precision": 1,
+                                     "finishers": 0, "assists": 11}
+
+
+def test_tiles_through_the_panels_drain(monkeypatch):
+    panel = gui.ControlPanel.__new__(gui.ControlPanel)
+    panel.tags, panel.recent, panel.latest, panel._last_error = [], [], None, ""
+    panel._refresh_live = lambda: None
+    panel._set_status = lambda *a, **k: None
+    # the exfil report is ONE print() carrying several lines
+    chunk = REAL_0808[11] + "\n  [audit] downs: game 2, detected 1 — missed 1"
+    for line in REAL_0808[:11] + chunk.splitlines() + REAL_0808[12:]:
+        panel._drain_line(line)
+    assert gui.tile_values(panel.tags)["downs"] == 4
+    assert [t for _, t in panel.recent] == ["kill", "down", "kill", "down",
+                                            "down", "kill"]   # KILL # lines only
+    assert panel.latest[0] == "kill"
+
+
+def test_parse_console_line_reads_not_a_kill_and_reconcile_lines():
+    tags = []
+    gui.parse_console_line("(not a kill: finisher) [finisher]: 'FINISHER +50'", tags)
+    gui.parse_console_line("  [reconcile] game credited more runner elims than "
+                           "detected — added 2", tags)
+    assert tags == ["finisher", "elim", "elim"]
+    for noise in ("  [exfil] outcome: exfiltrated",
+                  "  [reconcile] the game shows at least 3 runner(s) downed or "
+                  "eliminated — added 1, count now 9",     # headline floor
+                  "Session over: 9 kills (downs 4, elims 5)",
+                  "RESULT: 3 kills", ""):
+        gui.parse_console_line(noise, tags)
+    assert tags == ["finisher", "elim", "elim"]
+
+
+def test_reconciled_events_land_before_the_match_break():
+    brk = gui._match_break()
+    tags = []
+    for line in ("KILL #1 [kill]: 'RUNNER ELIM +10 XP'",
+                 "  [exfil] match stats: 2 runner elims, 0 downs",
+                 "  [reconcile] game credited more runner elims than detected "
+                 "— added 1",
+                 "KILL #3 [finisher]: 'FINISHER +50'"):
+        gui.parse_console_line(line, tags)
+    # main.py's session_tags order: reconciled elims close the match they
+    # belong to, so the next match's opening FINISHER can't fold into one
+    assert tags == ["kill", "elim", brk, "finisher"]
+
+
+def test_parse_console_line_without_match_break_attr_does_not_raise(monkeypatch):
+    import exfil_stats
+    monkeypatch.delattr(exfil_stats, "MATCH_BREAK", raising=False)
+    tags = []
+    gui.parse_console_line("  [exfil] match stats: 1 runner elims, 2 downs", tags)
+    assert tags == ["exfil"]
+    assert gui.tile_values(tags + ["down"])["downs"] == 1

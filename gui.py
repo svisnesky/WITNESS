@@ -9,6 +9,7 @@ Uses only the standard library (tkinter) plus this project's own modules.
 
 import os
 import queue
+import re
 import subprocess
 import sys
 import threading
@@ -296,6 +297,67 @@ def _set_attr(obj, name, value) -> None:
         pass
 
 
+# --- the tk panel's tiles ------------------------------------------------------
+# The tiles used to count only 'KILL #' lines and show DOWNS = down + kill: the
+# retired rule that filed every RUNNER ELIM under downs, while PRECISION and
+# ASSISTS never saw the '(not a kill: ...)' lines those events print. They now
+# replay the console into the same ordered tag list main.py keeps, and DOWNS
+# comes from exfil_stats.count_events, the tally the exfil audit uses.
+# Measured on Stan's audited matches: DOWNS exact on 13/13 (was 10/13).
+
+_EVENT_RE = re.compile(r"^(?:KILL #\d+|\(not a kill: \w+\)) \[(\w+)\]")
+_RECON_RE = re.compile(
+    r"\[reconcile\] game credited more (downs|runner elims) .*added (\d+)")
+
+
+def _match_break() -> str:
+    """exfil_stats.MATCH_BREAK, or its value before the detection change that
+    adds it, so a missing attribute can't silently kill the tiles."""
+    try:
+        import exfil_stats
+        return getattr(exfil_stats, "MATCH_BREAK", "exfil")
+    except Exception:
+        return "exfil"
+
+
+def parse_console_line(line: str, tags: list) -> None:
+    """Append what one console line means to the ordered session tag list:
+    the tag of a 'KILL #N [t]' or '(not a kill: x) [t]' line, 'down'/'elim'
+    x N for a '[reconcile] game credited more downs/runner elims ... added N'
+    line, and the match break for '[exfil] match stats'. Other lines (the
+    headline-floor reconcile included) add nothing."""
+    s = (line or "").strip()
+    m = _EVENT_RE.match(s)
+    if m:
+        tags.append(m.group(1))
+        return
+    m = _RECON_RE.search(s)
+    if m:
+        add = ["down" if m.group(1) == "downs" else "elim"] * int(m.group(2))
+        brk = _match_break()
+        if tags and tags[-1] == brk:
+            # The stats line prints before the reconcile lines, but main.py
+            # puts reconciled events BEFORE the break. Same order here, or a
+            # reconciled elim would fold the next match's first FINISHER.
+            tags[-1:-1] = add
+        else:
+            tags.extend(add)
+        return
+    if "[exfil] match stats" in s:
+        tags.append(_match_break())
+
+
+def tile_values(tags) -> dict:
+    """The four tiles from the ordered tag list. DOWNS is count_events' downs,
+    so it matches the audit; the rest are plain counts of their tag."""
+    import exfil_stats
+    downs, _elims = exfil_stats.count_events(tags)
+    return {"downs": downs,
+            "precision": sum(1 for t in tags if t == "precision"),
+            "finishers": sum(1 for t in tags if t == "finisher"),
+            "assists": sum(1 for t in tags if t == "assist")}
+
+
 class QueueWriter:
     """File-like object that funnels print() output into a queue for the GUI."""
     def __init__(self, q):
@@ -528,13 +590,7 @@ class ControlPanel:
     def _refresh_live(self):
         if not getattr(self, "_live_built", False):
             return
-        c = {}
-        for t in self.tags:
-            c[t] = c.get(t, 0) + 1
-        vals = {"downs": c.get("down", 0) + c.get("kill", 0),
-                "precision": c.get("precision", 0),
-                "finishers": c.get("finisher", 0),
-                "assists": c.get("assist", 0)}
+        vals = tile_values(self.tags)
         for k, v in vals.items():
             self._tile_vals[k].config(text=str(v))
         for w in self.feed.winfo_children():
@@ -733,16 +789,20 @@ class ControlPanel:
         self.root.after(1000, self._tick)
 
     def _parse_kill(self, line):
-        # 'KILL #7 [precision]: ...'
+        # 'KILL #7 [down]: ...', '(not a kill: precision) [precision]: ...',
+        # '[reconcile] ...', '[exfil] match stats: ...': every event, in order,
+        # so the tiles come from the same tally as the audit.
         try:
-            import re
-            m = re.search(r"KILL #\d+ \[(\w+)\]", line)
-            if m:
+            before = len(self.tags)
+            parse_console_line(line, self.tags)
+            if len(self.tags) == before:
+                return
+            m = re.match(r"\s*KILL #\d+ \[(\w+)\]", line)
+            if m:      # the feed and LATEST CLIP stay kills only
                 tag = m.group(1)
-                self.tags.append(tag)
                 self.recent.append((time.strftime("%H:%M:%S"), tag))
                 self.latest = (tag, time.strftime("%H:%M"))
-                self._refresh_live()
+            self._refresh_live()
         except Exception:
             pass
 
@@ -779,7 +839,8 @@ class ControlPanel:
             self._watching = True
             self._set_status(f"{self.DOT}  WATCHING", GREEN,
                              "SESSION  0:00")
-        if "KILL #" in s and "[" in s:
+        if ((("KILL #" in s or "(not a kill:" in s) and "[" in s)
+                or "[reconcile]" in s or "[exfil] match stats" in s):
             self._parse_kill(s)
 
 class SettingsWindow:
