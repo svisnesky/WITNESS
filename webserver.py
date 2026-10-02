@@ -358,7 +358,9 @@ class LiveState:
                     self._rebuilding = False
 
         threading.Thread(target=work, daemon=True).start()
-        return {"ok": True, "started": session}
+        # the web route passes a full path; report just the session's name
+        return {"ok": True,
+                "started": os.path.basename(str(session).rstrip("/\\")) or session}
 
     def add_replay(self, label, path):
         with self._lock:
@@ -555,6 +557,54 @@ def _record_dir(state) -> str:
         return ""
 
 
+_SESSIONS_DIR = "Marathon Sessions"
+
+
+def _web_session_dir(state, which) -> str:
+    """The session folder a DASHBOARD request names, or '' if it names anything
+    else.
+
+    main._resolve_session_dir is built for the --rebuild CLI and accepts any
+    existing folder, so '/Users/me/Pictures' or '../..' in a request used to be
+    tidied (images moved into exfil/, videos into clips/), rendered into and
+    thumbnailed. A web request may only name a session: 'latest', or one bare
+    folder name directly inside a 'Marathon Sessions' folder.
+
+    Finding the root is left to main._resolve_session_dir (cached record dir,
+    then asking OBS) so the Archive and the clip viewer keep working right after
+    launch; this only adds the name check and the containment check."""
+    which = str(which or "").strip()
+    try:
+        import main
+    except Exception:
+        return ""
+    cfg = getattr(state, "_cfg", None) or {}
+    nc = os.path.normcase
+    if which in ("", "latest"):
+        sdir = main._resolve_session_dir(cfg, "latest")
+        return os.path.abspath(sdir) if sdir and os.path.isdir(sdir) else ""
+    if not _SAFE_PART.match(which) or which in (".", ".."):
+        return ""
+    sdir = main._resolve_session_dir(cfg, which)
+    # Relative = it came from the CLI's "existing folder" branch, i.e. a folder
+    # in the current directory that merely shares the name. A real session is
+    # always <record dir>/Marathon Sessions/<name>, an absolute path.
+    if not sdir or not os.path.isabs(sdir) or not os.path.isdir(sdir):
+        return ""
+    parent = os.path.dirname(sdir)
+    if nc(os.path.basename(parent)) != nc(_SESSIONS_DIR):
+        return ""
+    # Must sit DIRECTLY in that folder once links are resolved, under the very
+    # name asked for. Comparing basenames (not full paths) keeps a mapped drive
+    # that realpath() turns into a UNC path working; '...' or 'x.' (which
+    # Windows collapses onto another folder) fail the name match.
+    real = os.path.realpath(sdir)
+    if (nc(os.path.dirname(real)) != nc(os.path.realpath(parent))
+            or nc(os.path.basename(real)) != nc(which)):
+        return ""
+    return sdir
+
+
 def _api_info(state) -> dict:
     """Identity for the iOS app: proves this really is WITNESS, and which
     API shape it speaks, before the app trusts anything else it says."""
@@ -604,8 +654,7 @@ def _api_session(state, session: str) -> dict:
     data["report"] = ""
     if match and match.get("has_report"):
         try:
-            import main
-            sdir = main._resolve_session_dir(state._cfg or {}, sid)
+            sdir = _web_session_dir(state, sid)
             with open(os.path.join(sdir, "witness_report.txt"), encoding="utf-8") as f:
                 data["report"] = f.read()
         except Exception:
@@ -622,11 +671,12 @@ def _clip_data(state, session: str) -> dict:
     markers on the scrub bar."""
     try:
         import clip_index
-        import main
         import montage
         cfg = state._cfg or {}
-        sdir = main._resolve_session_dir(cfg, session or "latest")
+        sdir = _web_session_dir(state, session or "latest")
         if not sdir:
+            if str(session or "latest") != "latest":
+                return {"error": "couldn't find that session folder", "clips": []}
             return {"error": "no session folder found — press START once so the "
                              "app learns your OBS folder", "clips": []}
         base = os.path.dirname(os.path.abspath(__file__))
@@ -643,10 +693,11 @@ def _clip_thumb(state, session: str, rel: str) -> str:
     Returns '' for anything that isn't a real clip inside the session."""
     try:
         import export_reel
-        import main
         import montage
         cfg = state._cfg or {}
-        sdir = main._resolve_session_dir(cfg, session or "latest")
+        # The session is checked too, not just rel: even a GET writes a .thumbs
+        # folder into whatever directory it resolves to.
+        sdir = _web_session_dir(state, session or "latest")
         if not sdir or not rel or ".." in rel.replace("\\", "/").split("/"):
             return ""
         root = os.path.realpath(sdir)
@@ -1396,11 +1447,20 @@ def start_web(state, port, base_dir, host="0.0.0.0"):
                         body = json.loads(self._body or b"{}")
                     except Exception:
                         body = {}
-                    self._send(json.dumps(state.request_export(
-                        base_dir, str(body.get("session") or "latest"),
-                        body.get("clips") or [],
-                        body.get("opts") or {})).encode(),
-                        "application/json", cache=False)
+                    if not isinstance(body, dict):
+                        body = {}
+                    # Validate the session HERE: an export writes <dir>/reels/,
+                    # so a request must not be able to name any other folder.
+                    sdir = _web_session_dir(state, str(body.get("session") or "latest"))
+                    if not sdir:
+                        result = {"ok": False,
+                                  "error": "couldn't find that session folder"}
+                    else:
+                        result = state.request_export(
+                            base_dir, sdir, body.get("clips") or [],
+                            body.get("opts") or {})
+                    self._send(json.dumps(result).encode(),
+                               "application/json", cache=False)
                 elif path == "/update":
                     self._send(json.dumps(state.request_update(base_dir)).encode(),
                                "application/json", cache=False)
@@ -1412,8 +1472,17 @@ def start_web(state, port, base_dir, host="0.0.0.0"):
                         body = json.loads(self._body or b"{}")
                     except Exception:
                         body = {}
-                    sess = str(body.get("session") or "latest")
-                    result = state.request_rebuild(sess)
+                    if not isinstance(body, dict):
+                        body = {}
+                    # A rebuild TIDIES the folder (moves every image into exfil/
+                    # and every video into clips/), so only a real session may
+                    # be named. The validated absolute path is what's passed on.
+                    sdir = _web_session_dir(state, str(body.get("session") or "latest"))
+                    if not sdir:
+                        result = {"ok": False,
+                                  "error": "couldn't find that session folder"}
+                    else:
+                        result = state.request_rebuild(sdir)
                     self._send(json.dumps(result).encode(),
                                "application/json", cache=False)
                 elif path == "/start":
