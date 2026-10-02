@@ -35,3 +35,8 @@ cache_medals/
 elevenlabs_key.txt
 .record_dir
 update_status.txt
+
+# Xcode (ios/) — per-user state and build output
+xcuserdata/
+*.xcuserstate
+DerivedData/

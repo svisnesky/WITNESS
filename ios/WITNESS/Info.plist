@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Finds WITNESS on the PC via Bonjour. Must match discovery.py SERVICE_TYPE. -->
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_witness._tcp</string>
+	</array>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>WITNESS looks for your gaming PC on your Wi-Fi so you never have to type its address.</string>
+	<!-- The PC dashboard is plain HTTP on your LAN; there is no internet server. -->
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+	</dict>
+	<!-- Dark launch screen: the generated default is white, a bright flash
+	     before a dark app (and in a dark room next to the monitor). -->
+	<key>UILaunchScreen</key>
+	<dict>
+		<key>UIColorName</key>
+		<string>LaunchBackground</string>
+	</dict>
+</dict>
+</plist>
