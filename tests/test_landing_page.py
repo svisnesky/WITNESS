@@ -195,4 +195,3 @@ def test_inline_script_keeps_boot_modes_and_reveal(page):
 def test_page_still_renders_without_javascript(page):
     m = re.search(r"<noscript>(.*?)</noscript>", page.src, re.S)
     assert m and ".reveal" in m.group(1) and "#boot" in m.group(1)
-
