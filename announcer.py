@@ -1,10 +1,20 @@
 """Reel announcer voiceover — neural voice when possible, offline fallback.
 
 Voice quality tiers, tried in order:
+  0. ElevenLabs, only if you added an API key (elevenlabs_key.txt or the
+     ELEVENLABS_API_KEY env var). Sends the text to ElevenLabs.
   1. edge-tts (Microsoft neural voices — sounds human; free, no API key;
      needs internet at reel-build time): pip install edge-tts
+     ONLINE: the text to speak (your announcer_player_name, and in the WITNESS
+     Report other players' gamertags) goes to Microsoft's speech service.
+     tts_online: false in config.yaml skips this tier; the code default is
+     on, so a config without the key behaves exactly as before.
   2. Windows System.Speech via PowerShell (offline, robotic — the fallback)
   3. macOS `say` (development testing)
+
+The switch is read once per session with configure(cfg), or per call with
+online=True/False on synth_to_wav / ensure_callout / ensure_medal_sounds.
+It gates edge-tts only: ElevenLabs is already opt-in by key.
 
 Pick the voice with announcer_voice in config.yaml (e.g. "en-US-GuyNeural",
 "en-US-ChristopherNeural", "en-GB-RyanNeural"). List them all with:
@@ -19,6 +29,46 @@ import sys
 
 DEFAULT_VOICE = "en-US-ChristopherNeural"
 DEFAULT_PITCH = "-18Hz"          # deep broadcast voice — Stan-approved
+
+# tts_online: may the Microsoft neural voice (edge-tts) be used? Defaults to
+# True so installs whose config.yaml predates the key (updates never overwrite
+# it) keep the voice they have. configure(cfg) sets it for the session.
+_ONLINE = True
+_told_offline = False
+
+_FALSY = {"false", "no", "off", "0", ""}
+
+
+def tts_online(cfg) -> bool:
+    """config's tts_online, True when the key is missing. A quoted "false"
+    counts as false — bool("false") would silently keep the voice online."""
+    try:
+        v = cfg.get("tts_online", True)
+    except AttributeError:       # cfg is None or not a mapping
+        return True
+    if isinstance(v, str):
+        return v.strip().lower() not in _FALSY
+    return bool(v) if v is not None else True
+
+
+def configure(cfg) -> bool:
+    """Apply config's tts_online to every render in this process (call once
+    per session, after load_config). Returns the value now in force."""
+    global _ONLINE
+    _ONLINE = tts_online(cfg)
+    return _ONLINE
+
+
+def _online_ok(online=None) -> bool:
+    """The per-call override when given, else the configured switch."""
+    global _told_offline
+    ok = _ONLINE if online is None else bool(online)
+    if not ok:
+        if not _told_offline:
+            _told_offline = True
+            print("  [announcer] tts_online is false - using the offline voice "
+                  "(nothing sent to Microsoft)")
+    return ok
 
 # ElevenLabs (optional, best-in-class delivery): drop your API key into
 # elevenlabs_key.txt in this folder (or the ELEVENLABS_API_KEY env var) and
@@ -106,18 +156,22 @@ def _elevenlabs(text: str, out_mp3: str, voice_id: str = "",
 
 
 def synth_to_wav(text: str, out_wav: str, voice: str = DEFAULT_VOICE,
-                 pitch: str = DEFAULT_PITCH, eleven_voice: str = "") -> str | None:
+                 pitch: str = DEFAULT_PITCH, eleven_voice: str = "",
+                 online: bool | None = None) -> str | None:
     """Render `text` to audio near out_wav. Returns the actual file written
     (mp3 for the neural voice, wav for fallbacks) or None.
     pitch: e.g. "-18Hz" to deepen any voice (neural only).
-    eleven_voice: ElevenLabs voice ID override (used when a key is set)."""
+    eleven_voice: ElevenLabs voice ID override (used when a key is set).
+    online: False skips the Microsoft neural voice; None = configure()'s
+    setting (tts_online, on unless config turns it off)."""
     os.makedirs(os.path.dirname(out_wav), exist_ok=True)
 
     path = _elevenlabs(text, os.path.splitext(out_wav)[0] + ".mp3",
                        voice_id=eleven_voice)
     if path:
         return path
-    path = _edge_neural(text, os.path.splitext(out_wav)[0] + ".mp3", voice, pitch)
+    path = _edge_neural(text, os.path.splitext(out_wav)[0] + ".mp3", voice, pitch,
+                        online=online)
     if path:
         return path
     try:
@@ -131,9 +185,12 @@ def synth_to_wav(text: str, out_wav: str, voice: str = DEFAULT_VOICE,
 
 
 def _edge_neural(text: str, out_mp3: str, voice: str,
-                 pitch: str = "+0Hz") -> str | None:
+                 pitch: str = "+0Hz", online: bool | None = None) -> str | None:
     """Microsoft neural TTS via edge-tts. Quietly returns None when the
-    package is missing or there's no internet — callers fall back."""
+    package is missing or there's no internet — callers fall back. Also None,
+    before anything is imported or sent, when tts_online is off."""
+    if not _online_ok(online):
+        return None
     try:
         import asyncio
 
@@ -206,18 +263,31 @@ ARENA_FX = ("volume=2.0,"
 _MEDAL_CACHE_VER = "arena1"   # bump to force a re-render of cached medals
 
 
-def ensure_medal_sounds(base_dir: str, voice: str, ffmpeg: str,
-                        pitch: str = DEFAULT_PITCH,
-                        eleven_voice: str = "") -> dict:
-    """Pre-render the medal call-outs ('Double kill!' ...) so playback is
-    instant mid-game. Cached per voice under cache_medals/ — after the first
-    render they work offline forever. Returns {kill_count: wav_path}."""
-    # a present ElevenLabs key (and which of its voices) changes what renders
-    # — separate cache dir so any change re-renders instead of serving stale
+def _medal_dir(base_dir: str, voice: str, pitch: str, eleven_voice: str,
+               online: bool) -> str:
+    """cache_medals/<tier+voice+pitch+version>. A present ElevenLabs key (and
+    which of its voices) changes what renders, so it gets its own dir and any
+    change re-renders instead of serving stale audio. tts_online: false gets
+    an offline_ dir for the same reason. The online path is unchanged from
+    before the switch existed, so existing caches keep working."""
     tier = f"el{(eleven_voice or ELEVEN_DEFAULT_VOICE)[:8]}_" if _eleven_key() else ""
     safe_voice = tier + "".join(c for c in f"{voice}{pitch}{_MEDAL_CACHE_VER}"
                                 if c.isalnum() or c in "-_")
-    mdir = os.path.join(base_dir, "cache_medals", safe_voice)
+    if not online:
+        safe_voice = "offline_" + safe_voice
+    return os.path.join(base_dir, "cache_medals", safe_voice)
+
+
+def ensure_medal_sounds(base_dir: str, voice: str, ffmpeg: str,
+                        pitch: str = DEFAULT_PITCH,
+                        eleven_voice: str = "",
+                        online: bool | None = None) -> dict:
+    """Pre-render the medal call-outs ('Double kill!' ...) so playback is
+    instant mid-game. Cached per voice under cache_medals/ — after the first
+    render they work offline forever. Returns {kill_count: wav_path}.
+    online: as synth_to_wav."""
+    online = _ONLINE if online is None else bool(online)
+    mdir = _medal_dir(base_dir, voice, pitch, eleven_voice, online)
     os.makedirs(mdir, exist_ok=True)
     out = {}
     for n, (name, text) in MEDALS.items():
@@ -226,10 +296,11 @@ def ensure_medal_sounds(base_dir: str, voice: str, ffmpeg: str,
             out[n] = wav
             continue
         src = _medal_shout(text, os.path.join(mdir, f"{name}_raw.mp3"), voice,
-                           pitch, eleven_voice=eleven_voice)
+                           pitch, eleven_voice=eleven_voice, online=online)
         if not src:
             # neural unavailable: plain offline synth, still arena-processed
-            src = synth_to_wav(text, os.path.join(mdir, f"{name}_raw.wav"), voice, pitch)
+            src = synth_to_wav(text, os.path.join(mdir, f"{name}_raw.wav"), voice,
+                               pitch, online=online)
         if not src:
             continue
         # convert + apply the arena treatment in one ffmpeg pass
@@ -249,23 +320,23 @@ def ensure_medal_sounds(base_dir: str, voice: str, ffmpeg: str,
 
 
 def ensure_callout(base_dir: str, text: str, voice: str, ffmpeg: str,
-                   pitch: str = DEFAULT_PITCH, eleven_voice: str = "") -> str:
+                   pitch: str = DEFAULT_PITCH, eleven_voice: str = "",
+                   online: bool | None = None) -> str:
     """One arbitrary arena-processed call-out (e.g. 'You just killed
     Marshyy!'), rendered on first use and cached beside the medals. Returns
-    the wav path, or '' if no synth worked."""
-    tier = f"el{(eleven_voice or ELEVEN_DEFAULT_VOICE)[:8]}_" if _eleven_key() else ""
-    safe_voice = tier + "".join(c for c in f"{voice}{pitch}{_MEDAL_CACHE_VER}"
-                                if c.isalnum() or c in "-_")
-    mdir = os.path.join(base_dir, "cache_medals", safe_voice)
+    the wav path, or '' if no synth worked. online: as synth_to_wav."""
+    online = _ONLINE if online is None else bool(online)
+    mdir = _medal_dir(base_dir, voice, pitch, eleven_voice, online)
     os.makedirs(mdir, exist_ok=True)
     slug = "".join(c for c in text.lower() if c.isalnum())[:48]
     wav = os.path.join(mdir, f"co_{slug}.wav")
     if os.path.exists(wav):
         return wav
     src = _medal_shout(text, os.path.join(mdir, f"co_{slug}_raw.mp3"), voice,
-                       pitch, eleven_voice=eleven_voice)
+                       pitch, eleven_voice=eleven_voice, online=online)
     if not src:
-        src = synth_to_wav(text, os.path.join(mdir, f"co_{slug}_raw.wav"), voice, pitch)
+        src = synth_to_wav(text, os.path.join(mdir, f"co_{slug}_raw.wav"), voice,
+                           pitch, online=online)
     if not src:
         return ""
     r = subprocess.run([ffmpeg, "-y", "-i", src, "-af", ARENA_FX, "-ar", "48000", wav],
@@ -279,11 +350,13 @@ def ensure_callout(base_dir: str, text: str, voice: str, ffmpeg: str,
 
 
 def _medal_shout(text: str, out_mp3: str, voice: str, pitch: str,
-                 eleven_voice: str = "") -> str | None:
+                 eleven_voice: str = "", online: bool | None = None) -> str | None:
     """Neural render tuned for a SHOUT: faster and louder than narration."""
     path = _elevenlabs(text, out_mp3, voice_id=eleven_voice, shout=True)
     if path:
         return path
+    if not _online_ok(online):
+        return None
     try:
         import asyncio
 

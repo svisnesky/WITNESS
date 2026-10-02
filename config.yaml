@@ -351,6 +351,12 @@ elevenlabs_voice_id: ""
 # robotic voice without it). Try en-US-ChristopherNeural, en-GB-RyanNeural...
 # Full list: .venv\Scripts\python -m edge_tts --list-voices
 announcer_voice: "en-US-ChristopherNeural"
+# The neural voice is ONLINE: the text it speaks is sent to Microsoft's speech
+# service to be voiced. That text includes announcer_player_name below and, in
+# the WITNESS Report, other players' gamertags from the kill feed. false = use
+# the offline Windows voice instead (robotic, but the text stays on this PC).
+# ElevenLabs, if you added a key above, is separate and not affected by this.
+tts_online: true
 # Deepen any voice; "-18Hz" on Christopher = the deep broadcast voice.
 announcer_pitch: "-18Hz"
 # How the announcer says your name (spell it phonetically if it reads oddly).
