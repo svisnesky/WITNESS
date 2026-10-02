@@ -2114,6 +2114,96 @@ def _check_manual_clip(s):
             print("  [manual clip: too soon after last save]")
 
 
+HOUSEKEEPING_SLOW_SECONDS = 1.0   # print a timing line when a run takes longer
+
+
+def _housekeeping_work(cfg, s, do_rb_disk: bool, do_black: bool) -> dict:
+    """The periodic checks, timed: Replay Buffer health and free disk space
+    (every 60 s) and OBS's black-capture check (every black_check_minutes).
+    Runs on the housekeeping thread, never the detection loop. Returns
+    {step: seconds}."""
+    took = {}
+    if do_rb_disk:
+        # Replay Buffer health. If it stops mid-session (OBS restart, stray
+        # hotkey, encoder/disk error) every remaining clip is silently lost, so
+        # check occasionally and restart it BEFORE the next kill needs it
+        # rather than after one is already gone.
+        t0 = time.monotonic()
+        try:
+            if s["obs"].recover_replay_buffer() and s["web"] is not None:
+                s["web"].notice("Replay Buffer had stopped — restarted", "alert")
+        except Exception:
+            pass
+        took["replay-buffer check"] = time.monotonic() - t0
+        # Clips + reels + Shorts run 1-2 GB a session; a full drive fails
+        # silently and costs the whole night.
+        t0 = time.monotonic()
+        try:
+            check_disk_space(cfg, s.get("record_dir", ""), web=s["web"], state=s)
+        except Exception as e:
+            print(f"  [housekeeping] disk check error: {e}")
+        took["disk check"] = time.monotonic() - t0
+    if do_black:
+        # A Display Capture can lose its target MID-SESSION (monitor sleeps,
+        # driver reloads), so a clean startup is not a guarantee for the next
+        # three hours.
+        t0 = time.monotonic()
+        try:
+            check_obs_not_black(cfg, s["obs"], web=s["web"], state=s)
+        except Exception as e:
+            print(f"  [housekeeping] black-capture check error: {e}")
+        took["black-capture check"] = time.monotonic() - t0
+    if sum(took.values()) > HOUSEKEEPING_SLOW_SECONDS:
+        print("  [housekeeping] slow: "
+              + ", ".join(f"{k} {v:.1f} s" for k, v in took.items()))
+    return took
+
+
+def _maybe_housekeeping(cfg, s, loop_start):
+    """Start the periodic checks on a daemon thread when they're due.
+
+    They used to run inline on the detection loop. On the real 07-29 log, 9
+    mid-match windows with zero OCR (320 s, 3.6-4.0% of the session) started on
+    a 60.13-s grid, the 60-s housekeeping period; a clip drive whose
+    disk_usage hangs, or a slow OBS reply, froze detection for that long and
+    popups on screen in the meantime were never read.
+
+    Busy flag: when the previous run is still going, the due run is SKIPPED
+    (and its period restarts), not queued behind it. Returns the thread
+    started, or None."""
+    do_rb_disk = loop_start - s.get("_last_rb_check", 0.0) > 60
+    every = float(cfg.get("black_check_minutes", 5)) * 60
+    do_black = every > 0 and (loop_start - s.get("_black_check_at", 0)) >= every
+    if not (do_rb_disk or do_black):
+        return None
+    if do_rb_disk:
+        s["_last_rb_check"] = loop_start
+    if do_black:
+        s["_black_check_at"] = loop_start
+    if s.get("_hk_busy"):
+        print("  [housekeeping] previous check still running — skipped this one")
+        return None
+    s["_hk_busy"] = True
+
+    def run():
+        try:
+            _housekeeping_work(cfg, s, do_rb_disk, do_black)
+        except Exception as e:
+            print(f"  [housekeeping] error: {e}")
+        finally:
+            s["_hk_busy"] = False
+
+    th = threading.Thread(target=run, name="witness-housekeeping", daemon=True)
+    s["_hk_thread"] = th
+    try:
+        th.start()
+    except Exception as e:          # e.g. can't start a thread: never stop detection
+        s["_hk_busy"] = False
+        print(f"  [housekeeping] could not start: {e}")
+        return None
+    return th
+
+
 def run_live(cfg: dict, dry_run: bool = False, stop_event=None, on_count=None):
     _install_session_log()
     try:
@@ -2192,14 +2282,6 @@ def _run_live_inner(cfg: dict, dry_run: bool = False, stop_event=None, on_count=
 
                 _check_coalesce(s)
 
-                # Re-check that OBS still has picture. A Display Capture can lose
-                # its target MID-SESSION (monitor sleeps, driver reloads), so a
-                # clean startup is not a guarantee for the next three hours.
-                every = float(cfg.get("black_check_minutes", 5)) * 60
-                if every > 0 and (loop_start - s.get("_black_check_at", 0)) >= every:
-                    s["_black_check_at"] = loop_start
-                    check_obs_not_black(cfg, s["obs"], web=s["web"], state=s)
-
                 # Every frame (not just suppressed ones): the handler is
                 # edge-triggered and needs the clear frames to re-arm.
                 if cfg.get("capture_exfil_stats", True):
@@ -2220,22 +2302,10 @@ def _run_live_inner(cfg: dict, dry_run: bool = False, stop_event=None, on_count=
                 _check_manual_kill(cfg, s, on_count)
                 _check_manual_clip(s)
 
-                # Replay Buffer health. If it stops mid-session (OBS restart,
-                # stray hotkey, encoder/disk error) every remaining clip is
-                # silently lost, so check occasionally and restart it BEFORE
-                # the next kill needs it rather than after one is already gone.
-                if loop_start - s.get("_last_rb_check", 0.0) > 60:
-                    s["_last_rb_check"] = loop_start
-                    try:
-                        if s["obs"].recover_replay_buffer() and s["web"] is not None:
-                            s["web"].notice("Replay Buffer had stopped — restarted",
-                                            "alert")
-                    except Exception:
-                        pass
-                    # Clips + reels + Shorts run 1-2 GB a session; a full drive
-                    # fails silently and costs the whole night.
-                    check_disk_space(cfg, s.get("record_dir", ""),
-                                     web=s["web"], state=s)
+                # Replay Buffer health, free disk space and the black-capture
+                # re-check, on their own thread: a hung disk or OBS reply must
+                # not stop the OCR loop (see _maybe_housekeeping).
+                _maybe_housekeeping(cfg, s, loop_start)
 
                 elapsed = time.monotonic() - loop_start
                 perf["iters"] += 1
@@ -2247,6 +2317,10 @@ def _run_live_inner(cfg: dict, dry_run: bool = False, stop_event=None, on_count=
         finally:
             mon_stop.set()   # stop the perf sampler
 
+    # Let a running check finish (bounded) so its lines land before the recap.
+    hk = s.get("_hk_thread")
+    if hk is not None:
+        hk.join(timeout=3.0)
     _flush_coalesce(s)
     if s["web"] is not None:
         s["web"].set_running(False)
