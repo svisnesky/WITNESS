@@ -478,6 +478,13 @@ AUDIT_PAIRS = (
 # Tags that mean "an enemy died by your hand".
 _ELIM = ("kill", "elim")
 
+# A match boundary. Written into the SESSION-wide tag list at each exfil, so a
+# session count can't carry a pending elim from one match into the next: a
+# match that ends on RUNNER ELIM would otherwise fold the next match's opening
+# FINISHER onto it and lose an elim. It counts as nothing. Per-match tag lists
+# (the audit's match_tags) never contain it. No popup is ever tagged 'exfil'.
+MATCH_BREAK = "exfil"
+
 
 def count_events(tags) -> tuple:
     """(downs, elims) from an ORDERED list of event tags — the canonical count,
@@ -491,6 +498,9 @@ def count_events(tags) -> tuple:
     A FINISHER with no elim in front of it IS its own elim, though — that's you
     finishing a runner who never showed a RUNNER ELIM popup.
 
+    A MATCH_BREAK tag (a session list, at each exfil) counts as nothing and
+    ends any pending elim, so a FINISHER can't fold across two matches.
+
     Measured across both audited sessions (2026-07-27 and 2026-07-29): folding a
     trailing FINISHER matches the game's Runner Elims on 6 of 7 matches, versus
     4 of 7 when every finisher was counted separately. The one miss is an
@@ -498,6 +508,9 @@ def count_events(tags) -> tuple:
     downs = elims = 0
     pending_elim = False          # an elim that hasn't had its FINISHER yet
     for t in tags or []:
+        if t == MATCH_BREAK:
+            pending_elim = False      # new match: nothing folds across it
+            continue
         if t in ("down", "manual_kill"):
             downs += 1
         elif t in _ELIM:
