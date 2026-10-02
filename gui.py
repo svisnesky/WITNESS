@@ -539,6 +539,10 @@ class ControlPanel:
         self.status_sub = tk.Label(stat, text="SESSION  0:00", bg=BG, fg=MUTED,
                                    font=("Consolas", 10))
         self.status_sub.pack(anchor="w", pady=(5, 0))
+        # the phone/iPad address, from main.py's "Live view:" line
+        self.addr_lbl = tk.Label(stat, text=getattr(self, "_phone_addr", ""),
+                                 bg=BG, fg=MUTED, font=("Consolas", 9))
+        self.addr_lbl.pack(anchor="w", pady=(3, 0))
         cnt = tk.Frame(top, bg=BG)
         cnt.pack(side="right", anchor="ne")
         self.count_lbl = tk.Label(cnt, text=str(self.count), bg=BG, fg=ACCENT,
@@ -788,6 +792,17 @@ class ControlPanel:
                 self.status_sub.config(text=f"SESSION  {secs // 60}:{secs % 60:02d}")
         self.root.after(1000, self._tick)
 
+    def _show_phone_address(self, url):
+        """This panel has no log pane, so the address main.py prints for the
+        phone/iPad used to be visible nowhere. Shown under the status."""
+        self._phone_addr = f"PHONE / IPAD (same Wi-Fi):  {url}"
+        w = getattr(self, "addr_lbl", None)
+        try:
+            if w is not None and w.winfo_exists():
+                w.config(text=self._phone_addr)
+        except Exception:
+            pass
+
     def _parse_kill(self, line):
         # 'KILL #7 [down]: ...', '(not a kill: precision) [precision]: ...',
         # '[reconcile] ...', '[exfil] match stats: ...': every event, in order,
@@ -835,6 +850,9 @@ class ControlPanel:
             self._last_error = s
             self._set_status(f"{self.DOT}  COULD NOT START", RED, s[:140])
             return
+        m = re.search(r"Live view:\s+(\S+)", s)
+        if m:
+            self._show_phone_address(m.group(1))
         if "Detecting [" in s:
             self._watching = True
             self._set_status(f"{self.DOT}  WATCHING", GREEN,
@@ -930,17 +948,19 @@ class SettingsWindow:
 
 
 HELP_TEXT = """KILL COUNTER + FEED
-Kills are detected automatically from the game screen. The count and
-activity log update within a second or two of each kill.
+Kills are detected automatically from the game screen. The count, the
+tiles and the RECENT feed update within a second or two of each kill.
 
 TEST MODE
 Runs the full detector but never saves clips — good for a first run.
 
 DASHBOARD
-While running, opens the live view (also reachable from an iPad or phone
-on the same Wi-Fi — the URL is printed in the activity log). The live
-view has SAVE CLIP, instant replays, match highlight reels, a kill ding,
-and the same settings panel.
+While running, opens the live view. It also works on an iPad or phone on
+the same Wi-Fi: once a session starts, this window shows the address to
+open, under the status line. If the phone can't load it, allow Python on
+Private networks when Windows Firewall asks, and set your Wi-Fi to
+Private. The live view has SAVE CLIP, instant replays, match highlight
+reels, a kill ding, and the same settings panel.
 
 MATCH HIGHLIGHTS
 About 30 seconds after you exfil, that match's clips become a highlight
@@ -949,7 +969,9 @@ is built alongside it. Drop mp3s in the music folder for a soundtrack.
 
 SETTINGS
 Every option applies to the running session immediately and persists.
-config.yaml still holds the full documented configuration.
+config.yaml still holds the full documented configuration; edits to it
+apply the next time you press START (port and Wi-Fi changes need a
+restart of WITNESS).
 
 WHERE FILES GO
 Clips land in your OBS output folder under Marathon Sessions/<date>/ —
@@ -1081,21 +1103,22 @@ def _splash_boom_setup():
     if not (os.path.exists(wav) and os.path.exists(marker)):
         return None
     # honor splash_sound (settings_override.yaml wins, else config.yaml, default on)
-    try:
-        import yaml
-        want = True
-        for name in ("config.yaml", "settings_override.yaml"):
-            p = os.path.join(BASE, name)
+    # UTF-8 explicitly: config.yaml is UTF-8 with em dashes, and the Windows
+    # default code page can't decode it on CJK systems (cp932 etc.)
+    want = True
+    for name in ("config.yaml", "settings_override.yaml"):
+        p = os.path.join(BASE, name)
+        try:
             if os.path.exists(p):
-                d = yaml.safe_load(open(p)) or {}
-                if "splash_sound" in d:
+                d = _read_yaml(p)
+                if isinstance(d, dict) and "splash_sound" in d:
                     want = bool(d["splash_sound"])
-        if not want:
-            return None
-    except Exception:
-        pass
+        except Exception:
+            pass
+    if not want:
+        return None
     try:
-        with open(marker) as f:
+        with open(marker, encoding="utf-8") as f:
             return int(f.read().strip()), wav
     except Exception:
         return None

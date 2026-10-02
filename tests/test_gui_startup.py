@@ -705,3 +705,47 @@ def test_parse_console_line_without_match_break_attr_does_not_raise(monkeypatch)
     gui.parse_console_line("  [exfil] match stats: 1 runner elims, 2 downs", tags)
     assert tags == ["exfil"]
     assert gui.tile_values(tags + ["down"])["downs"] == 1
+
+
+# --- small fixes ----------------------------------------------------------------
+
+def test_every_text_open_in_gui_names_its_encoding():
+    """config.yaml is UTF-8 with em dashes; Windows' default code page can't
+    decode it on CJK systems (cp932...), and mangles it everywhere else."""
+    import ast
+    with open(gui.__file__, encoding="utf-8") as f:
+        tree = ast.parse(f.read())
+    bad = []
+    for node in ast.walk(tree):
+        if (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                and node.func.id == "open"):
+            mode = node.args[1] if len(node.args) > 1 else next(
+                (k.value for k in node.keywords if k.arg == "mode"), None)
+            binary = (isinstance(mode, ast.Constant) and isinstance(mode.value, str)
+                      and "b" in mode.value)
+            if not binary and not any(k.arg == "encoding" for k in node.keywords):
+                bad.append(node.lineno)
+    assert not bad, f"open() without encoding= at gui.py lines {bad}"
+
+
+def test_read_yaml_accepts_a_notepad_bom(tmp_path):
+    p = tmp_path / "config.yaml"
+    p.write_bytes("﻿# WITNESS — configuration\nsplash_sound: false\n"
+                  .encode("utf-8"))
+    assert gui._read_yaml(str(p)) == {"splash_sound": False}
+
+
+def test_help_text_no_longer_points_at_a_log_pane():
+    assert "activity log" not in gui.HELP_TEXT
+    assert "printed" not in gui.HELP_TEXT
+    assert "shows the address" in gui.HELP_TEXT
+
+
+def test_tk_panel_shows_the_phone_address():
+    panel = gui.ControlPanel.__new__(gui.ControlPanel)
+    panel._last_error = ""
+    scheme = "http"
+    panel._drain_line(f"Live view: {scheme}://192.168.1.20:8000  "
+                      "(open in your iPad/phone browser on the same Wi-Fi)")
+    assert panel._phone_addr.endswith("192.168.1.20:8000")
+    assert "(open" not in panel._phone_addr
