@@ -9,7 +9,12 @@ from __future__ import annotations
 
 import logging
 import threading
-from typing import Optional
+from typing import List, Optional
+
+# How deep get_scene_input_kinds follows nested scenes / groups. Real setups
+# nest one or two levels ("Live" -> "Gameplay" -> Display Capture); the limit
+# only exists so a scene that includes itself can never loop.
+_SCENE_NEST_LIMIT = 3
 
 _REQUEST_ERROR = None
 
@@ -37,6 +42,11 @@ def _quiet_obsws_logger():
     still propagate (main's connect retry and _call below see every one); only
     the library's own duplicate logging is muted."""
     logging.getLogger("obsws_python").setLevel(logging.CRITICAL)
+
+
+def _scene_name(resp) -> str:
+    return (getattr(resp, "current_program_scene_name", None)
+            or getattr(resp, "scene_name", None) or "")
 
 
 class OBSClient:
@@ -227,15 +237,80 @@ class OBSClient:
         question just as well."""
         def go():
             import blackcheck
-            scene = self._client.get_current_program_scene()
-            name = (getattr(scene, "current_program_scene_name", None)
-                    or getattr(scene, "scene_name", None))
+            name = _scene_name(self._client.get_current_program_scene())
             if not name:
                 return b""
             r = self._client.get_source_screenshot(name, "png", width,
                                                    int(width * 9 / 16), -1)
             return blackcheck.decode_datauri(getattr(r, "image_data", ""))
         return self._call(go, b"", "scene screenshot")
+
+    def get_scene_input_kinds(self) -> Optional[List[str]]:
+        """The source type (obs-websocket inputKind) of every VISIBLE item in
+        OBS's program scene, e.g. ['monitor_capture', 'text_gdiplus_v3'].
+
+        Lets the black-screen check say WHY the picture is black:
+          []                          the scene is empty: add a capture source
+          only game/window capture    normal until the game is running
+          monitor_capture / other     today's warning (re-pick the display)
+        blackcheck.scene_setup() turns this list into that verdict.
+
+        Nested scenes and groups are opened up (up to 3 levels), because their
+        sources draw into this scene too. An item whose type can't be read
+        counts as 'unknown', which never qualifies for the softer verdicts.
+        Hidden items are left out: they draw nothing.
+
+        None when it can't tell: no connection, a refused request, or a client
+        (old library, test fake) without the scene-item requests. A missing
+        method returns None BEFORE touching the socket, so it can never trigger
+        a reconnect."""
+        with self._lock:
+            client = self._client
+            if client is None or not all(
+                    callable(getattr(client, m, None))
+                    for m in ("get_current_program_scene", "get_scene_item_list")):
+                return None
+
+            def go():
+                name = _scene_name(self._client.get_current_program_scene())
+                if not name:
+                    return None
+                return self._scene_kinds(name, False, 0, frozenset([name]))
+            return self._call(go, None, "scene sources")
+
+    def _scene_kinds(self, scene, is_group, depth, parents) -> List[str]:
+        if is_group and callable(getattr(self._client,
+                                         "get_group_scene_item_list", None)):
+            resp = self._client.get_group_scene_item_list(scene)
+        else:
+            resp = self._client.get_scene_item_list(scene)
+        items = getattr(resp, "scene_items", None)
+        if not isinstance(items, list):
+            raise ValueError("OBS sent no scene item list")
+        kinds = []
+        for it in items:
+            if not isinstance(it, dict):
+                kinds.append("unknown")
+                continue
+            if it.get("sceneItemEnabled") is False:
+                continue                       # hidden: draws nothing
+            kind = it.get("inputKind")
+            if kind:
+                kinds.append(str(kind))
+                continue
+            src = it.get("sourceName")
+            nested = it.get("sourceType") == "OBS_SOURCE_TYPE_SCENE"
+            # `parents` is this branch's chain of scenes: a scene that (via
+            # another) contains itself stops here instead of looping.
+            if nested and src and src not in parents and depth < _SCENE_NEST_LIMIT:
+                try:
+                    kinds.extend(self._scene_kinds(src, bool(it.get("isGroup")),
+                                                   depth + 1, parents | {src}))
+                except Exception:
+                    kinds.append("unknown")
+            else:
+                kinds.append("unknown")
+        return kinds
 
     def get_record_directory(self) -> str:
         """OBS's recording output folder (where replay clips are saved)."""
@@ -313,6 +388,9 @@ class DryRunOBS:
 
     def get_scene_screenshot(self, width: int = 480) -> bytes:
         return b""
+
+    def get_scene_input_kinds(self):
+        return None
 
     def get_record_directory(self) -> str:
         return ""

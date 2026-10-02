@@ -305,3 +305,94 @@ def test_replay_buffer_ok_after_connect():
     disabled = _Fresh(Refused("GetReplayBufferStatus", 604, "not available"))
     assert _connected(disabled).replay_buffer_ok is False
     assert _connected(_Fresh(True), auto=False).replay_buffer_ok is None
+
+
+# --- get_scene_input_kinds ------------------------------------------------------
+
+def test_scene_kinds_is_none_on_a_client_without_the_method():
+    """The suite's fakes only define screenshot/record requests. A missing
+    method must return None BEFORE touching the socket (no reconnect)."""
+    class _Old:
+        def get_current_program_scene(self):
+            return type("P", (), {"current_program_scene_name": "Scene"})()
+    c = _client(_Old())
+    assert c.get_scene_input_kinds() is None
+    assert c.reconnects == 0
+    assert _client(None).get_scene_input_kinds() is None
+
+
+def _item(kind=None, name="", scene=False, group=False, enabled=True):
+    return {"inputKind": kind, "sourceName": name,
+            "sourceType": "OBS_SOURCE_TYPE_SCENE" if scene else "OBS_SOURCE_TYPE_INPUT",
+            "isGroup": group if scene else None, "sceneItemEnabled": enabled}
+
+
+class _Scenes:
+    def __init__(self, scenes, program="Main", groups=None):
+        self.scenes = scenes
+        self.groups = groups or {}
+        self.program = program
+
+    def get_current_program_scene(self):
+        return type("P", (), {"current_program_scene_name": self.program})()
+
+    def get_scene_item_list(self, name):
+        if name not in self.scenes:
+            raise Refused("GetSceneItemList", 600, f"No source named {name}")
+        return type("L", (), {"scene_items": self.scenes[name]})()
+
+    def get_group_scene_item_list(self, name):
+        return type("L", (), {"scene_items": self.groups[name]})()
+
+
+def test_scene_kinds_reads_the_program_scene():
+    c = _client(_Scenes({"Main": [_item("monitor_capture"),
+                                  _item("text_gdiplus_v3", "KillCounter")]}))
+    assert c.get_scene_input_kinds() == ["monitor_capture", "text_gdiplus_v3"]
+
+
+def test_an_empty_scene_is_an_empty_list_not_none():
+    c = _client(_Scenes({"Main": []}))
+    assert c.get_scene_input_kinds() == []
+
+
+def test_hidden_items_are_left_out():
+    c = _client(_Scenes({"Main": [_item("monitor_capture", enabled=False),
+                                  _item("game_capture")]}))
+    assert c.get_scene_input_kinds() == ["game_capture"]
+
+
+def test_nested_scenes_and_groups_are_opened_up():
+    c = _client(_Scenes(
+        {"Main": [_item(name="Gameplay", scene=True),
+                  _item(name="Cams", scene=True, group=True)],
+         "Gameplay": [_item("game_capture")]},
+        groups={"Cams": [_item("dshow_input")]}))
+    assert c.get_scene_input_kinds() == ["game_capture", "dshow_input"]
+
+
+def test_a_scene_that_contains_itself_does_not_loop():
+    c = _client(_Scenes({"Main": [_item(name="Loop", scene=True)],
+                         "Loop": [_item(name="Main", scene=True),
+                                  _item("game_capture")]}))
+    assert c.get_scene_input_kinds() == ["unknown", "game_capture"]
+
+
+def test_an_unreadable_nested_scene_counts_as_unknown():
+    c = _client(_Scenes({"Main": [_item(name="Missing", scene=True),
+                                  _item("game_capture")]}))
+    assert c.get_scene_input_kinds() == ["unknown", "game_capture"]
+    assert c.reconnects == 0
+
+
+def test_a_refused_scene_lookup_is_none_without_reconnecting():
+    c = _client(_Scenes({}, program="Gone"))
+    assert c.get_scene_input_kinds() is None
+    assert c.reconnects == 0
+
+
+def test_dryrun_stub_has_the_new_interface():
+    d = obs_client.DryRunOBS()
+    assert d.get_scene_input_kinds() is None
+    assert d.replay_buffer_ok is True
+    d.close()
