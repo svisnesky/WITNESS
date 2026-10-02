@@ -222,6 +222,11 @@ def parse_squad(frame, engine) -> list[dict]:
     return players
 
 
+# Hard ceiling (seconds, after the settle) on one exfil capture. A backstop:
+# the attempt counting below already bounds every path.
+EXFIL_DEADLINE_S = 12.0
+
+
 def capture_exfil_stats(cfg, engine, save_dir: str = "", retries: int = 3,
                         empty_retries: int = 7, settle: float = 0.8):
     """Grab the exfil screen and OCR the stat panels. The panel animates in,
@@ -246,7 +251,18 @@ def capture_exfil_stats(cfg, engine, save_dir: str = "", retries: int = 3,
         time.sleep(settle)
     limit = max(1, retries)
     attempt = 0
+    best_frame = None
+    squad_tried = False
+    # This runs ON the detection thread: while it spins, nothing is detected,
+    # no clip is saved and STOP can't land. Every exit below is bounded by
+    # `limit`, and this deadline backstops the lot (normal worst case after
+    # the settle: 7 grabs of ~5 one-off OCR passes each, plus 6 x 0.6 s waits;
+    # CPU OCR on an old card is what could push that past the deadline).
+    t0 = time.monotonic()
     while attempt < limit:
+        if time.monotonic() - t0 > EXFIL_DEADLINE_S:
+            print("  [exfil] gave up waiting for the panel/header")
+            break
         frame = _grab_full(cfg)
         if save_dir and not saved:
             try:
@@ -265,16 +281,24 @@ def capture_exfil_stats(cfg, engine, save_dir: str = "", retries: int = 3,
         stats = _parse_panel(frame, engine)
         if len(stats) > len(best):
             best = stats
+            best_frame = frame
         # a good read has most of the labels; stop early once we have them
         if len(best) >= 4 and outc:
             pass  # fall through to squad + break below
         elif len(best) >= 4 and attempt + 1 < max(1, retries):
             # stats are done but the outcome header hasn't read yet — one more
-            # spin for the header before giving up on it
+            # spin for the header before giving up on it. This spin MUST count
+            # as an attempt: when this was a for-range loop, `continue` moved
+            # on by itself, but commit 39ef6e3 made it a manual while loop and
+            # the `continue` then skipped `attempt += 1`. A panel that read
+            # with a header that never did spun forever and hung detection,
+            # clip saving and STOP for the rest of the night.
+            attempt += 1
             time.sleep(0.4)
             continue
         if len(best) >= 4:
             if cfg.get("squad_stats", True):
+                squad_tried = True
                 try:
                     squad = parse_squad(frame, engine)
                 except Exception as e:
@@ -288,6 +312,15 @@ def capture_exfil_stats(cfg, engine, save_dir: str = "", retries: int = 3,
                   f"(attempt {attempt}/{limit})")
         if attempt < limit:
             time.sleep(0.6)  # let the panel finish animating in
+    # The deadline can stop the loop with a good panel read but before the
+    # squad pass ran. Parse the squad from the frame that gave the best read,
+    # so a header miss doesn't also cost the trios gamertags.
+    if (len(best) >= 4 and not squad_tried and best_frame is not None
+            and cfg.get("squad_stats", True)):
+        try:
+            squad = parse_squad(best_frame, engine)
+        except Exception as e:
+            print(f"  [exfil] squad parse failed: {e}")
     if not best:
         print("  [exfil] stats panel never read — no ground-truth audit for "
               "this match")
