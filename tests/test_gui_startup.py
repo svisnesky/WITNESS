@@ -749,3 +749,58 @@ def test_tk_panel_shows_the_phone_address():
                       "(open in your iPad/phone browser on the same Wi-Fi)")
     assert panel._phone_addr.endswith("192.168.1.20:8000")
     assert "(open" not in panel._phone_addr
+
+
+# --- Bonjour in window mode ------------------------------------------------------
+
+def _full_webview_env(monkeypatch, cfg):
+    webserver = pytest.importorskip("webserver")
+    wv = types.ModuleType("webview")
+    wv.windows = []
+    wv.create_window = lambda *a, **k: wv.windows.append((a, k))
+    wv.start = lambda *a, **k: None
+    monkeypatch.setitem(sys.modules, "webview", wv)
+    fake_app = types.SimpleNamespace(
+        load_config=lambda: cfg, save_setting_overrides=lambda d: None,
+        cached_record_dir=lambda: "", resume_unfinished_recap=lambda st: None,
+        _web_state=None, _web_server=None, _advertiser=None)
+    monkeypatch.setattr(gui, "app", fake_app)
+    monkeypatch.setattr(gui, "_witness_already_running", lambda *a, **k: False)
+    monkeypatch.setattr(webserver, "start_web", lambda st, port, base, host="": object())
+    monkeypatch.setattr(webserver, "local_ip", lambda: "192.168.1.20")
+    calls, done = [], threading.Event()
+    disc = types.ModuleType("discovery")
+
+    def advertise(port, ip, version="", api=1):
+        calls.append((port, ip, api))
+        done.set()
+        return "ADVERTISER"
+    disc.advertise = advertise
+    monkeypatch.setitem(sys.modules, "discovery", disc)
+    return fake_app, wv, calls, done
+
+
+def test_window_mode_advertises_for_the_ipad_app(monkeypatch):
+    fake_app, wv, calls, done = _full_webview_env(
+        monkeypatch, {"web_port": 8000, "web_lan": True})
+    assert gui._run_webview() is True
+    assert done.wait(5)
+    assert calls[0][:2] == (8000, "192.168.1.20")
+    for _ in range(100):
+        if fake_app._advertiser:
+            break
+        time.sleep(0.01)
+    assert fake_app._advertiser == "ADVERTISER"   # main.py won't advertise twice
+    assert wv.windows and wv.windows[0][0][1].endswith(":8000")
+
+
+@pytest.mark.parametrize("cfg", [
+    {"web_lan": False},
+    {"web_dashboard": False},
+    {"bonjour_discovery": False},
+])
+def test_no_advertising_when_not_served_on_the_lan(monkeypatch, cfg):
+    fake_app, wv, calls, done = _full_webview_env(monkeypatch, dict(cfg, web_port=8000))
+    assert gui._run_webview() is True
+    assert not done.wait(0.3)
+    assert calls == []

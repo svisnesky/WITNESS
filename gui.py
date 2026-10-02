@@ -1569,6 +1569,31 @@ class _WebSession:
             self.stop_event.set()
 
 
+def _advertise_for_ipad(cfg, host, port, st, webserver):
+    """Bonjour for the iOS app, as main.py does for the console launcher.
+
+    main.py only advertises when it starts the server itself, and in window
+    mode it never does (_run_webview did), so the iPad app could not find a PC
+    running the window launcher. Same conditions as main.py: served on the
+    LAN, bonjour_discovery not off, not already advertising. On a thread,
+    because zeroconf's name probing can take a second or two and the window
+    should not wait for it. discovery.advertise never raises."""
+    if host != "0.0.0.0" or not cfg.get("bonjour_discovery", True):
+        return
+    if getattr(app, "_advertiser", None) is not None:
+        return
+
+    def work():
+        try:
+            import discovery
+            app._advertiser = discovery.advertise(
+                port, webserver.local_ip(), version=getattr(st, "version", ""),
+                api=getattr(webserver, "API_VERSION", 1))
+        except Exception as e:
+            _note(f"  [discovery] skipped: {e}")
+    threading.Thread(target=work, daemon=True).start()
+
+
 def _run_webview(boot=None):
     """Serve the dashboard and show it in a native window. run_live reuses the
     already-running server, so START/STOP inside the HTML drive the session.
@@ -1613,6 +1638,7 @@ def _run_webview(boot=None):
         # hand the running server to run_live so it reuses it (no 2nd server)
         app._web_state = st
         app._web_server = srv
+        _advertise_for_ipad(cfg, host, port, st, webserver)
         st.bind_config(cfg, app.save_setting_overrides)
         # Empty means nothing to say: the page hides the Updater line.
         st.update_msg = UPDATE_MSG
