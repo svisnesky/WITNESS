@@ -35,10 +35,50 @@ def _render_flags():
 
 _ENCODER_CACHE = {}
 
+# What ffmpeg prints when there is NO NVIDIA encoder on this PC at all: no
+# NVIDIA card or driver (nvcuda.dll / libcuda missing), or a card without NVENC.
+# Only these may switch a session to CPU. Every other NVENC failure — a driver
+# hiccup, all encoder sessions held by OBS, a timeout while the game loads the
+# GPU — is TRANSIENT, and caching it would silently move Stan's reels onto
+# libx264 for the rest of the night: the exact CPU contention that NVENC was
+# turned on to remove (his in-match frame drops).
+_NVENC_MISSING_SIGNS = ("nvcuda.dll", "no capable devices",
+                        "no nvenc capable devices", "cannot load",
+                        "cannot init cuda")
+
+
+def _nvenc_hardware_missing(r) -> bool:
+    """True if a failed ffmpeg run says the NVIDIA hardware/driver isn't there."""
+    err = (getattr(r, "stderr", "") or "").lower()
+    return any(sign in err for sign in _NVENC_MISSING_SIGNS)
+
+
+def _nvenc_probe_says_missing(ffmpeg: str) -> bool:
+    """Encode ONE tiny frame with h264_nvenc. True only when that fails with a
+    missing-hardware message. A probe that times out, can't launch, or fails for
+    any other reason proves nothing, so it answers False (keep NVENC) and the
+    encode ladder in build_match_reel copes as it always has."""
+    try:
+        r = subprocess.run(
+            [ffmpeg, "-hide_banner", "-loglevel", "error",
+             "-f", "lavfi", "-i", "color=black:s=256x144:d=0.1",
+             "-frames:v", "1", "-c:v", "h264_nvenc", "-f", "null", "-"],
+            capture_output=True, text=True, timeout=20,
+            creationflags=_render_flags())
+    except Exception:
+        return False
+    return r.returncode != 0 and _nvenc_hardware_missing(r)
+
 
 def has_nvenc(ffmpeg: str) -> bool:
-    """True if this ffmpeg build has NVIDIA's hardware H.264 encoder.
-    Probed once per ffmpeg path — the answer can't change mid-session."""
+    """True if NVIDIA's hardware H.264 encoder is usable with this ffmpeg.
+
+    Two steps. `-encoders` only says the encoder was COMPILED IN — the gyan.dev
+    build the docs link lists h264_nvenc on every PC, NVIDIA or not, so on AMD,
+    Intel and GPU-less machines every reel used to fail twice on NVENC and print
+    three alarming lines before rendering on CPU. So when it is listed, a
+    one-frame probe asks the driver; only a clear missing-hardware answer turns
+    it off (see _NVENC_MISSING_SIGNS). Cached per ffmpeg path."""
     if ffmpeg in _ENCODER_CACHE:
         return _ENCODER_CACHE[ffmpeg]
     ok = False
@@ -48,6 +88,9 @@ def has_nvenc(ffmpeg: str) -> bool:
                            creationflags=_render_flags())
         ok = "h264_nvenc" in (r.stdout or "")
     except Exception:
+        ok = False
+    if ok and _nvenc_probe_says_missing(ffmpeg):
+        print("  [reel] no NVIDIA encoder on this PC - reels render on CPU")
         ok = False
     _ENCODER_CACHE[ffmpeg] = ok
     return ok
@@ -74,8 +117,8 @@ def video_encoder_args(cfg, ffmpeg: str) -> list:
         return ["-c:v", "h264_nvenc", "-preset", "p4", "-rc", "vbr",
                 "-cq", "21", "-b:v", "0"]
     if want == "nvenc":
-        print("  [reel] render_encoder: nvenc requested but this ffmpeg has no "
-              "h264_nvenc — falling back to CPU")
+        print("  [reel] render_encoder: nvenc requested but no NVIDIA encoder is "
+              "usable with this ffmpeg — falling back to CPU")
     return ["-c:v", "libx264", "-preset", "veryfast", "-crf", "21"]
 
 
@@ -788,14 +831,30 @@ def build_match_reel(clips, out_path: str, ffmpeg: str,
         # Hardware encoding can fail for reasons that have nothing to do with the
         # reel: a driver hiccup, or every NVENC session already in use by OBS. A
         # lost reel is much worse than a warm CPU, so retry in software.
-        print(f"  [reel] hardware encode failed: {_why_encode_failed(r)}")
+        hw_missing = _nvenc_hardware_missing(r)
+        if not hw_missing:
+            print(f"  [reel] hardware encode failed: {_why_encode_failed(r)}")
         # Try the older NVENC argument names before giving up on the GPU — a
         # pre-SDK-10 build rejects p1..p7 presets but encodes fine with -preset hq.
         r2 = _run(cmd + nvenc_legacy_args() + tail_args)
         if r2.returncode == 0:
+            if hw_missing:
+                print(f"  [reel] hardware encode failed: {_why_encode_failed(r)}")
             print("  [reel] ...succeeded with legacy NVENC settings")
             r = r2
+        elif hw_missing and _nvenc_hardware_missing(r2):
+            # Both rungs say there is no NVIDIA encoder on this PC at all.
+            # Remember it, so the re-renders below, the next reel and the Shorts
+            # go straight to CPU instead of failing twice each, and say so ONCE
+            # — three "failed" lines read like a broken install.
+            _ENCODER_CACHE[ffmpeg] = False
+            print("  [reel] NVIDIA encoder unavailable - rendering on CPU")
+            r = _run(cmd + cpu_encoder_args() + tail_args)
         else:
+            # Anything else is treated as transient and NOT cached: the next
+            # reel tries the GPU again.
+            if hw_missing:
+                print(f"  [reel] hardware encode failed: {_why_encode_failed(r)}")
             print(f"  [reel] legacy NVENC also failed: {_why_encode_failed(r2)}")
             print("  [reel] falling back to CPU")
             r = _run(cmd + cpu_encoder_args() + tail_args)

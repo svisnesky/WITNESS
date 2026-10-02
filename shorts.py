@@ -106,6 +106,7 @@ def build_short(src: str, dest: str, ffmpeg: str, tag: str = "",
         "[fg]scale=1080:-2[fgs];"
         + overlay_chain + "[v]"
     )
+    import match_reel
     from match_reel import cpu_encoder_args, video_encoder_args
     head = [ffmpeg, "-y", "-i", src,
             "-filter_complex", filt, "-map", "[v]", "-map", "0:a?"]
@@ -114,13 +115,19 @@ def build_short(src: str, dest: str, ffmpeg: str, tag: str = "",
     r = subprocess.run(head + enc + tail_args, capture_output=True, text=True,
                        creationflags=_render_flags())
     if r.returncode != 0 and enc[1] != "libx264":
+        # No NVIDIA encoder on this PC at all (not a transient failure): stop
+        # trying it for the rest of the session's Shorts, one doomed ffmpeg
+        # run each. Same signatures the reel ladder trusts; anything else is
+        # left uncached so a GPU hiccup doesn't move the night onto the CPU.
+        if match_reel._nvenc_hardware_missing(r):
+            match_reel._ENCODER_CACHE[ffmpeg] = False
         # A lost Short is worse than a warm CPU — retry in software.
         r = subprocess.run(head + cpu_encoder_args() + tail_args,
                            capture_output=True, text=True,
                            creationflags=_render_flags())
     if r.returncode == 0 and os.path.exists(dest):
         return True
-    tail = (r.stderr.strip().splitlines() or ["(no output)"])[-1]
+    tail = ((r.stderr or "").strip().splitlines() or ["(no output)"])[-1]
     print(f"  [shorts] ffmpeg failed on {os.path.basename(src)}: {tail}")
     return False
 
