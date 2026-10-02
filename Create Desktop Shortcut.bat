@@ -1,11 +1,14 @@
 @echo off
 REM Double-click this once to put a WITNESS icon on your desktop.
-REM It launches the app (control-panel window) with the skull logo.
+REM It launches the app (control-panel window) with the WITNESS icon.
 setlocal
 set "APP=%~dp0"
 if "%APP:~-1%"=="\" set "APP=%APP:~0,-1%"
+REM A ' in the folder path would end the PowerShell string below early;
+REM PowerShell reads two of them as one.
+set "APP=%APP:'=''%"
 
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$w = New-Object -ComObject WScript.Shell; $desk = [Environment]::GetFolderPath('Desktop'); $lnk = $w.CreateShortcut([IO.Path]::Combine($desk,'WITNESS.lnk')); $lnk.TargetPath = '%APP%\START Kill Recorder (Window).bat'; $lnk.WorkingDirectory = '%APP%'; $lnk.IconLocation = '%APP%\witness.ico'; $lnk.WindowStyle = 7; $lnk.Description = 'WITNESS - Auto Kill Recorder'; $lnk.Save()"
+powershell -NoProfile -Command "$w = New-Object -ComObject WScript.Shell; $desk = [Environment]::GetFolderPath('Desktop'); $lnk = $w.CreateShortcut([IO.Path]::Combine($desk,'WITNESS.lnk')); $lnk.TargetPath = '%APP%\START Kill Recorder (Window).bat'; $lnk.WorkingDirectory = '%APP%'; $lnk.IconLocation = '%APP%\witness.ico'; $lnk.WindowStyle = 7; $lnk.Description = 'WITNESS - Auto Kill Recorder'; $lnk.Save()"
 
 if errorlevel 1 (
   echo.
