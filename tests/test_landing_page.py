@@ -193,5 +193,34 @@ def test_inline_script_keeps_boot_modes_and_reveal(page):
 
 
 def test_page_still_renders_without_javascript(page):
+    """Without JS the boot overlay must go and every .reveal section must show.
+
+    The <noscript> rules sit in <head>, BEFORE the main stylesheet, and use the
+    same selectors (#boot, .reveal), so the later `#boot{display:flex}` and
+    `.reveal{opacity:0}` won the cascade and the fallback did nothing. Checking
+    that the selector strings exist passed on that broken page; what matters is
+    that each fallback declaration can actually win: it carries !important, or
+    the block comes after every main stylesheet."""
     m = re.search(r"<noscript>(.*?)</noscript>", page.src, re.S)
-    assert m and ".reveal" in m.group(1) and "#boot" in m.group(1)
+    assert m, "no <noscript> fallback"
+    css = "".join(re.findall(r"<style[^>]*>(.*?)</style>", m.group(1), re.S))
+    rules = re.findall(r"([^{}]+)\{([^{}]*)\}", css)
+    got = {}
+    for sel, body in rules:
+        for decl in body.split(";"):
+            if decl.strip():
+                prop, _, val = decl.partition(":")
+                got[(sel.strip(), prop.strip())] = re.sub(r"\s+", "", val)
+    for sel, prop, want in (("#boot", "display", "none"),
+                            (".reveal", "opacity", "1"),
+                            (".reveal", "transform", "none")):
+        assert got.get((sel, prop), "").replace("!important", "") == want, \
+            f"noscript fallback no longer sets {sel}{{{prop}:{want}}}"
+    # Last main-stylesheet </style>, in coordinates where the noscript block is
+    # cut out: anything at or past m.start() came after the block.
+    outside = page.src[:m.start()] + page.src[m.end():]
+    after_main = outside.rfind("</style>") < m.start()
+    for (sel, prop), val in got.items():
+        assert after_main or val.endswith("!important"), (
+            f"noscript {sel}{{{prop}:{val}}} loses to the later main stylesheet; "
+            "mark it !important or move the block after the last </style>")
