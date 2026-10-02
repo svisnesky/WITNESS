@@ -503,8 +503,15 @@ def count_events(tags) -> tuple:
 
     Measured across both audited sessions (2026-07-27 and 2026-07-29): folding a
     trailing FINISHER matches the game's Runner Elims on 6 of 7 matches, versus
-    4 of 7 when every finisher was counted separately. The one miss is an
-    under-count on a match whose popup OCR'd as 'RUNNER ELIM [ASSIST F10 Xp'."""
+    4 of 7 when every finisher was counted separately. The one miss (07-27 m6)
+    is an under-count whose cause is LIKELY, not confirmed (no frames from that
+    moment), an own RUNNER ELIM popup that never fired inside a continuous
+    popup chain. It is NOT that match's 'RUNNER ELIM [ASSIST F10 Xp' read: a
+    bracket-dropped '[ASSIST' is a real assist. _normalize strips both brackets,
+    so the bracket can't change the tag, and 07-27 m5 rules out the general
+    "dropped bracket = own kill" rule (its 'HAPA RUNNER DOIN [ASSIST 5 XP' would
+    become a false down). The narrower "bracket-dropped ELIM = own" rule fits
+    only because it was built from that one raw (n=1). Don't ship it on that."""
     downs = elims = 0
     pending_elim = False          # an elim that hasn't had its FINISHER yet
     for t in tags or []:
