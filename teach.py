@@ -1,6 +1,7 @@
 """Teach-a-game wizard: point the app at ANY game in about two minutes.
 
-    python main.py --teach        (or the TEACH A GAME button in the app)
+    python main.py --teach        (console wizard, with a verify step)
+    python teach_gui.py           (windowed wizard)
 
 The flow: you name the game, alt-tab in, and get a kill while the wizard
 watches the screen and records every piece of text it reads — what it said,
@@ -387,8 +388,8 @@ def run(cfg) -> None:
     # session, and the feature reads as an empty promise.
     print()
     print("Let's prove it works before you rely on it.")
-    print(f"Press Enter, alt-tab back in, and get ONE more kill. I'll watch the")
-    print(f"region I just measured with the real detector for 45 seconds.")
+    print("Press Enter, alt-tab back in, and get ONE more kill. I'll watch the")
+    print("region I just measured with the real detector for 45 seconds.")
     if _ask("Press Enter to verify (or type 'skip'): ").lower() != "skip":
         res = verify_profile(cfg, phrases, region, reward, seconds=45)
         if res["fired"]:
