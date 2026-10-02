@@ -34,7 +34,7 @@ def test_precision_is_a_modifier_on_a_down_not_its_own_kill():
     assert main._kill_count(["down", "precision", "down", "precision"]) == 2
 
 
-def test_handle_kill_headline_ignores_assists():
+def test_handle_kill_headline_ignores_assists(tmp_path):
     """Driving _handle_kill directly: an assist event records the tag for the
     breakdown but does not bump s['count']."""
     events = []
@@ -61,8 +61,9 @@ def test_handle_kill_headline_ignores_assists():
     }
     cfg = {"team_wipe": False, "announcer_medals": False, "show_overlays": False,
            "play_sound": False,
-           "session_log": os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                                       "_kill_count_test.csv")}
+           # tmp_path, not tests/: this used to append a row to a TRACKED
+           # file on every run, leaving every checkout dirty after `pytest`.
+           "session_log": str(tmp_path / "kills.csv")}
 
     for raw in ["RUNNER DOWN +15 XP", "ASSIST +10 XP", "PRECISION DOWN +25 XP",
                 "ASSIST +10 XP"]:
@@ -74,7 +75,7 @@ def test_handle_kill_headline_ignores_assists():
     assert s["session_tags"].count("assist") == 2   # still in the breakdown
 
 
-def test_assist_earns_a_clip_and_nothing_else():
+def test_assist_earns_a_clip_and_nothing_else(tmp_path):
     """Stan's rule: "for those I just want the recordings. they shouldn't count
     toward anything else." So an assist must reach the clip coalescer but touch
     no counter, no gamertag log, and no heat."""
@@ -104,8 +105,7 @@ def test_assist_earns_a_clip_and_nothing_else():
          "obs": obs, "web": None, "medal_sounds": {}, "cfg": {}, "heat": hot}
     cfg = {"team_wipe": True, "announcer_medals": False, "show_overlays": False,
            "play_sound": True, "heat_streaks": True,
-           "session_log": os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                                       "_assist_test.csv")}
+           "session_log": str(tmp_path / "assist_test.csv")}
 
     main._handle_kill(cfg, _Ev("RUNNER ELIM [ASSIST] +10 XP"), s)
 
@@ -117,10 +117,6 @@ def test_assist_earns_a_clip_and_nothing_else():
     assert len(s["_coalesce_pending"]) == 1      # but it DOES get a clip
     assert s["_coalesce_pending"][0]["tag"] == "assist"
 
-    try:
-        os.remove(cfg["session_log"])
-    except OSError:
-        pass
 
 
 def test_headshot_down_does_not_fire_double_kill():
@@ -155,7 +151,7 @@ def test_headshot_down_does_not_fire_double_kill():
         assert got == expect, f"{tags}: got {got!r}, expected {expect!r}"
 
 
-def test_own_finisher_is_folded_even_after_the_clip_window_flushes():
+def test_own_finisher_is_folded_even_after_the_clip_window_flushes(tmp_path):
     """Stan, 2026-08-08: "i downed, killed, then downed another and killed" —
     two enemies, reported as more. The second elim arrived after its down's
     coalesce window had flushed, so the own-finisher check (which only looked
@@ -176,8 +172,7 @@ def test_own_finisher_is_folded_even_after_the_clip_window_flushes():
          "cfg": {}}
     cfg = {"team_wipe": False, "announcer_medals": False, "show_overlays": False,
            "play_sound": False,
-           "session_log": os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                                       "_own_fin_test.csv")}
+           "session_log": str(tmp_path / "own_fin_test.csv")}
 
     # enemy 1: down, then its elim in the SAME window
     main._handle_kill(cfg, _Ev("RUNNER DOWN +15 XP"), s)
@@ -192,13 +187,9 @@ def test_own_finisher_is_folded_even_after_the_clip_window_flushes():
     assert s["count"] == 2, f"two enemies, got {s['count']}"
     assert s["downs"] == 2
 
-    try:
-        os.remove(cfg["session_log"])
-    except OSError:
-        pass
 
 
-def test_a_second_elim_is_not_folded_onto_the_same_down():
+def test_a_second_elim_is_not_folded_onto_the_same_down(tmp_path):
     """Folding must apply ONCE per down — otherwise finishing a teammate's
     downed runner right after your own kill would vanish."""
     class _Ev:
@@ -216,8 +207,7 @@ def test_a_second_elim_is_not_folded_onto_the_same_down():
          "cfg": {}}
     cfg = {"team_wipe": False, "announcer_medals": False, "show_overlays": False,
            "play_sound": False,
-           "session_log": os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                                       "_own_fin2_test.csv")}
+           "session_log": str(tmp_path / "own_fin2_test.csv")}
     main._handle_kill(cfg, _Ev("RUNNER DOWN +15 XP"), s)
     s["_coalesce_pending"] = []
     main._handle_kill(cfg, _Ev("RUNNER ELIM +10 XP"), s)   # folds into the down
@@ -225,7 +215,3 @@ def test_a_second_elim_is_not_folded_onto_the_same_down():
     main._handle_kill(cfg, _Ev("RUNNER ELIM +10 XP"), s)   # a DIFFERENT runner
     assert s["count"] == 2, s["count"]
 
-    try:
-        os.remove(cfg["session_log"])
-    except OSError:
-        pass
