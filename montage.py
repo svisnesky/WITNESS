@@ -2,11 +2,13 @@
 
 Uses the concat demuxer with stream copy (-c copy) so it's fast and lossless —
 the clips all come from the same OBS Replay Buffer, so they share a codec.
-Needs ffmpeg: either ffmpeg.exe in the app folder, an ffmpeg_path in config, or
-ffmpeg on PATH.
+Needs ffmpeg: either ffmpeg.exe in the app folder, an ffmpeg_path in config,
+ffmpeg on PATH, or (last resort) the binary bundled with the imageio-ffmpeg
+package. See find_ffmpeg for the order.
 """
 
 import os
+import shutil
 import subprocess
 
 import tidy
@@ -25,14 +27,71 @@ def _render_flags():
     return flags
 
 
+# imageio-ffmpeg's bundled binary: None = not looked up yet, "" = not available.
+_IMAGEIO_FFMPEG = None
+# has_ffmpeg() answers, keyed by the resolved ffmpeg path.
+_HAS_FFMPEG = {}
+
+
+def _imageio_ffmpeg() -> str:
+    """The ffmpeg that the imageio-ffmpeg package ships, or "".
+
+    GUARDED, and that is the whole point: the updater never runs pip, so an
+    auto-updated install (Stan's included) does not have this package even after
+    requirements.txt lists it. An unguarded import here would have taken down
+    every replay and reel on exactly the installs that were working. Looked up
+    once per process — this is reached on every kill for anyone without ffmpeg."""
+    global _IMAGEIO_FFMPEG
+    if _IMAGEIO_FFMPEG is None:
+        exe = ""
+        try:
+            import imageio_ffmpeg
+            exe = str(imageio_ffmpeg.get_ffmpeg_exe() or "")
+        except Exception:            # not installed, or no binary for this OS
+            exe = ""
+        _IMAGEIO_FFMPEG = exe if exe and os.path.isfile(exe) else ""
+    return _IMAGEIO_FFMPEG
+
+
 def find_ffmpeg(base_dir, cfg):
-    p = (cfg.get("ffmpeg_path") or "").strip()
+    """The ffmpeg to run. Order matters, and the first two are Stan's setup:
+
+      1. ffmpeg_path from config
+      2. ffmpeg.exe in the app folder
+      3. ffmpeg on PATH          -> the bare name "ffmpeg", exactly as before
+      4. imageio-ffmpeg's bundled binary, if that package is installed
+      5. the bare name "ffmpeg" anyway, so callers behave exactly as they always
+         have (and fail the way they always have) when there is no ffmpeg at all
+
+    The bundled binary comes LAST on purpose: it has no ffprobe (probe_duration
+    already falls back to `ffmpeg -i`) and may lack NVENC or drawtext, both of
+    which already degrade gracefully. Any ffmpeg the user installed wins."""
+    p = ((cfg or {}).get("ffmpeg_path") or "").strip()
     if p and os.path.exists(p):
         return p
     local = os.path.join(base_dir, "ffmpeg.exe")
     if os.path.exists(local):
         return local
-    return "ffmpeg"  # fall back to PATH
+    if shutil.which("ffmpeg"):
+        return "ffmpeg"  # on PATH
+    bundled = _imageio_ffmpeg()
+    if bundled:
+        return bundled
+    return "ffmpeg"  # nothing found; keep the old sentinel
+
+
+def has_ffmpeg(base_dir, cfg) -> bool:
+    """True if find_ffmpeg() resolves to something that can actually run.
+
+    The bare "ffmpeg" sentinel is checked with shutil.which, never
+    os.path.exists — a PATH install is not a file in the current folder, and
+    testing it that way would wrongly switch off replays for everyone with
+    ffmpeg on PATH. Cached per resolved path for the life of the process."""
+    ff = find_ffmpeg(base_dir, cfg)
+    if ff not in _HAS_FFMPEG:
+        _HAS_FFMPEG[ff] = bool(ff) and (os.path.isfile(ff)
+                                         or shutil.which(ff) is not None)
+    return _HAS_FFMPEG[ff]
 
 
 def build_montage(session_dir, ffmpeg):
