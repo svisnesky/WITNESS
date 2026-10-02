@@ -292,15 +292,31 @@ def test_connect_silences_the_obsws_logger(monkeypatch):
         lib.setLevel(before)
 
 
-def test_close_is_final_until_connect():
-    """A clip worker polling after the session ended must not reopen OBS."""
+def test_close_is_final_until_connect(capsys):
+    """A clip worker polling after the session ended must not reopen OBS, and
+    must not print either: it polls every 0.5 s for up to 8 s, and each late
+    request used to print a "'NoneType' object has no attribute" line (two
+    for save_replay), up to 16 per pending clip."""
     ws = _Ws()
     c = _client(_Dropped(ws))
     c.close()
     assert ws.shutdowns == 1
+    capsys.readouterr()
     assert c.get_record_directory() == ""
+    assert c.get_last_replay_path() == ""
+    assert c.save_replay() is False
+    assert c.replay_buffer_active() is None
+    assert c.recover_replay_buffer() is False
+    assert c.get_scene_screenshot() == b""
+    assert c.get_scene_input_kinds() is None
+    c.set_counter(7)
     assert c.reconnects == 0
+    assert capsys.readouterr().out == "", "a closed client must stay quiet"
     c.close()                                   # twice is fine
+
+    c._connect_client = lambda: setattr(c, "_client", _Fresh(True))
+    c.connect()                                 # ...and connect() reopens it
+    assert c.replay_buffer_active() is True
 
 
 # --- replay_buffer_ok -----------------------------------------------------------

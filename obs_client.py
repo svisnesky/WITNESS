@@ -149,9 +149,16 @@ class OBSClient:
         output) is answered over a healthy socket, so it is never a reason to
         reconnect: it prints one line and returns `default`, or whatever
         on_refused(error) returns when that is given. Every other exception is
-        treated as a dropped connection, exactly as before."""
+        treated as a dropped connection, exactly as before.
+
+        After close() it returns `default` at once, silently. close() drops the
+        client, so running fn() would only raise AttributeError on None and
+        print a misleading failure line; a clip worker still polling after the
+        session ended would print up to 16 of them per clip."""
         refused = _request_error()
         with self._lock:
+            if self._closed:
+                return default
             for attempt in range(2):
                 try:
                     return fn()
@@ -363,8 +370,9 @@ class OBSClient:
 
     def close(self) -> None:
         """Close the websocket (end of session). Safe to call more than once.
-        A straggling request after this returns its default instead of quietly
-        opening a new connection; connect() opens it again."""
+        A straggling request after this returns its default, without a line
+        on the console and without opening a new connection; connect() opens
+        it again."""
         with self._lock:
             self._closed = True
             self._drop_client()
