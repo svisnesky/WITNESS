@@ -1039,6 +1039,16 @@ def start_web(state, port, base_dir, host="0.0.0.0"):
 
         def do_POST(self):
             path = self.path.split("?")[0]
+            # Read the body ONCE, for every route. The server is HTTP/1.1
+            # keep-alive, and most POST routes never read their body — so any
+            # bytes a client sent stayed in the socket and were parsed as the
+            # start of the NEXT request on that connection, which then failed.
+            # Capped so a hostile Content-Length can't make us allocate GBs.
+            try:
+                n = min(int(self.headers.get("Content-Length") or 0), 1_000_000)
+            except ValueError:
+                n = 0
+            self._body = self.rfile.read(n) if n > 0 else b""
             try:
                 if path == "/clip":
                     state.request_clip()
@@ -1055,9 +1065,8 @@ def start_web(state, port, base_dir, host="0.0.0.0"):
                     self._send(json.dumps(result).encode(),
                                "application/json", cache=False)
                 elif path == "/export":
-                    n = int(self.headers.get("Content-Length") or 0)
                     try:
-                        body = json.loads(self.rfile.read(n) or b"{}")
+                        body = json.loads(self._body or b"{}")
                     except Exception:
                         body = {}
                     self._send(json.dumps(state.request_export(
@@ -1072,9 +1081,8 @@ def start_web(state, port, base_dir, host="0.0.0.0"):
                     # Rebuild a past session's reels from the clips on disk.
                     # Lives on the Archive page because that is where Stan looks;
                     # a .bat in the app folder was not somewhere he'd find it.
-                    n = int(self.headers.get("Content-Length") or 0)
                     try:
-                        body = json.loads(self.rfile.read(n) or b"{}")
+                        body = json.loads(self._body or b"{}")
                     except Exception:
                         body = {}
                     sess = str(body.get("session") or "latest")
@@ -1088,9 +1096,8 @@ def start_web(state, port, base_dir, host="0.0.0.0"):
                     state.fire_stop()
                     self._send(b'{"ok":true}', "application/json", cache=False)
                 elif path == "/config":
-                    n = int(self.headers.get("Content-Length") or 0)
                     try:
-                        changes = json.loads(self.rfile.read(n) or b"{}")
+                        changes = json.loads(self._body or b"{}")
                     except ValueError:
                         changes = {}
                     result = state.apply_settings(changes if isinstance(changes, dict) else {})
