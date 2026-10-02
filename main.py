@@ -30,6 +30,7 @@ CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.y
 # doesn't collide on the port and leave the browser on stale data).
 _web_state = None
 _web_server = None
+_advertiser = None    # Bonjour registration for the iOS app (discovery.py)
 
 # Per-session console log: everything printed is also written to a file so you
 # can just send the file instead of copy-pasting a live, scrolling console.
@@ -870,7 +871,7 @@ def _setup_session(cfg, dry_run):
     if cfg.get("web_dashboard", True):
         try:
             import webserver
-            global _web_state, _web_server
+            global _web_state, _web_server, _advertiser
             base = os.path.dirname(os.path.abspath(__file__))
             port = cfg.get("web_port", 8000)
             if _web_server is None:
@@ -879,6 +880,19 @@ def _setup_session(cfg, dry_run):
                 # false = this PC only (most locked-down).
                 host = "0.0.0.0" if cfg.get("web_lan", True) else "127.0.0.1"
                 _web_server = webserver.start_web(_web_state, port, base, host=host)
+                # Let the iOS app find this PC by itself. Only when the dashboard
+                # is actually reachable from the LAN — advertising a server bound
+                # to 127.0.0.1 would send the iPad to a dead address.
+                if (_advertiser is None and cfg.get("web_lan", True)
+                        and cfg.get("bonjour_discovery", True)):
+                    try:
+                        import discovery
+                        _advertiser = discovery.advertise(
+                            port, webserver.local_ip(),
+                            version=getattr(_web_state, "version", ""),
+                            api=webserver.API_VERSION)
+                    except Exception as e:
+                        print(f"  [discovery] skipped: {e}")
             web = _web_state
             web.reset()
             web.bind_config(cfg, save_setting_overrides)
@@ -1048,8 +1062,24 @@ def check_obs_not_black(cfg, obs, web=None, state=None, label="") -> bool:
         if label:
             print(f"  [capture] OBS is seeing picture "
                   f"(brightness {res['mean']:.0f}, variation {res['stddev']:.0f})")
+        if web is not None:
+            try:
+                web.clear_alert("black_capture")   # fixed — stop alerting the iPad
+            except Exception:
+                pass
         return True
     print(blackcheck.warning_text(res))
+    # A first-class alert for the iOS app (and any future client), raised before
+    # the clutch check below so the iPad hears about it even when the on-screen
+    # overlay is being held back.
+    if web is not None:
+        try:
+            web.set_alert("black_capture", "critical",
+                          "OBS is recording a black screen",
+                          "Your clips will be empty. In OBS, open your Display "
+                          "Capture source and re-pick the display.")
+        except Exception:
+            pass
     # SWEAT MODE. I first held this back during a clutch, reasoning he couldn't
     # act on it mid-fight. Stan overruled that: "if im using sweat mode i would
     # like to see the alert though" — and he's right, a clutch is exactly the

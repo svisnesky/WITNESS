@@ -29,6 +29,16 @@ Four destinations exist in the entire codebase (`grep -rhoE 'https?://' *.py`):
 | `googleapis.com` (YouTube) | Only if you set up OAuth **and** enable an upload flag | The video you chose to upload |
 | `youtu.be` | — | Only appears in a printed result URL |
 
+
+**One local-network announcement.** With `bonjour_discovery: true` (the default,
+and only when `web_lan` is on), WITNESS announces itself on your *local* network
+over mDNS/Bonjour as `_witness._tcp` so the iOS companion app can find the PC
+without you typing an address — the same mechanism printers and AirPlay use. The
+announcement carries the PC's LAN address, the dashboard port, the PC's hostname,
+and the app version.
+It never leaves your LAN and contains nothing about your sessions. Turn it off
+with `bonjour_discovery: false` (discovery.py).
+
 **No telemetry, no analytics, no crash reporting, no phoning home.** There is
 nowhere for your data to go that you did not configure yourself.
 

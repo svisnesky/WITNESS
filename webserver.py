@@ -221,6 +221,9 @@ class LiveState:
             self.replays.clear()
             self.tag_counts = {}
             self.heat = {}
+            # a new session re-runs its own checks; an alert from the last
+            # one (e.g. black capture) must not outlive it
+            self.alerts = {}
 
     def request_kill(self):
         with self._lock:

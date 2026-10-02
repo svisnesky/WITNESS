@@ -405,6 +405,10 @@ web_lan: true          # true = reachable from devices on your Wi-Fi (the iPad).
                        # network can see stats and press its buttons. On a home
                        # network that's fine; on shared/public Wi-Fi set false
                        # (this PC only).
+# Let the WITNESS iOS app find this PC on your Wi-Fi by itself (Bonjour), so
+# you never type 192.168.x.x. Only active when web_lan is true. Advertises the
+# port and the PC's name — nothing about your sessions.
+bonjour_discovery: true
 
 # --- Logging ---
 session_log: "session_log.csv"
