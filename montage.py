@@ -9,6 +9,8 @@ ffmpeg on PATH.
 import os
 import subprocess
 
+import tidy
+
 VIDEO_EXTS = (".mkv", ".mp4", ".mov", ".flv", ".ts")
 
 
@@ -39,19 +41,28 @@ def build_montage(session_dir, ffmpeg):
         print("  [montage] no session folder to stitch")
         return None
 
+    # Tidy-aware: clips live at the top level during a session and in clips/
+    # once the recap has tidied the folder. Listing only the top level made a
+    # Rebuild of a tidied session stitch session_reel.mp4 — the one video left
+    # there — into a "montage" of itself. iter_session_media also skips the
+    # session's own outputs (highlights*, session_reel*, witness_report*).
+    rel_of, seen = {}, set()
+    for rel, full in tidy.iter_session_media(session_dir, VIDEO_EXTS):
+        name = os.path.basename(rel).lower()
+        if name in seen:
+            continue    # tidy skipped a name collision: same clip in both places
+        seen.add(name)
+        rel_of[full] = rel
+
     # CHRONOLOGICAL, not alphabetical: the filename's leading number is the kill
     # count, which repeats now that assists don't bump it, so a plain sort cut
     # back to an earlier moment mid-montage.
-    names = [f for f in os.listdir(session_dir)
-             if f.lower().endswith(VIDEO_EXTS)
-             and not f.lower().startswith("highlights")]
     try:
         from match_reel import sort_chronologically
-        clips = [os.path.basename(p) for p in sort_chronologically(
-            [os.path.join(session_dir, f) for f in names])]
+        fulls = sort_chronologically(list(rel_of))
     except Exception:
-        clips = sorted(names)
-    if not clips:
+        fulls = sorted(rel_of, key=lambda f: os.path.basename(f))
+    if not fulls:
         print("  [montage] no clips in the session folder to stitch")
         return None
     # Drop clips whose Replay-Buffer footage is contained in the next save —
@@ -59,19 +70,18 @@ def build_montage(session_dir, ffmpeg):
     try:
         from match_reel import drop_overlapping
         deduped = drop_overlapping(
-            [{"path": os.path.join(session_dir, c), "kills": 1, "tag": ""}
-             for c in clips], ffmpeg)
-        clips = [os.path.basename(c["path"]) for c in deduped]
+            [{"path": f, "kills": 1, "tag": ""} for f in fulls], ffmpeg)
+        fulls = [c["path"] for c in deduped]
     except Exception:
         pass
+    # Paths RELATIVE to the session folder, forward slashes ("clips/001_...").
+    # The concat demuxer resolves them against the list file's own folder, which
+    # is session_dir. A bare basename would point at the top level, where a
+    # tidied clip no longer is.
+    clips = [rel_of[f] for f in fulls]
 
-    ext = os.path.splitext(clips[0])[1]
+    ext = os.path.splitext(os.path.basename(clips[0]))[1]
     list_path = os.path.join(session_dir, "_montage_list.txt")
-    with open(list_path, "w", encoding="utf-8") as f:
-        for c in clips:
-            # ffmpeg concat: escape single quotes in filenames
-            f.write("file '%s'\n" % c.replace("'", "'\\''"))
-
     out = os.path.join(session_dir, "highlights_%s%s" % (os.path.basename(session_dir), ext))
     # +genpts / make_zero: OBS Replay-Buffer files carry non-zero start
     # timestamps; naive stream-copy concat inherits them and players cut clips
@@ -80,20 +90,29 @@ def build_montage(session_dir, ffmpeg):
     cmd = [ffmpeg, "-y", "-fflags", "+genpts", "-f", "concat", "-safe", "0",
            "-i", list_path, "-c", "copy", "-avoid_negative_ts", "make_zero", out]
     try:
-        r = subprocess.run(cmd, cwd=session_dir, capture_output=True, text=True,
-                           creationflags=_render_flags())
-        if r.returncode == 0 and os.path.exists(out):
-            print("  [montage] highlight reel -> %s (%d clips)" % (out, len(clips)))
-            try:
-                os.remove(list_path)
-            except OSError:
-                pass
-            return out
-        tail = (r.stderr.strip().splitlines() or ["(no output)"])[-1]
-        print("  [montage] ffmpeg failed (%s): %s" % (r.returncode, tail))
-    except FileNotFoundError:
-        print("  [montage] ffmpeg not found — put ffmpeg.exe in the app folder "
-              "or set ffmpeg_path in config.yaml.")
-    except Exception as e:
-        print("  [montage] error: %s" % e)
+        with open(list_path, "w", encoding="utf-8") as f:
+            for c in clips:
+                # ffmpeg concat: escape single quotes in filenames
+                f.write("file '%s'\n" % c.replace("'", "'\\''"))
+        try:
+            r = subprocess.run(cmd, cwd=session_dir, capture_output=True,
+                               text=True, creationflags=_render_flags())
+            if r.returncode == 0 and os.path.exists(out):
+                print("  [montage] highlight reel -> %s (%d clips)" % (out, len(clips)))
+                return out
+            tail = ((r.stderr or "").strip().splitlines() or ["(no output)"])[-1]
+            print("  [montage] ffmpeg failed (%s): %s" % (r.returncode, tail))
+        except FileNotFoundError:
+            print("  [montage] ffmpeg not found — put ffmpeg.exe in the app folder "
+                  "or set ffmpeg_path in config.yaml.")
+        except Exception as e:
+            print("  [montage] error: %s" % e)
+    finally:
+        # Every exit, not just success: a failed render used to leave the list
+        # file behind in the session folder. A list file that can't be WRITTEN
+        # still raises to the caller, as before, so the recap records it.
+        try:
+            os.remove(list_path)
+        except OSError:
+            pass
     return None

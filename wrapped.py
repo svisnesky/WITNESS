@@ -16,6 +16,7 @@ import os
 import time
 
 import clip_index
+import tidy
 from matchcard import _font, _text_w, BG, PANEL, LINE, TEXT, MUTED, ACCENT
 
 TAG_PRIORITY = ("finisher", "precision", "down", "kill", "assist", "manual")
@@ -59,12 +60,13 @@ def best_play(record_dir: str, days: int = 7):
         sdir = os.path.join(root, sess)
         if not os.path.isdir(sdir) or os.path.getmtime(sdir) < cutoff:
             continue
-        for f in os.listdir(sdir):
-            if not f.lower().endswith((".mkv", ".mp4")) or f.startswith("highlights"):
-                continue
+        # Tidy-aware: after a recap the clips live in clips/, and the old
+        # top-level-only listing found nothing there, so Wrapped never had a
+        # best play. iter_session_media also skips highlights/session_reel.
+        for rel, _full in tidy.iter_session_media(sdir, (".mkv", ".mp4")):
             # The shared, end-anchored parser: a '+1 KILL' clip is tagged
             # 'manual_kill', which a split on '_' cut down to 'manual'.
-            _n, tags, _clock = clip_index.parse_name(f)
+            _n, tags, _clock = clip_index.parse_name(os.path.basename(rel))
             if not tags:
                 continue
             tag = "+".join(tags)
