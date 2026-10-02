@@ -14,6 +14,7 @@ import sys
 import threading
 import time
 import tkinter as tk
+import traceback
 from tkinter import scrolledtext
 
 BASE = os.path.dirname(os.path.abspath(__file__))
@@ -30,6 +31,112 @@ MUTED = "#8a90a0"
 LINE = "#2a2a38"
 RED = "#ff4b42"
 GREEN = "#5bd66b"
+
+
+# --- failures you can see ---------------------------------------------------
+# The recommended launcher is pythonw: no console, sys.stdout and sys.stderr
+# are None, and Tk swallows callback errors. Every failure used to end in an
+# invisible pythonw.exe (or a START button that quietly flipped back). Each
+# path below ends in a message on screen and a file in logs/ instead.
+
+def _logs_dir() -> str:
+    d = os.path.join(BASE, "logs")
+    try:
+        os.makedirs(d, exist_ok=True)
+    except Exception:
+        pass
+    return d
+
+
+def _stamp() -> str:
+    return time.strftime("%Y-%m-%d_%H-%M-%S")
+
+
+def _write_log(name: str, text: str) -> str:
+    """Write text to logs/<name>. Returns the path, or '' if even that failed."""
+    path = os.path.join(_logs_dir(), name)
+    try:
+        with open(path, "w", encoding="utf-8", errors="backslashreplace") as f:
+            f.write(text)
+        return path
+    except Exception:
+        return ""
+
+
+def _ensure_stderr() -> None:
+    """Under pythonw sys.stderr is None, so tracebacks from threads, warnings
+    and libraries vanish. Point it at logs/pythonw_stderr.log (append, utf-8,
+    line-buffered; started fresh once it passes 5 MB)."""
+    if sys.stderr is not None:
+        return
+    path = os.path.join(_logs_dir(), "pythonw_stderr.log")
+    mode = "a"
+    try:
+        if os.path.getsize(path) > 5 * 1024 * 1024:
+            mode = "w"
+    except OSError:
+        pass
+    try:
+        sys.stderr = open(path, mode, encoding="utf-8", errors="backslashreplace",
+                          buffering=1)
+        sys.stderr.write(f"\n--- WITNESS window started {_stamp()} ---\n")
+    except Exception:
+        pass
+
+
+def _note(msg: str) -> None:
+    """A diagnostic line. Goes to stderr: under pythonw that is the log file
+    above, while stdout is None and print() would drop it."""
+    try:
+        print(msg, file=sys.stderr if sys.stderr is not None else sys.stdout)
+    except Exception:
+        pass
+
+
+def _show_error(message: str, title: str = "WITNESS", info: bool = False,
+                parent=None) -> None:
+    """A message box that works with or without a live Tk root, and falls back
+    to the native Windows box if Tk itself is broken."""
+    try:
+        from tkinter import messagebox
+        own = None
+        if parent is None:
+            own = parent = tk.Tk()
+            own.withdraw()
+        try:
+            parent.attributes("-topmost", True)
+        except Exception:
+            pass
+        (messagebox.showinfo if info else messagebox.showerror)(
+            title, message, parent=parent)
+        if own is not None:
+            own.destroy()
+        return
+    except Exception:
+        pass
+    if sys.platform == "win32":
+        try:
+            import ctypes
+            ctypes.windll.user32.MessageBoxW(0, message, title,
+                                             0x40 if info else 0x10)
+            return
+        except Exception:
+            pass
+    _note(f"{title}: {message}")
+
+
+def _fatal(message: str, parent=None, info: bool = False, code: int = 1):
+    """Show the message, then end the process for real. os._exit, because a
+    daemon web server or a pywebview thread must not keep it alive unseen."""
+    _note(message)
+    _show_error(message, info=info, parent=parent)
+    os._exit(code)
+
+
+def _config_error_text(exc) -> str:
+    return ("config.yaml could not be read, so WITNESS can't start.\n\n"
+            f"{exc}\n\nFix that line in config.yaml (or put back the copy from "
+            "the WITNESS download) and start again.")
 
 
 class QueueWriter:
@@ -66,7 +173,12 @@ class ControlPanel:
 
     def __init__(self, root):
         self.root = root
-        self.cfg = app.load_config()
+        try:
+            self.cfg = app.load_config()
+        except Exception as e:
+            # a typo in config.yaml used to kill this window before it drew,
+            # silently under pythonw
+            _fatal(_config_error_text(e), parent=root)
         self.q = queue.Queue()
         self.stop_event = None
         self.worker = None
@@ -766,10 +878,62 @@ def _claim_app_identity():
 
 
 def main():
-    global UPDATE_MSG, app
+    """Entry point (`pythonw gui.py`). Whatever goes wrong ends in a message
+    box naming a file in logs/, never in an invisible pythonw.exe that only
+    Task Manager can find."""
+    _ensure_stderr()
+    try:
+        _boot()
+    except SystemExit:
+        raise
+    except Exception:
+        tb = traceback.format_exc()
+        _note(tb)
+        path = _write_log(f"crash_{_stamp()}.log", tb)
+        _fatal("WITNESS stopped unexpectedly.\n\nDetails were saved to:\n"
+               + (path or os.path.join(BASE, "logs")))
+
+
+def _boot_callback_error(root):
+    """root.report_callback_exception for the boot (splash) loop. The root is
+    withdrawn and the splash may already be faded out, so an error here would
+    otherwise leave a process with no window at all: log it, say so, exit."""
+    def handler(exc, val, tb):
+        text = "".join(traceback.format_exception(exc, val, tb))
+        _note(text)
+        path = _write_log(f"crash_{_stamp()}.log", text)
+        try:
+            for w in root.winfo_children():   # the splash must not cover the box
+                w.destroy()
+        except Exception:
+            pass
+        _fatal(f"WITNESS hit an error while starting and has to close.\n\n{val}"
+               f"\n\nDetails were saved to:\n{path or os.path.join(BASE, 'logs')}",
+               parent=root)
+    return handler
+
+
+def _panel_callback_error(root):
+    """report_callback_exception for the (visible) tk control panel: log it and
+    show it, but keep the window, at most one box per 10 s."""
+    last = {"t": 0.0}
+
+    def handler(exc, val, tb):
+        text = "".join(traceback.format_exception(exc, val, tb))
+        _note(text)
+        path = _write_log(f"crash_{_stamp()}.log", text)
+        if time.monotonic() - last["t"] > 10:
+            last["t"] = time.monotonic()
+            _show_error(f"Something went wrong: {val}\n\nDetails: {path or 'logs/'}",
+                        parent=root)
+    return handler
+
+
+def _boot():
     _claim_app_identity()
     root = tk.Tk()
     root.withdraw()
+    root.report_callback_exception = _boot_callback_error(root)
 
     # Update check runs BEHIND the splash so the cinematic actually plays.
     state = {"done": False, "relaunch": False, "msg": ""}
@@ -802,7 +966,35 @@ def main():
     def finish():
         global UPDATE_MSG, app
         UPDATE_MSG = state["msg"]
-        import main as app_module
+        try:
+            import main as app_module
+        except Exception as e:
+            # Typically a half-finished install (the multi-GB download was cut
+            # off): main imports yaml/torch/easyocr. This runs inside a Tk
+            # callback after the splash faded to nothing, so without this the
+            # process lived on with no window at all.
+            tb = traceback.format_exc()
+            _note(tb)
+            path = _write_log("startup_error.log", tb)
+            try:
+                splash.destroy()
+            except Exception:
+                pass
+            if isinstance(e, ImportError):
+                text = ("Some components are missing (setup did not finish). "
+                        "Close this and run START again - setup finishes itself. "
+                        "If it keeps happening, delete the .venv folder and run "
+                        "START again.\n" + str(e))
+            else:
+                text = f"WITNESS could not start: {type(e).__name__}: {e}"
+            if path:
+                text += f"\n\nDetails: {path}"
+            _show_error(text, parent=root)
+            try:
+                root.quit()
+            except Exception:
+                pass
+            os._exit(1)
         app = app_module
         try:
             splash.destroy()
@@ -903,8 +1095,13 @@ def _run_webview():
         except Exception:
             return False
     try:
-        import webserver
         cfg = app.load_config()
+    except Exception as e:
+        # The tk fallback would hit the same file and die the same way, so
+        # say what is wrong instead of dropping to it.
+        _fatal(_config_error_text(e))
+    try:
+        import webserver
         port = cfg.get("web_port", 8000)
         host = "0.0.0.0" if cfg.get("web_lan", True) else "127.0.0.1"
         st = webserver.LiveState()
@@ -934,13 +1131,14 @@ def _run_webview():
             webview.start()
         return True
     except Exception as e:
-        print(f"(webview unavailable, using the control panel: {e})")
+        _note(f"(webview unavailable, using the control panel: {e})")
         return False
 
 
 def _run_tk_fallback():
     r = tk.Tk()
     _claim_app_identity()
+    r.report_callback_exception = _panel_callback_error(r)
     ControlPanel(r)
     r.mainloop()
 
