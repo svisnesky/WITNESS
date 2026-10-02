@@ -164,3 +164,60 @@ def test_the_live_page_shows_the_error_and_holds_starting():
     # the 12 s safety release waits while the launcher says it's starting
     assert "setTimeout(releaseRun, 12000)" in p
     assert "if (runStarting){ setTimeout(releaseRun" in p
+
+
+# --- the phone/iPad address ---------------------------------------------------
+
+def test_lan_ips_puts_the_default_route_first_then_192_168():
+    got = webserver.lan_ips(primary="10.8.0.2",
+                            others=["172.24.16.1", "192.168.1.50", "10.8.0.2",
+                                    "127.0.0.1", "169.254.3.4", "8.8.4.4",
+                                    "192.168.1.50"])
+    # VPN/default route first (as decided), the Wi-Fi 192.168 next, the WSL /
+    # Hyper-V 172.x last; loopback, link-local, public and dupes gone
+    assert got == ["10.8.0.2", "192.168.1.50", "172.24.16.1"], got
+
+
+def test_lan_ips_with_no_network_is_empty():
+    assert webserver.lan_ips(primary="127.0.0.1", others=["127.0.0.1"]) == []
+    assert webserver.lan_ips(primary="169.254.9.9", others=[]) == []
+
+
+def test_snapshot_carries_the_lan_addresses(monkeypatch):
+    st = _state()
+    assert st.snapshot()["lan_urls"] == []
+    monkeypatch.setattr(webserver, "lan_ips", lambda: ["192.168.1.50"])
+    webserver._fill_lan_urls(st, 8000)
+    assert st.snapshot()["lan_urls"] == ["192.168.1.50:8000"]
+    # no scheme in the data: no URL literal in the app, the page adds its own
+    assert "://" not in st.snapshot()["lan_urls"][0]
+
+
+def test_a_failed_lookup_leaves_no_address(monkeypatch):
+    def boom():
+        raise OSError("name resolution stalled")
+    monkeypatch.setattr(webserver, "lan_ips", boom)
+    st = _state()
+    webserver._fill_lan_urls(st, 8000)
+    assert st.snapshot()["lan_urls"] == []
+
+
+def test_a_localhost_only_server_offers_no_phone_address():
+    """web_lan: false binds 127.0.0.1; a phone address would be a dead link."""
+    st = _state()
+    srv = webserver.start_web(st, 0, os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))), "127.0.0.1")
+    try:
+        time.sleep(0.1)
+        assert st.snapshot()["lan_urls"] == []
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+
+def test_the_page_shows_the_address_only_on_the_pc():
+    p = webserver.PAGE
+    assert 'id="phoneurl"' in p and "On your phone/iPad (same Wi-Fi)" in p
+    assert "window.pywebview" in p and "onThePC() && lan.length" in p
+    # the How-to-use modal carries it too, with the firewall hint
+    assert 'id="helpurl"' in p and "Private networks" in p

@@ -201,6 +201,10 @@ class LiveState:
         # window-app user could see it (pythonw has no console).
         self.last_error = ""
         self.starting = False
+        # 'ip:port' addresses a phone/iPad on the same Wi-Fi can open, best
+        # first. Filled once by start_web when it serves the LAN. No scheme:
+        # the page adds it.
+        self.lan_urls = []
         self._cfg = None       # live config dict (bound per session)
         self._save_cb = None   # persists changed settings to disk
 
@@ -562,6 +566,7 @@ class LiveState:
                     # getattr: the launcher assigns these from outside
                     "last_error": str(getattr(self, "last_error", "") or ""),
                     "starting": bool(getattr(self, "starting", False)),
+                    "lan_urls": list(getattr(self, "lan_urls", None) or []),
                     "detect": dict(self.detect),
                     "recap": dict(self.recap),
                     "heat": dict(self.heat),
@@ -1102,6 +1107,52 @@ def local_ip():
         return "127.0.0.1"
 
 
+_LAN_NETS = [ipaddress.ip_network(n) for n in
+             ("192.168.0.0/16", "10.0.0.0/8", "172.16.0.0/12")]
+
+
+def lan_ips(primary=None, others=None) -> list:
+    """IPv4 addresses a phone on the same Wi-Fi could open, best first.
+
+    local_ip() (the adapter the default route uses) leads. Then any other
+    private address of this PC, 192.168.x first: with a VPN up, local_ip() is
+    the VPN adapter, and the Wi-Fi address is one of the others. Hyper-V, WSL
+    and Docker adapters also sit in 172.16/12 and are unreachable from a phone,
+    which is why they come after the primary rather than replacing it.
+    Loopback (no network: local_ip() falls back to 127.0.0.1) and link-local
+    (169.254, an adapter that never got an address) are dropped; the others
+    are limited to the private ranges.
+
+    primary/others are for tests; normally they're looked up. gethostbyname_ex
+    can be slow on Windows with broken name resolution, so call this once, off
+    the request path (start_web does it on a thread)."""
+    def v4(ip):
+        try:
+            a = ipaddress.ip_address(ip)
+        except ValueError:
+            return None
+        return a if a.version == 4 else None
+
+    def lan(ip):
+        a = v4(ip)
+        return bool(a) and any(a in n for n in _LAN_NETS)
+
+    first = local_ip() if primary is None else primary
+    if others is None:
+        try:
+            others = socket.gethostbyname_ex(socket.gethostname())[2]
+        except Exception:
+            others = []
+    a = v4(first)
+    usable = a is not None and not (a.is_loopback or a.is_link_local
+                                    or a.is_unspecified)
+    out = [first] if usable else []
+    rest = [ip for ip in others if lan(ip) and ip not in out]
+    rest = list(dict.fromkeys(rest))
+    rest.sort(key=lambda ip: 0 if ip.startswith("192.168.") else 1)
+    return out + rest
+
+
 def _split_host_port(value: str):
     """'name:port' as sent in a Host header -> (name, port-or-None).
     Handles '[v6]:port' and a bare unbracketed v6 literal."""
@@ -1553,7 +1604,22 @@ def start_web(state, port, base_dir, host="0.0.0.0"):
 
     srv = _QuietServer((host, int(port)), Handler)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
+    if host in ("0.0.0.0", "", "::"):
+        # The phone/iPad address, worked out ONCE and off the startup path
+        # (snapshot() is polled every second by every client, and the lookup
+        # can stall on Windows). The window app shows it; before, it existed
+        # only as a print into the session log. Bound to 127.0.0.1
+        # (web_lan: false) there is no phone address, so none is shown.
+        threading.Thread(target=_fill_lan_urls,
+                         args=(state, srv.server_address[1]), daemon=True).start()
     return srv
+
+
+def _fill_lan_urls(state, port):
+    try:
+        state.lan_urls = [f"{ip}:{int(port)}" for ip in lan_ips()]
+    except Exception:
+        state.lan_urls = []
 
 
 ARCHIVE_PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
@@ -1782,6 +1848,10 @@ PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
   .rc-report { margin:12px 0 4px; padding:14px 16px; background:#0e0b16;
     border:1px solid rgba(145,132,217,.28); border-radius:10px; overflow-x:auto;
     font:500 12px/1.5 var(--mono); color:var(--sec); white-space:pre-wrap; }
+  .phoneurl { margin:-14px 0 20px; font:500 12.5px var(--ui); color:var(--muted); }
+  .phoneurl b, .help b.addr { color:var(--accent-light); font:600 13px var(--mono);
+    user-select:text; -webkit-user-select:text; }
+  .phoneurl .also { color:var(--dim); font:500 11.5px var(--mono); user-select:text; }
   .errbox { margin-bottom:22px; border:1px solid var(--danger); border-radius:14px;
     padding:16px 18px; background:linear-gradient(180deg,rgba(255,77,61,.12),var(--surface)); }
   .errbox .rc-note { color:var(--text); white-space:pre-wrap; }
@@ -1996,6 +2066,7 @@ PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
     </nav>
     <button class="runbtn" id="runbtn" onclick="toggleRun()">START</button>
   </header>
+  <div class="phoneurl" id="phoneurl" style="display:none"></div>
 
   <section class="errbox" id="errbox" style="display:none">
     <div class="rc-hd"><span class="rc-dot err"></span><span>START didn&rsquo;t work</span></div>
@@ -2088,6 +2159,9 @@ PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
 <div class="modal" id="helpmodal">
   <div class="settings help">
     <h2>How to use</h2>
+    <h3>On your phone or iPad</h3>
+    <p>Open <b class="addr" id="helpurl">this PC&rsquo;s IP address, port 8000</b> in Safari or Chrome on a phone or iPad on the same Wi-Fi. The WITNESS window on the PC shows the address under the header.</p>
+    <p class="m">Nothing loads? The first time WITNESS runs, Windows asks whether Python may use the network &mdash; allow <b>Private networks</b>. Set your Wi-Fi to Private too (Settings &rarr; Network &amp; internet &rarr; Wi-Fi &rarr; your network &rarr; Network profile type &rarr; Private). Turn off any VPN on the PC, or use the 192.168 address.</p>
     <h3>Kill counter + feed</h3>
     <p>Kills are detected automatically from the game screen. The big number and the feed update within a second or two of each kill.</p>
     <h3>Save clip</h3>
@@ -2213,6 +2287,29 @@ PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
         document.getElementById('rcarchive').style.display =
           (built || failed) ? 'inline-block' : 'none';
       } else { rcbox.style.display = 'none'; }
+      // The phone/iPad address, on the PC only: the phone already knows it,
+      // and the header there is laid out for the iPad. No scheme in the data;
+      // this page's own (http:) is the right one.
+      var lan = (d.lan_urls || []).map(function(a){ return location.protocol + '//' + a; });
+      var pu = document.getElementById('phoneurl');
+      if (onThePC() && lan.length){
+        var lanSig = lan.join(' ');
+        if (pu.dataset.sig !== lanSig){       // rebuild only on change
+          pu.dataset.sig = lanSig;
+          pu.textContent = 'On your phone/iPad (same Wi-Fi): ';
+          var ub = document.createElement('b');
+          ub.textContent = lan[0];
+          pu.appendChild(ub);
+          if (lan.length > 1){
+            var also = document.createElement('span');
+            also.className = 'also';
+            also.textContent = '   \\u00b7  or ' + lan.slice(1).join(', ');
+            pu.appendChild(also);
+          }
+        }
+        pu.style.display = 'block';
+      } else { pu.style.display = 'none'; }
+      if (lan.length){ document.getElementById('helpurl').textContent = lan.join('  or  '); }
       // A START that failed says why (the launcher sets last_error). Shown only
       // while idle, so it can never cover the kill feed of a running session.
       var eb = document.getElementById('errbox');
@@ -2283,6 +2380,12 @@ PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
     setTimeout(tick, 1000);
   }
   var lastReels = -1, reelSig = '', repSig = '', lastCount = -1;
+  // The desktop window (pywebview injects window.pywebview, sometimes after
+  // load, so this is asked every tick) or a browser on the PC itself.
+  function onThePC(){
+    return !!window.pywebview || location.hostname === 'localhost'
+           || location.hostname === '127.0.0.1';
+  }
   // recap box titles per writer: [building, ready, error]
   var RC_TITLES = {
     recap:   ['Building your recap\\u2026', 'Recap ready', 'Recap had problems'],
