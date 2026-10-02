@@ -30,6 +30,9 @@ def test_game_credited_kills_but_we_saw_none():
     level, msg = c.verdict()
     assert level == "broken", (level, msg)
     assert "6" in msg and "0" in msg
+    # both tools it names must be the real ones: Diagnose Capture shows the
+    # live crop, Calibrate (which now writes detect_region_frac) moves it
+    assert "Diagnose Capture" in msg and "Calibrate" in msg
 
 
 def test_detecting_less_than_half_is_broken_too():
@@ -47,7 +50,10 @@ def test_a_blank_region_reports_blind_not_broken():
     _busy(c, frames=1500, text=False)
     level, msg = c.verdict()
     assert level == "blind"
-    assert "Test Screenshot" in msg
+    # Test Screenshot OCRs a file you supply; it can't show what the live
+    # capture sees. Diagnose Capture does.
+    assert "Diagnose Capture" in msg
+    assert "Test Screenshot" not in msg
 
 
 def test_text_but_never_a_trigger_is_only_suspicious():

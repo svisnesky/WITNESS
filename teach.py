@@ -421,10 +421,11 @@ def run(cfg) -> None:
         from main import save_setting_overrides
         save_setting_overrides({"game": slug})
         print(f"Done — the app now detects {name}. Restart it and play.")
-        print('(Back to Marathon anytime: set  game: marathon  in the dashboard'
-              " settings file, settings_override.yaml.)")
+        print("(Back to Marathon anytime: set  game: marathon  (or delete the")
+        print(" game: line) in settings_override.yaml, then restart.)")
     else:
         print(f"Profile saved but not active. Activate it later with"
               f"  game: {slug}  in settings_override.yaml.")
-    print("\nIf kills get missed or false-fire, run the wizard again — or send")
-    print("me the session log. Happy hunting.")
+    print("\nIf kills get missed or false-fire, run the wizard again, or open an")
+    print("issue at github.com/svisnesky/WITNESS/issues and attach the session log")
+    print("from the logs folder (skim it for anything private first). Happy hunting.")

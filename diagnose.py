@@ -15,7 +15,7 @@ Then open the two images. The answer is almost always one of:
   - diagnose_full.png is black / wrong screen  -> capture source is wrong
        (OBS Virtual Camera not started, or wrong monitor).
   - diagnose_region.png doesn't sit over where the popup appears
-       -> the detect region needs recalibrating.
+       -> run "1 - Calibrate.bat" to move the detection region.
   - region looks right but OCR read nothing -> no popup was on screen in
        this frame (retry with one visible), or OCR needs tuning.
 """
@@ -89,6 +89,10 @@ def main():
 
     h, w = full.shape[:2]
     print(f"    Got a {w}x{h} frame.")
+    try:
+        print(f"    Detection region at this size: {capture._resolve(region, frac, w, h)}")
+    except Exception:
+        pass
     fullpath = os.path.join(BASE, "diagnose_full.png")
     if _save_png(fullpath, full):
         print(f"    Saved: {fullpath}")
@@ -112,7 +116,7 @@ def main():
         print(f"    Region is {cw}x{ch} px.")
         if cw < 5 or ch < 5:
             print("[!] The region is TINY or empty — detect_region_frac/detect_region")
-            print("    is off. Recalibrate so it covers the popup area.")
+            print("    is off. Run 1 - Calibrate.bat so it covers the popup area.")
         regpath = os.path.join(BASE, "diagnose_region.png")
         if _save_png(regpath, crop):
             print(f"    Saved: {regpath}")
@@ -140,7 +144,8 @@ def main():
                 print("\n[!] OCR read text, but it didn't match a kill phrase.")
                 print(f"    Trigger phrases: {cfg.get('popup_trigger_phrases')}")
                 print("    If a popup WAS on screen, the text above shows how OCR")
-                print("    saw it — send it to me and I'll tune the matching.")
+                print("    saw it. Open an issue at github.com/svisnesky/WITNESS/issues")
+                print("    and paste this window's text so the matching can be tuned.")
         else:
             print("    OCR read NOTHING in the region.")
             print("\n[!] Either no popup was on screen in this frame, or the region")
@@ -149,9 +154,12 @@ def main():
             print("    PRECISION DOWN popup visible.")
     except Exception as e:
         print(f"[X] OCR failed: {type(e).__name__}: {e}")
-        print("    (If this mentions CUDA/torch, OCR isn't loading — tell me.)")
+        print("    (If this mentions CUDA/torch, OCR isn't loading: open an issue at")
+        print("    github.com/svisnesky/WITNESS/issues and paste this window's text.)")
     print("=" * 60)
-    print("  Open diagnose_full.png and diagnose_region.png, and send them to me.")
+    print("  For help, open an issue at github.com/svisnesky/WITNESS/issues and")
+    print("  attach diagnose_full.png and diagnose_region.png.")
+    print("  diagnose_full.png is a full-screen capture - crop anything private first.")
     print("=" * 60)
 
 
