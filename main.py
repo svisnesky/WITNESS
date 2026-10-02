@@ -968,6 +968,7 @@ def _setup_session(cfg, dry_run):
         # cached_record_dir() covers the case where the web dashboard is off.
         "record_dir": (getattr(web, "record_dir", "") or cached_record_dir()),
         "count": 0,
+        "count_base": 0,     # headline at the last exfil (per-match floor)
         "last_save": 0.0,
         "organize": cfg.get("organize_clips", True) and not dry_run,
         "session_id": time.strftime("%Y-%m-%d_%H-%M-%S"),
@@ -1534,6 +1535,50 @@ def _reconcile_missed(match_tags, stats_d) -> int:
     return missed if 0 < missed <= 10 else 0
 
 
+# A gap bigger than this is more likely a misread panel than missed popups. The
+# largest real elim gap in the audited logs is 2, so 3 is the cap for elims and
+# for the headline floor (a combatant row read as 'Eliminations', or a 2->7
+# digit glitch, can add at most 3).
+RECONCILE_ELIM_MAX = 3
+
+
+def _panel_trusted(stats_d) -> bool:
+    """The same guard as _reconcile_missed: a good panel read (3+ labels
+    besides the outcome)."""
+    return len([k for k in (stats_d or {}) if k != "outcome"]) >= 3
+
+
+def _reconcile_missed_elims(match_tags, stats_d) -> int:
+    """The same reconciliation for the game's 'Runner Eliminations'. Downs were
+    reconciled but elims never were, so a missed elim left the session record
+    below the game's own panel (07-16 m1, 07-23 m4, 07-24 m6, 07-27 m6).
+    Same guards as the downs, a tighter gap cap, and it never subtracts."""
+    game_elims = (stats_d or {}).get("runner_elims")
+    if game_elims is None or not (0 <= game_elims <= 30):
+        return 0
+    if not _panel_trusted(stats_d):
+        return 0                          # weak panel read — don't trust it
+    _downs, ours = _kill_counts(match_tags or [])
+    missed = game_elims - ours
+    return missed if 0 < missed <= RECONCILE_ELIM_MAX else 0
+
+
+def _headline_floor(stats_d, match_count) -> int:
+    """How far this match's headline kill count sits below the game's own
+    panel. Every runner you downed is a kill, and every runner you eliminated
+    is a different dead runner, so the match's kills can never be fewer than
+    max(Runners Downed, Runner Eliminations). `match_count` is the headline's
+    growth since the previous exfil (s['count'] - s['count_base']). Never
+    subtracts; at most RECONCILE_ELIM_MAX."""
+    if not _panel_trusted(stats_d):
+        return 0
+    vals = [(stats_d or {}).get("runners_downed"), (stats_d or {}).get("runner_elims")]
+    if any(v is not None and not (0 <= v <= 30) for v in vals):
+        return 0
+    floor = max([v for v in vals if v is not None] or [0])
+    return min(RECONCILE_ELIM_MAX, max(0, floor - match_count))
+
+
 def _fire_heat(cfg, s, ev, delay: float = 0.0):
     """Surface a heat/streak event: an on-screen toast + an optional voice
     call-out. Suppressed during a clutch (the clutch owns that moment).
@@ -1789,7 +1834,22 @@ def _maybe_capture_exfil(cfg, engine, lines, s, now):
         # is authoritative — if detection missed kills this match, add them so
         # the count matches the scoreboard. Clips can't be saved retroactively
         # (the buffer moved on), but the record is right.
-        if cfg.get("exfil_reconcile", True):
+        #
+        # Everything below adds to session_tags only. The AUDIT lines above, the
+        # accuracy tally and the canary keep using match_tags as DETECTED, so
+        # they still measure detection, not detection-plus-reconcile.
+        #
+        # A second capture of the SAME panel (the summary screen flickered away
+        # long enough to re-arm the edge trigger) arrives with an empty
+        # match_tags against the game's full numbers: reconciling it again would
+        # credit every kill a second time. A pass with no new event since the
+        # previous exfil pass is that duplicate, so it reconciles nothing.
+        dup_panel = (not match_tags
+                     and s.get("_exfil_tags_len") == len(s["session_tags"]))
+        if dup_panel and cfg.get("exfil_reconcile", True) and _panel_trusted(stats_d):
+            print("  [exfil] no new events since the last exfil pass — treating "
+                  "this as the same panel, not reconciling it twice")
+        if cfg.get("exfil_reconcile", True) and not dup_panel:
             missed = _reconcile_missed(match_tags, stats_d)
             for _ in range(missed):
                 s["count"] += 1
@@ -1811,6 +1871,60 @@ def _maybe_capture_exfil(cfg, engine, lines, s, now):
                     pass
                 print(f"  [reconcile] game credited more downs than detected — "
                       f"added {missed}, count now {s['count']}")
+            # Runner Elims get the same treatment. They do NOT bump the headline
+            # by themselves: a missed elim is usually the finish of a down that
+            # was already counted. The floor below decides the headline.
+            missed_e = _reconcile_missed_elims(match_tags, stats_d)
+            for _ in range(missed_e):
+                s["elims"] = s.get("elims", 0) + 1
+                s["session_tags"].append("elim")
+                if s["web"] is not None:
+                    s["web"].record(s["count"], "elim",
+                                    "RECONCILED — exfil screen elim credit")
+                try:
+                    from detector import KillEvent
+                    log_kill(cfg, KillEvent(now, "RECONCILED elim (exfil screen)",
+                                            "", "", True), s["count"])
+                except Exception:
+                    pass
+            if missed_e:
+                try:
+                    s["obs"].set_counter(s["count"])
+                except Exception:
+                    pass
+                print(f"  [reconcile] game credited more runner elims than "
+                      f"detected — added {missed_e}")
+            # Headline floor, per match: count_base is the headline at the
+            # previous exfil, so this compares THIS match's kills only. (Against
+            # the session total it would never fire after match 1.)
+            short = _headline_floor(stats_d, s["count"] - s.get("count_base", 0))
+            for _ in range(short):
+                s["count"] += 1
+                if s["web"] is not None:
+                    s["web"].record(s["count"], "kill",
+                                    "RECONCILED — exfil screen kill floor")
+                try:
+                    from detector import KillEvent
+                    log_kill(cfg, KillEvent(now, "RECONCILED floor (exfil screen)",
+                                            "", "", True), s["count"])
+                except Exception:
+                    pass
+            if short:
+                try:
+                    s["obs"].set_counter(s["count"])
+                except Exception:
+                    pass
+                # Worded so it never reads as a 'game credited more ...' line:
+                # the desktop tiles parse those into extra down/elim tags.
+                print(f"  [reconcile] headline below the game's panel for this "
+                      f"match — raised by {short}, count now {s['count']}")
+        # Close the match in the session-wide tag list, so a pending elim (or a
+        # reconciled one) can't fold the next match's opening FINISHER. The
+        # marker lives in exfil_stats, which counts it; until that side ships
+        # there is no marker and nothing is appended.
+        mb = getattr(exfil_stats, "MATCH_BREAK", None)
+        if mb:
+            s["session_tags"].append(mb)
         if stats_d:
             exfil_stats.accumulate_accuracy(s.setdefault("accuracy", {}),
                                             stats_d, match_tags)
@@ -1845,6 +1959,8 @@ def _maybe_capture_exfil(cfg, engine, lines, s, now):
                 except Exception as e:
                     print(f"  [loot goblin] error: {e}")
         s["match_tags"] = []
+        s["count_base"] = s["count"]      # the next match's floor starts here
+        s["_exfil_tags_len"] = len(s["session_tags"])   # duplicate-pass check
         s["runner_checked"] = False       # re-detect next match
         if s.get("heat") is not None:     # re-arm FIRST BLOOD for the next match
             s["heat"].new_match()
