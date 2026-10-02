@@ -48,3 +48,29 @@ def test_the_app_asks_for_every_api_route_the_server_serves():
                                                              encoding="utf-8").read()))
     assert asked, "found no /api calls in the app"
     assert asked <= served, f"app calls routes the PC doesn't serve: {asked - served}"
+
+
+def test_registration_uses_a_short_ttl(monkeypatch):
+    """A killed process never sends the goodbye packet, so the TTL is what
+    clears a dead PC from the iPad's list. zeroconf's default is 75 minutes."""
+    import zeroconf
+    import discovery
+    calls = {}
+
+    class FakeZC:
+        def register_service(self, info, ttl=None, allow_name_change=False):
+            calls.update(ttl=ttl, rename=allow_name_change, props=info.properties)
+
+        def unregister_service(self, info):
+            pass
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(zeroconf, "Zeroconf", FakeZC)
+    adv = discovery.advertise(8000, "192.168.1.20", version="abc1234")
+    assert adv is not None
+    assert calls["ttl"] == discovery.TTL_SECONDS <= 300
+    assert calls["rename"] is True
+    assert calls["props"][b"ip"] == b"192.168.1.20" and calls["props"][b"port"] == b"8000"
+    adv.stop()

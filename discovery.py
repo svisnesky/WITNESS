@@ -21,6 +21,7 @@ import atexit
 import socket
 
 SERVICE_TYPE = "_witness._tcp.local."
+TTL_SECONDS = 120
 
 
 class Advertiser:
@@ -80,7 +81,11 @@ def advertise(port: int, ip: str, version: str = "", api: int = 1):
         zc = Zeroconf()
         # allow_name_change: two PCs with the same hostname on one network get
         # "WITNESS on PC (2)" instead of one silently failing to register.
-        zc.register_service(info, allow_name_change=True)
+        # ttl: the atexit goodbye below never runs when the process is KILLED
+        # (closing the console window on Windows, SIGTERM), and zeroconf's
+        # default 4500s TTL then kept a dead PC in the iPad's list for 75
+        # minutes. At 120s a stale entry fades in about two.
+        zc.register_service(info, ttl=TTL_SECONDS, allow_name_change=True)
         print(f"  [discovery] advertising '{name}' on the network for the iPad app")
         adv = Advertiser(zc, info)
         # Unregistering sends mDNS "goodbye" packets, so the iPad drops this PC
