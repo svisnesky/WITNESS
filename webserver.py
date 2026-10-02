@@ -533,6 +533,7 @@ def _esc(s):
 import re as _re
 import urllib.parse as _uparse
 
+_RANGE = _re.compile(r"bytes=([0-9]*)-([0-9]*)")
 _SAFE_PART = _re.compile(r"^[A-Za-z0-9 ._+\-]+$")
 
 
@@ -1003,6 +1004,25 @@ def local_ip():
         return "127.0.0.1"
 
 
+class _QuietServer(ThreadingHTTPServer):
+    """Don't print a traceback when a client simply hangs up.
+
+    Video players cancel range requests all the time (every seek, every close),
+    and a phone drops idle keep-alive connections. The handlers already ignore
+    a hang-up mid-response, but the one that lands while the server is waiting
+    for the NEXT request on a kept-alive connection happens outside every
+    handler, and the stock handle_error prints a 15-line traceback for it. On
+    Windows that arrives as ConnectionAbortedError (WinError 10053), which the
+    handlers didn't catch either; it and BrokenPipe/ConnectionReset are all
+    ConnectionError. Anything else is a real bug and still prints."""
+
+    def handle_error(self, request, client_address):
+        import sys
+        if isinstance(sys.exc_info()[1], ConnectionError):
+            return
+        super().handle_error(request, client_address)
+
+
 def start_web(state, port, base_dir, host="0.0.0.0"):
     imgs = {"/skull.png": "witness_logo.png",
             "/wordmark.png": "witness_wordmark.png"}
@@ -1036,13 +1056,25 @@ def start_web(state, port, base_dir, host="0.0.0.0"):
             """Stream a video file with HTTP Range support (Safari needs it)."""
             size = os.path.getsize(fp)
             start, end = 0, size - 1
-            rng = self.headers.get("Range")
-            if rng and rng.startswith("bytes="):
-                a, _, b = rng[6:].partition("-")
+            # One range only. Multi-range ("0-1,5-9") and malformed headers get
+            # the whole file, which HTTP allows; int() on them used to raise.
+            m = _RANGE.fullmatch((self.headers.get("Range") or "").strip())
+            a, b = (m.group(1), m.group(2)) if m else ("", "")
+            if a or b:
                 if a:
                     start = int(a)
-                if b:
-                    end = min(int(b), size - 1)
+                    if b:
+                        end = min(int(b), size - 1)
+                else:
+                    # "bytes=-500" is a SUFFIX range: the last 500 bytes. It
+                    # used to be served as bytes 0-500, the wrong end of the file.
+                    start = max(0, size - int(b))
+                if start >= size or end < start:
+                    self.send_response(416)
+                    self.send_header("Content-Range", f"bytes */{size}")
+                    self.send_header("Content-Length", "0")
+                    self.end_headers()
+                    return
                 self.send_response(206)
                 self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
             else:
@@ -1197,7 +1229,8 @@ def start_web(state, port, base_dir, host="0.0.0.0"):
                 else:
                     self._send(apply_theme(PAGE, state._cfg).encode("utf-8"),
                                "text/html; charset=utf-8", cache=False)
-            except (BrokenPipeError, ConnectionResetError):
+            except ConnectionError:
+                # the client hung up mid-response (see _QuietServer)
                 pass
 
         def do_POST(self):
@@ -1268,10 +1301,11 @@ def start_web(state, port, base_dir, host="0.0.0.0"):
                                "application/json", cache=False)
                 else:
                     self.send_error(404)
-            except (BrokenPipeError, ConnectionResetError):
+            except ConnectionError:
+                # the client hung up mid-response (see _QuietServer)
                 pass
 
-    srv = ThreadingHTTPServer((host, int(port)), Handler)
+    srv = _QuietServer((host, int(port)), Handler)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     return srv
 

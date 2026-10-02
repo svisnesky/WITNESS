@@ -115,3 +115,24 @@ def test_alerts_are_first_class_state(server):
         "a refresh must not look like a NEW alert, or the app re-notifies every check"
     st.clear_alert("black_capture")
     assert _get("/api/status")["alerts"] == []
+
+
+def test_playback_cache_is_capped_least_recently_played_first(tmp_path):
+    """Every .mkv the iPad plays gets an .mp4 copy. Uncapped, watching a night's
+    clips (and the multi-GB montage) silently doubled the session on disk."""
+    import playable
+    cache = tmp_path / playable.CACHE_DIR
+    cache.mkdir()
+    now = time.time()
+    for i, name in enumerate(["old.mp4", "mid.mp4", "new.mp4"]):
+        fp = cache / name
+        fp.write_bytes(b"x" * 400)
+        os.utime(fp, (now - 300 + i * 100, now - 300 + i * 100))
+    (cache / "busy.part.mp4").write_bytes(b"x" * 400)     # mid-remux: never touched
+    freed = playable.prune(str(tmp_path), keep=str(cache / "old.mp4"), budget=900)
+    left = sorted(p.name for p in cache.iterdir())
+    # over budget by 300: the oldest is being served (keep), so the next-oldest goes
+    assert left == ["busy.part.mp4", "new.mp4", "old.mp4"], left
+    assert freed == 400
+    assert playable.prune(str(tmp_path), budget=10_000) == 0     # under budget: no-op
+    assert playable.prune(str(tmp_path / "nope")) == 0           # no cache dir: fine
