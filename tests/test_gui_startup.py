@@ -14,6 +14,8 @@ run can exercise the real thing.
 import inspect
 import os
 import sys
+import threading
+import time
 import types
 
 import pytest
@@ -111,3 +113,213 @@ def test_webview_reports_a_bad_config_instead_of_falling_back(monkeypatch, fatal
     with pytest.raises(_Stop):
         gui._run_webview()
     assert "config.yaml" in fatal[0] and "line 3" in fatal[0]
+
+
+# --- START failures reach the dashboard ---------------------------------------
+
+class _OBSSDKError(Exception):
+    """Stands in for obsws_python.error.OBSSDKError (not installed in tests)."""
+
+
+def test_friendly_error_connection_refused():
+    msg = gui.friendly_start_error(ConnectionRefusedError(
+        "[WinError 10061] No connection could be made because the target "
+        "machine actively refused it"), "/x/logs/session_2026-10-02_21-00-00.log")
+    assert msg.startswith("Can't reach OBS. In OBS: Tools > WebSocket Server Settings")
+    assert msg.endswith("(details: logs/session_2026-10-02_21-00-00.log)")
+
+
+def test_friendly_error_10061_text_without_the_type():
+    msg = gui.friendly_start_error(OSError("[WinError 10061] refused"))
+    assert msg.startswith("Can't reach OBS")
+
+
+def test_friendly_error_wrong_password():
+    msg = gui.friendly_start_error(_OBSSDKError(
+        "failed to identify client with the server, please check connection "
+        "settings"))
+    assert msg.startswith("OBS rejected the password - copy it into obs.password "
+                          "in config.yaml.")
+    assert msg.endswith("(details: logs/session_...log)")
+
+
+def test_friendly_error_gpu_kernel_image():
+    msg = gui.friendly_start_error(RuntimeError(
+        "CUDA error: no kernel image is available for execution on the device"))
+    assert msg.startswith(gui._GPU_MSG)
+
+
+def test_friendly_error_cuda_out_of_memory_is_not_the_driver_message():
+    msg = gui.friendly_start_error(RuntimeError(
+        "CUDA out of memory. Tried to allocate 20.00 MiB"))
+    assert msg.startswith(gui._VRAM_MSG)
+
+
+def test_friendly_error_obs_messages_pass_through_verbatim():
+    text = ("OBS is open but its WebSocket server is off: Tools > WebSocket "
+            "Server Settings > Enable WebSocket server (port 4455)")
+    msg = gui.friendly_start_error(RuntimeError(text), "logs/session_a.log")
+    assert msg == text + " (details: logs/session_a.log)"
+
+
+def test_friendly_error_config_messages_pass_through_verbatim():
+    text = "config.yaml could not be read (line 7): mapping values are not allowed"
+    assert gui.friendly_start_error(RuntimeError(text)).startswith(text + " (details:")
+
+
+def test_friendly_error_anything_else_names_the_type():
+    msg = gui.friendly_start_error(KeyError("capture_source"))
+    assert msg.startswith("KeyError: 'capture_source' (details: logs/")
+
+
+def test_reload_updates_the_same_dict_in_place():
+    cfg = {"obs": {"password": "old"}, "poll_fps": 5, "web_port": 8000}
+    same = cfg
+    err = gui.reload_config_into(
+        cfg, lambda: {"obs": {"password": "new"}, "poll_fps": 5, "web_port": 9000},
+        lock=threading.Lock(), keep=gui._BOUND_AT_LAUNCH)
+    assert err == ""
+    assert cfg is same
+    assert cfg["obs"]["password"] == "new"
+    assert cfg["web_port"] == 8000         # the server is already bound to it
+
+
+def test_reload_failure_keeps_the_old_settings():
+    cfg = {"obs": {"password": "old"}}
+
+    def broken():
+        raise ValueError("while scanning a simple key (line 9)")
+    err = gui.reload_config_into(cfg, broken)
+    assert err.startswith("config.yaml could not be read - using launch settings:")
+    assert "line 9" in err
+    assert cfg == {"obs": {"password": "old"}}
+    assert gui.reload_config_into(cfg, lambda: None).startswith("config.yaml")
+
+
+class _FakeState:
+    def __init__(self):
+        self._lock = threading.Lock()
+        self.running = False
+        self._mono = None
+        self.notices = []
+        self.running_calls = []
+
+    def notice(self, text, tag="alert"):
+        self.notices.append((text, tag))
+
+    def set_running(self, v):
+        self.running_calls.append(v)
+        self.running = v
+        if v:
+            self._mono = time.monotonic()
+
+
+def _fake_app(monkeypatch, run_live, load_config):
+    fake = types.SimpleNamespace(run_live=run_live, load_config=load_config,
+                                 _log_path="/w/logs/session_2026-10-02_20-00-00.log")
+    monkeypatch.setattr(gui, "app", fake)
+    return fake
+
+
+def test_web_start_reloads_into_the_same_dict(monkeypatch):
+    seen = []
+    _fake_app(monkeypatch, lambda cfg, dry, ev: seen.append(cfg),
+              lambda: {"obs": {"password": "fixed"}})
+    cfg = {"obs": {"password": "CHANGE_ME"}}
+    st = _FakeState()
+    sess = gui._WebSession(cfg, st)
+    sess.start()
+    sess.thread.join(5)
+    assert seen and seen[0] is cfg
+    assert cfg["obs"]["password"] == "fixed"
+    assert st.last_error == "" and st.starting is False
+
+
+def test_web_start_survives_a_broken_config(monkeypatch):
+    seen = []
+
+    def broken():
+        raise ValueError("found character '\\t' (line 4)")
+    _fake_app(monkeypatch, lambda cfg, dry, ev: seen.append(cfg), broken)
+    cfg = {"obs": {"password": "ok"}}
+    st = _FakeState()
+    sess = gui._WebSession(cfg, st)
+    sess.start()
+    sess.thread.join(5)
+    assert seen and seen[0] is cfg and cfg == {"obs": {"password": "ok"}}
+    assert st.last_error.startswith("config.yaml could not be read")
+    assert st.notices and st.notices[0][1] == "alert"
+    assert len(st.notices[0][0]) <= 60          # LiveState.notice cuts at 60
+
+
+def test_a_failed_start_sets_last_error_not_a_notice(monkeypatch):
+    def run_live(cfg, dry, ev):
+        raise _OBSSDKError("failed to identify client with the server")
+    _fake_app(monkeypatch, run_live, lambda: {})
+    st = _FakeState()
+    sess = gui._WebSession({}, st)
+    sess.start()
+    sess.thread.join(5)
+    assert st.last_error.startswith("OBS rejected the password")
+    assert "session_2026-10-02_20-00-00.log" in st.last_error
+    assert st.notices == []
+    assert st.running_calls == [False] and st.starting is False
+
+
+def test_a_crash_after_going_live_is_a_notice_not_a_start_error(monkeypatch):
+    st = _FakeState()
+
+    def run_live(cfg, dry, ev):
+        st.set_running(True)
+        raise RuntimeError("recap build blew up")
+    _fake_app(monkeypatch, run_live, lambda: {})
+    sess = gui._WebSession({}, st)
+    sess.start()
+    sess.thread.join(5)
+    assert st.last_error == ""
+    assert st.notices == [("Session crashed - see logs/", "alert")]
+    assert st.running is False and st.starting is False
+
+
+def test_start_is_ignored_while_the_worker_is_alive(monkeypatch):
+    release = threading.Event()
+    calls = []
+
+    def run_live(cfg, dry, ev):
+        calls.append(1)
+        release.wait(5)
+    _fake_app(monkeypatch, run_live, lambda: {})
+    st = _FakeState()
+    sess = gui._WebSession({}, st)
+    sess.start()
+    first = sess.thread
+    sess.start()                       # e.g. a double-click during the recap
+    assert sess.thread is first
+    release.set()
+    first.join(5)
+    assert calls == [1]
+
+
+def test_with_the_real_live_state(monkeypatch):
+    webserver = pytest.importorskip("webserver")
+
+    def run_live(cfg, dry, ev):
+        raise ConnectionRefusedError("[WinError 10061] refused")
+    _fake_app(monkeypatch, run_live, lambda: {})
+    st = webserver.LiveState()
+    sess = gui._WebSession({}, st)
+    sess.start()
+    sess.thread.join(5)
+    assert st.last_error.startswith("Can't reach OBS")
+    assert st.starting is False and st.running is False
+
+
+def test_tk_panel_keeps_an_error_line(monkeypatch):
+    panel = gui.ControlPanel.__new__(gui.ControlPanel)
+    panel._last_error = ""
+    shown = []
+    panel._set_status = lambda text, color, sub=None: shown.append((text, color, sub))
+    panel._drain_line("ERROR: Can't reach OBS. (details: logs/session_x.log)")
+    assert panel._last_error.startswith("ERROR: Can't reach OBS")
+    assert shown and shown[0][1] == gui.RED
+    panel._log("Setting saved: kill_sound = True")   # no widgets yet: no crash

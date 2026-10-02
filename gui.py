@@ -139,6 +139,92 @@ def _config_error_text(exc) -> str:
             "the WITNESS download) and start again.")
 
 
+_GPU_MSG = ("The graphics card couldn't run the text reader (CUDA error). Update "
+            "the NVIDIA driver (RTX 50-series needs 570 or newer) and press START "
+            "again. If it keeps happening, delete the .venv folder and run START "
+            "again - setup reinstalls the GPU parts.")
+_VRAM_MSG = ("The graphics card ran out of memory for the text reader. Close other "
+             "GPU-heavy apps and press START again.")
+
+
+def friendly_start_error(exc, log_path=None) -> str:
+    """One line a first-time user can act on, for an exception that ended a
+    START before the session went live. The common ones are OBS setup
+    mistakes: WebSocket server off (OBS 28+ ships with it off) and the password
+    not copied into config.yaml.
+
+    main.py's own OBS setup errors already start with 'OBS' and say exactly
+    what to click, so they pass through verbatim, as does anything naming
+    config.yaml."""
+    text = (str(exc) or "").strip() or type(exc).__name__
+    low = text.lower()
+    if text.startswith("OBS") or "config.yaml" in low:
+        msg = text
+    elif isinstance(exc, ConnectionRefusedError) or "10061" in text:
+        msg = ("Can't reach OBS. In OBS: Tools > WebSocket Server Settings > "
+               "Enable WebSocket server.")
+    elif "identify" in low or "no password" in low or "authentication" in low:
+        # obsws-python's wording for a wrong or missing password:
+        # 'failed to identify client with the server, ...'
+        msg = "OBS rejected the password - copy it into obs.password in config.yaml."
+    elif "out of memory" in low and "cuda" in low:
+        msg = _VRAM_MSG
+    elif "no kernel image" in low or "cuda" in low:
+        msg = _GPU_MSG
+    else:
+        msg = f"{type(exc).__name__}: {text}"
+    where = f"logs/{os.path.basename(log_path)}" if log_path else "logs/session_...log"
+    return f"{msg} (details: {where})"
+
+
+# Bound once when the dashboard server starts; a new value needs a full restart,
+# so a START-time reload keeps the launch value (the "Live view" address main.py
+# prints would otherwise name a port nothing is listening on).
+_BOUND_AT_LAUNCH = ("web_port", "web_lan", "web_dashboard")
+
+
+def reload_config_into(cfg: dict, load, lock=None, keep=()) -> str:
+    """Re-read config.yaml (load = main.load_config) INTO the existing dict, so
+    an edit (say, the OBS password) applies on the next START instead of only
+    after a full app restart. Returns '' or a message saying why it couldn't.
+
+    Updates in place and never clear()s or rebinds: LiveState.bind_config and
+    the running session hold this exact dict, and a clear() would let a
+    dashboard GET /settings land on an empty one. Dashboard toggles survive
+    because load_config applies settings_override.yaml last. A key deleted
+    from the file keeps its old value until restart, which is harmless."""
+    try:
+        fresh = load()
+        if not isinstance(fresh, dict):
+            raise ValueError("it is empty or not a list of settings")
+    except Exception as e:
+        return f"config.yaml could not be read - using launch settings: {e}"
+    for k in keep:
+        fresh.pop(k, None)
+    if lock is not None:
+        with lock:
+            cfg.update(fresh)
+    else:
+        cfg.update(fresh)
+    return ""
+
+
+def _set_attr(obj, name, value) -> None:
+    """Set a plain attribute on the dashboard's LiveState under its lock (the
+    web-dashboard code reads them with getattr inside snapshot())."""
+    if obj is None:
+        return
+    lock = getattr(obj, "_lock", None)
+    try:
+        if lock is not None:
+            with lock:
+                setattr(obj, name, value)
+        else:
+            setattr(obj, name, value)
+    except Exception:
+        pass
+
+
 class QueueWriter:
     """File-like object that funnels print() output into a queue for the GUI."""
     def __init__(self, q):
@@ -188,6 +274,7 @@ class ControlPanel:
         self.recent = []               # (hhmmss, tag) newest-last
         self.latest = None             # (tag, hhmmss) for the LATEST CLIP card
         self.session_start = None
+        self._last_error = ""          # why the last START failed (kept on idle)
         self._icon = None
         self.dry = tk.BooleanVar(value=False)
         self._build()
@@ -298,6 +385,12 @@ class ControlPanel:
                  font=("Segoe UI", 20, "bold")).pack(pady=(18, 6))
         tk.Label(wrap, text="P R E S S   S T A R T   T O   B E G I N", bg=BG,
                  fg=MUTED, font=("Consolas", 9)).pack()
+        # why the last START failed stays here, in red, until the next START
+        err = getattr(self, "_last_error", "")
+        self.idle_note = tk.Label(wrap, text=err, bg=BG, fg=RED if err else MUTED,
+                                  font=("Consolas", 9), wraplength=520,
+                                  justify="center")
+        self.idle_note.pack(pady=(14, 0))
 
     def _show_live(self):
         self._clear_main()
@@ -426,6 +519,13 @@ class ControlPanel:
         self.tags = []
         self.recent = []
         self.latest = None
+        self._last_error = ""
+        # Same reload as the web window: an edited config.yaml applies on
+        # START. Server keys stay as launched once main.py has bound the port.
+        web = getattr(app, "_web_state", None)
+        cfg_err = reload_config_into(
+            self.cfg, app.load_config, lock=getattr(web, "_lock", None),
+            keep=_BOUND_AT_LAUNCH if getattr(app, "_web_server", None) else ())
         self.session_start = time.monotonic()
         self.stop_event = threading.Event()
         self._orig_out = sys.stdout
@@ -434,15 +534,22 @@ class ControlPanel:
         self.running = True
         self.toggle.config(text="STOP", bg=RED, activebackground="#d63a30", fg="white")
         self._show_live()
-        self._set_status(f"{self.DOT}  STARTING…", MUTED, "loading the text reader…")
+        self._set_status(f"{self.DOT}  STARTING…", MUTED,
+                         cfg_err[:110] if cfg_err else "loading the text reader…")
         dry = self.dry.get()
+        real_err = self._orig_err
 
         def run():
             try:
                 app.run_live(self.cfg, dry, self.stop_event,
                              on_count=lambda n: self.q.put(("count", n)))
             except Exception as e:
-                self.q.put(("log", f"ERROR: {e}\n"))
+                try:   # the traceback to the real stderr (a log file under pythonw)
+                    traceback.print_exc(file=real_err)
+                except Exception:
+                    pass
+                self.q.put(("log", "ERROR: " + friendly_start_error(
+                    e, getattr(app, "_log_path", None)) + "\n"))
             finally:
                 self.q.put(("stopped", None))
         self.worker = threading.Thread(target=run, daemon=True)
@@ -530,8 +637,22 @@ class ControlPanel:
                 self.status_sub.config(text=sub)
 
     def _log(self, msg):
-        # command center has no log pane; keep for the session-log file + debug
-        pass
+        """No log pane here, so show the latest line where the eye already is:
+        under the status while live, under 'Ready when you are.' when idle."""
+        lines = str(msg or "").strip().splitlines()
+        if not lines:
+            return
+        text = lines[-1][:140]
+        for name in ("status_sub", "idle_note"):
+            if name == "idle_note" and getattr(self, "_last_error", ""):
+                return          # a failed START's reason outranks chatter
+            w = getattr(self, name, None)
+            try:
+                if w is not None and w.winfo_exists():
+                    w.config(text=text, fg=MUTED)
+                    return
+            except Exception:
+                pass
 
     def _tick(self):
         if self.running and self.session_start and hasattr(self, "status_sub"):
@@ -559,15 +680,9 @@ class ControlPanel:
             while True:
                 kind, val = self.q.get_nowait()
                 if kind == "log":
-                    s = val.rstrip()
-                    if not s:
-                        continue
-                    if "Detecting [" in s:
-                        self._watching = True
-                        self._set_status(f"{self.DOT}  WATCHING", GREEN,
-                                         "SESSION  0:00")
-                    if "KILL #" in s and "[" in s:
-                        self._parse_kill(s)
+                    # one print() can carry several lines (exfil report)
+                    for s in str(val).splitlines():
+                        self._drain_line(s.rstrip())
                 elif kind == "count":
                     self.count = val
                     if hasattr(self, "count_lbl") and self.count_lbl.winfo_exists():
@@ -577,7 +692,24 @@ class ControlPanel:
                     self._finish_stop()
         except queue.Empty:
             pass
-        self.root.after(100, self._drain)
+        finally:
+            # rescheduled even if a line blew up, or the panel froze for good
+            self.root.after(100, self._drain)
+
+    def _drain_line(self, s):
+        if not s:
+            return
+        if s.startswith("ERROR:"):
+            # a failed START: red, and kept on the idle screen after "stopped"
+            self._last_error = s
+            self._set_status(f"{self.DOT}  COULD NOT START", RED, s[:140])
+            return
+        if "Detecting [" in s:
+            self._watching = True
+            self._set_status(f"{self.DOT}  WATCHING", GREEN,
+                             "SESSION  0:00")
+        if "KILL #" in s and "[" in s:
+            self._parse_kill(s)
 
 class SettingsWindow:
     """Same live-appliable settings as the web dashboard's panel — changes hit
@@ -1057,24 +1189,63 @@ def _boot():
 
 
 class _WebSession:
-    """Bridges the web START/STOP buttons to the detection session."""
-    def __init__(self, cfg):
+    """Bridges the web START/STOP buttons to the detection session.
+
+    A START that fails used to vanish: the error was print()ed after run_live
+    had closed its session log, to a stdout that is None under pythonw, and
+    the button flipped back after the page's 12 s safety release. Now the
+    reason lands on the LiveState as `last_error` (shown by the dashboard while
+    not running) and `starting` stays True until the attempt is over."""
+    def __init__(self, cfg, state=None):
         self.cfg = cfg
+        self.state = state
         self.thread = None
         self.stop_event = None
 
     def start(self):
         if self.thread and self.thread.is_alive():
-            return
-        self.stop_event = threading.Event()
-
-        def run():
+            return      # still running, or still building the last recap
+        st = self.state
+        _set_attr(st, "last_error", "")
+        err = reload_config_into(self.cfg, app.load_config,
+                                 lock=getattr(st, "_lock", None),
+                                 keep=_BOUND_AT_LAUNCH)
+        if err:
+            _note(err)
+            _set_attr(st, "last_error", err)
             try:
-                app.run_live(self.cfg, False, self.stop_event)
-            except Exception as e:
-                print(f"(session error: {e})")
-        self.thread = threading.Thread(target=run, daemon=True)
+                st.notice("config.yaml unreadable - using launch settings", "alert")
+            except Exception:
+                pass
+        _set_attr(st, "starting", True)
+        self.stop_event = threading.Event()
+        self.thread = threading.Thread(target=self.run, daemon=True)
         self.thread.start()
+
+    def run(self):
+        st = self.state
+        # set_running(True) stamps _mono; a change means the session went live
+        mono0 = getattr(st, "_mono", None)
+        try:
+            app.run_live(self.cfg, False, self.stop_event)
+        except Exception as e:
+            _note(traceback.format_exc())
+            went_live = (bool(getattr(st, "running", False))
+                         or getattr(st, "_mono", None) != mono0)
+            try:
+                if went_live:
+                    # Detection or the recap failed after a good start: a feed
+                    # line, not a red banner over the START button.
+                    st.notice("Session crashed - see logs/", "alert")
+                else:
+                    _set_attr(st, "last_error", friendly_start_error(
+                        e, getattr(app, "_log_path", None)))
+                # STOP / Update / Export refuse while `running` is stuck True
+                st.set_running(False)
+            except Exception:
+                pass
+        finally:
+            _set_attr(st, "starting", False)
 
     def stop(self):
         if self.stop_event:
@@ -1115,7 +1286,7 @@ def _run_webview():
             st.record_dir = app.cached_record_dir()
         except Exception:
             pass
-        sess = _WebSession(cfg)
+        sess = _WebSession(cfg, st)
         st.bind_control(sess.start, sess.stop)
         # If the last session's recap build was interrupted (app closed while
         # rendering), finish it now in the background — banner shows progress.
