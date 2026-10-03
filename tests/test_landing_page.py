@@ -141,9 +141,22 @@ def test_doc_links_point_at_files_that_exist(page):
 
 def test_requirements_and_disclaimer_are_stated(page):
     t = page.visible
-    for need in ("Windows 10/11", "OBS 28+", "NVIDIA GPU recommended",
+    for need in ("Windows 10/11", "OBS 28+", "NVIDIA GPU recommended", "Python 3.",
                  "not affiliated with Bungie", "Is it safe?"):
         assert need in t, f"landing page no longer says {need!r}"
+
+
+def test_python_version_matches_what_the_installer_asks_for(page):
+    """Python is the one prerequisite a visitor installs by hand before the ZIP
+    does anything, and _env.bat refuses anything newer than the torch-supported
+    version. The page must name the same version the installer tells them to
+    get, or a visitor grabs the newest Python and hits the refusal."""
+    m = re.search(r"\bPython (3\.\d+)", page.visible)
+    assert m, "landing page does not name a Python version"
+    with open(os.path.join(BASE, "_env.bat"), encoding="utf-8", errors="replace") as f:
+        env_bat = f.read()
+    assert f"Install Python {m.group(1)}" in env_bat, (
+        f"page says Python {m.group(1)} but _env.bat tells users to install something else")
 
 
 def test_no_claims_that_do_not_ship(page):
