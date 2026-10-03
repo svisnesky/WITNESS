@@ -2275,6 +2275,10 @@ def _maybe_detect_runner(cfg, engine, lines, s):
 
 
 EXFIL_REARM_FRAMES = 15   # ~3s of clear frames re-arms the next capture
+# A re-read of the SAME summary panel (it flickered away and re-armed) comes
+# seconds after the first pass. A real next match needs matchmaking, a deploy
+# and some play, so its panel is minutes later.
+EXFIL_DUP_WINDOW = 90.0
 
 
 def _maybe_capture_exfil(cfg, engine, lines, s, now):
@@ -2298,6 +2302,7 @@ def _maybe_capture_exfil(cfg, engine, lines, s, now):
         if s.get("_exfil_seen"):
             return                            # same appearance, already captured
         s["_exfil_seen"] = True
+        prev_exfil = s.get("_last_exfil")    # for the duplicate-panel check
         s["_last_exfil"] = now
         # Exfiling AS the last one standing is a clutch by definition.
         if s.get("clutch"):
@@ -2360,9 +2365,14 @@ def _maybe_capture_exfil(cfg, engine, lines, s, now):
         # long enough to re-arm the edge trigger) arrives with an empty
         # match_tags against the game's full numbers: reconciling it again would
         # credit every kill a second time. A pass with no new event since the
-        # previous exfil pass is that duplicate, so it reconciles nothing.
+        # previous exfil pass, within EXFIL_DUP_WINDOW of it, is that duplicate,
+        # so it reconciles nothing. The time gate matters: without it EVERY
+        # later match with zero detections (a wrong popup region reads 0 all
+        # night) skipped the scoreboard reconcile, which is when it matters most.
         dup_panel = (not match_tags
-                     and s.get("_exfil_tags_len") == len(s["session_tags"]))
+                     and s.get("_exfil_tags_len") == len(s["session_tags"])
+                     and prev_exfil is not None
+                     and now - prev_exfil <= EXFIL_DUP_WINDOW)
         if dup_panel and cfg.get("exfil_reconcile", True) and _panel_trusted(stats_d):
             print("  [exfil] no new events since the last exfil pass — treating "
                   "this as the same panel, not reconciling it twice")

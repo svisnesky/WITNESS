@@ -202,6 +202,26 @@ def test_duplicate_exfil_capture_does_not_double_credit(exfil, capsys):
     assert "not reconciling it twice" in out
 
 
+def test_a_later_zero_detection_match_is_still_reconciled(exfil, capsys):
+    """'No new events' alone is not a duplicate: a later match where detection
+    saw nothing (wrong popup region, every match reads 0) is exactly when the
+    scoreboard reconcile matters. Only a re-read within EXFIL_DUP_WINDOW of the
+    previous pass is treated as the same panel."""
+    panels, logged = exfil
+    panels += [{"runners_downed": 2, "runner_elims": 0, "combatant_elims": 3,
+                "runner_damage": 576},
+               {"runners_downed": 2, "runner_elims": 0, "combatant_elims": 1,
+                "runner_damage": 400}]
+    s = _session(count=2, downs=2, session_tags=["down", "down"],
+                 match_tags=["down", "down"])
+    _pass(s, t=1.0)
+    assert s["count"] == 2
+    _pass(s, t=900.0)                      # 15 min later, nothing detected
+    out = capsys.readouterr().out
+    assert s["count"] == 4 and s["downs"] == 4
+    assert "not reconciling it twice" not in out
+
+
 def test_new_events_after_an_exfil_reconcile_normally(exfil):
     """Only a pass with NO new event is a duplicate."""
     panels, logged = exfil
