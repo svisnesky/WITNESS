@@ -58,7 +58,13 @@ def _flags():
 
 
 def video_codec(path: str, ffmpeg: str) -> str:
-    """'h264' / 'hevc' / 'av1' / '' via ffprobe (next to ffmpeg)."""
+    """'h264' / 'hevc' / 'av1' / '' via ffprobe (next to ffmpeg), else from
+    `ffmpeg -i`'s stream line.
+
+    The fallback matters: imageio-ffmpeg's bundled binary has no ffprobe, and
+    neither does an install that copied only ffmpeg.exe. Without it an HEVC
+    clip (NVENC HEVC is a common OBS choice) was remuxed without the hvc1 tag,
+    and AVPlayer on the iPad refuses an HEVC mp4 tagged hev1."""
     try:
         import match_reel
         probe = match_reel._ffprobe_path(ffmpeg)
@@ -67,7 +73,18 @@ def video_codec(path: str, ffmpeg: str) -> str:
                             "-of", "default=nw=1:nk=1", path],
                            capture_output=True, text=True, timeout=15,
                            creationflags=_flags())
-        return (r.stdout or "").strip().lower()
+        codec = ((r.stdout or "").strip().splitlines() or [""])[0].strip().lower()
+        if codec:
+            return codec
+    except Exception:
+        pass
+    try:
+        import re
+        r = subprocess.run([ffmpeg, "-hide_banner", "-i", path],
+                           capture_output=True, text=True, timeout=15,
+                           creationflags=_flags())
+        m = re.search(r"Stream #\S+.*?: Video: ([A-Za-z0-9_]+)", r.stderr or "")
+        return m.group(1).lower() if m else ""
     except Exception:
         return ""
 
