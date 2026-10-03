@@ -353,7 +353,7 @@ def test_import_check_matches_requirements():
     line = [ln for ln in _lines("_env.bat")
             if ln.strip().startswith('python -c "import torch, ')]
     assert len(line) == 1
-    mods = re.search(r'-c "import ([^"]+)"', line[0]).group(1)
+    mods = re.search(r'-c "import ([^";]+)', line[0]).group(1)
     mods = [m.strip() for m in mods.split(",")]
     assert "webview" not in mods  # gui.py installs pywebview by itself
     dist = {"torch": "easyocr", "easyocr": "easyocr", "cv2": "opencv-python",
@@ -363,6 +363,52 @@ def test_import_check_matches_requirements():
     for m in mods:
         assert m in dist, f"add {m} to the map in this test"
         assert re.search(r"(?m)^" + re.escape(dist[m].lower()) + r"\b", req), m
+
+
+def test_requirements_install_pins_the_installed_torch_builds():
+    """updater.ensure_requirements pins torch with -c; _env.bat's own
+    `pip install -r` must too, or the next .bat launch makes the swap the
+    updater refused (PyPI's Windows torch is CPU-only)."""
+    lines = _lines("_env.bat")
+    req = [i for i, ln in enumerate(lines) if "pip install -r requirements.txt" in ln]
+    assert len(req) == 1
+    assert '--constraint ".venv\\witness-pins.txt"' in lines[req[0]]
+    # Never unpinned: the install is skipped when the pin list failed.
+    assert "if not defined WITNESS_PINFAIL" in _enclosing_opener("_env.bat", req[0])
+    writer = [i for i, ln in enumerate(lines) if '> ".venv\\witness-pins.txt"' in ln]
+    assert len(writer) == 1 and writer[0] < req[0]
+    assert lines[writer[0] + 1].strip() == 'if errorlevel 1 set "WITNESS_PINFAIL=1"'
+    # A failed pin list counts as a failed install: no stamp, retried next launch.
+    assert 'if defined WITNESS_PINFAIL set "WITNESS_PIPFAIL=1"' in lines
+    # Pins are written AFTER the CUDA torch install, so a fresh GPU install's
+    # requirements step cannot swap the build it just downloaded either.
+    cuda = [i for i, ln in enumerate(lines) if "--index-url" in ln][0]
+    assert cuda < writer[0]
+
+
+def test_the_pin_writer_prints_exact_pip_constraints():
+    """Run the writer snippet as _env.bat does (cwd = the app folder)."""
+    snippet = re.search(r'-c "(import updater;[^"]+)"', _read("_env.bat")).group(1)
+    r = subprocess.run([sys.executable, "-c", snippet], cwd=BASE,
+                       capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    import updater
+    assert r.stdout.split() == updater._gpu_pins()
+    for ln in r.stdout.split():
+        assert re.match(r"^(torch|torchvision|torchaudio)==\S+$", ln), ln
+
+
+def test_cuda_check_rides_on_the_import_check():
+    """One torch import on an update launch, not two, and a GPU that torch
+    cannot use is reported after any install, not only the first."""
+    text = _read("_env.bat")
+    assert text.count("import torch") == 2      # the probe and the import check
+    line = [ln for ln in _lines("_env.bat")
+            if ln.strip().startswith('python -c "import torch, ')][0]
+    snippet = re.search(r'-c "([^"]+)"', line).group(1)
+    assert "torch.cuda.is_available()" in snippet and "WITNESS_GPU" in snippet
+    assert "if defined WITNESS_NOCUDA (" in text
+    assert "NOSTAMP" not in text
 
 
 def test_python_version_check_accepts_only_64bit_310_to_312():

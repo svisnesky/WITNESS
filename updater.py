@@ -391,9 +391,10 @@ def ensure_requirements(base_dir: str) -> tuple[bool, str]:
     rapidfuzz) can still fail on a locked .pyd on Windows; pip then exits with
     an error and the note carries it.
 
-    The pin only lasts if _env.bat pins the same way: its `pip install -r`
-    after requirements.txt changes would otherwise make, on the next .bat
-    launch, the swap refused here.
+    _env.bat pins the same way, from this module's _gpu_pins(): its own
+    `pip install -r` after requirements.txt changes would otherwise make, on
+    the next .bat launch, the swap refused here. Keep _gpu_pins importable
+    with the stdlib alone; _env.bat imports this module before any install.
 
     Returns (ok, note) and never raises. Refuses to run outside a virtualenv,
     so a dev box's system Python is never touched. Any other failure is

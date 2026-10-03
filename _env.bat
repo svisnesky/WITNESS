@@ -27,13 +27,14 @@ set "WITNESS_FRESH="
 set "WITNESS_PY="
 set "WITNESS_PYVER="
 set "WITNESS_NEEDINSTALL="
-set "WITNESS_NOSTAMP="
 set "WITNESS_GPU="
 set "WITNESS_WANTTORCH="
 set "WITNESS_TORCHFAIL="
+set "WITNESS_PINFAIL="
 set "WITNESS_PIPFAIL="
 set "WITNESS_PARTIAL="
 set "WITNESS_IMPORTFAIL="
+set "WITNESS_NOCUDA="
 set "WITNESS_DIR=%~dp0"
 
 if not exist ".venv\Scripts\python.exe" set "WITNESS_FRESH=1"
@@ -141,7 +142,6 @@ REM ===== The copy is written only after every step succeeded, so an interrupted
 REM ===== install simply runs again on the next launch.
 fc /b requirements.txt ".venv\witness-installed.txt" >nul 2>nul
 if errorlevel 1 set "WITNESS_NEEDINSTALL=1"
-if not exist ".venv\witness-installed.txt" set "WITNESS_NOSTAMP=1"
 
 if defined WITNESS_NEEDINSTALL if not defined WITNESS_FRESH (
     echo.
@@ -179,15 +179,39 @@ if defined WITNESS_TORCHFAIL (
     echo.
 )
 
+REM Pin the torch builds that are installed, the way updater.py's
+REM ensure_requirements does: a requirements install without --upgrade still
+REM replaces a package that a requirement excludes, and for torch that is PyPI's
+REM CPU-only Windows wheel over the CUDA build. It imports fine, so nothing
+REM above would ever repair it, and OCR would quietly run on the CPU. With the
+REM pin, an update that needs a different torch fails here instead. The pin
+REM list comes from updater.py, so both installers pin the same builds. An
+REM empty list pins nothing. If the list cannot be written, the install is
+REM skipped and retried next launch: never run unpinned.
 if defined WITNESS_NEEDINSTALL if not defined WITNESS_TORCHFAIL (
-    python -m pip install -r requirements.txt
+    python -c "import updater; [print(p) for p in updater._gpu_pins()]" > ".venv\witness-pins.txt" 2>nul
+    if errorlevel 1 set "WITNESS_PINFAIL=1"
+)
+if defined WITNESS_PINFAIL echo   Could not read the installed PyTorch version - skipping the install.
+if defined WITNESS_PINFAIL set "WITNESS_PIPFAIL=1"
+if defined WITNESS_NEEDINSTALL if not defined WITNESS_TORCHFAIL if not defined WITNESS_PINFAIL (
+    python -m pip install -r requirements.txt --constraint ".venv\witness-pins.txt"
     if errorlevel 1 set "WITNESS_PIPFAIL=1"
 )
+if exist ".venv\witness-pins.txt" del ".venv\witness-pins.txt" >nul 2>nul
 
 REM pywebview is left out on purpose: the window app installs it by itself.
+REM The same run checks the GPU when there is an NVIDIA card (exit code 3 when
+REM torch cannot use it), so torch is imported once here, not twice: on the
+REM first launch after an update both happen in a minimized window before the
+REM splash shows.
 if defined WITNESS_NEEDINSTALL (
-    python -c "import torch, easyocr, cv2, mss, rapidfuzz, obsws_python, yaml, PIL"
-    if errorlevel 1 set "WITNESS_IMPORTFAIL=1"
+    python -c "import torch, easyocr, cv2, mss, rapidfuzz, obsws_python, yaml, PIL; import os, sys; sys.exit(3 if os.environ.get('WITNESS_GPU') and not torch.cuda.is_available() else 0)"
+    if errorlevel 3 (
+        set "WITNESS_NOCUDA=1"
+    ) else if errorlevel 1 (
+        set "WITNESS_IMPORTFAIL=1"
+    )
 )
 if defined WITNESS_IMPORTFAIL (
     echo.
@@ -216,31 +240,31 @@ if defined WITNESS_NEEDINSTALL if not defined WITNESS_PARTIAL (
     echo   Setup complete.
 )
 
-REM Setup has never finished on this .venv before, and there is an NVIDIA card:
-REM say so if the OCR engine cannot use it, instead of quietly running on CPU.
-if defined WITNESS_GPU if defined WITNESS_NOSTAMP (
-    python -c "import sys, torch; sys.exit(0 if torch.cuda.is_available() else 1)" >nul 2>nul
-    if errorlevel 1 (
-        echo.
-        echo   NOTE: an NVIDIA card was found, but the OCR engine cannot use it, so
-        echo   it will run on the CPU - slower, and it can miss fast popups.
-        echo   Update the NVIDIA driver and restart the PC. If that does not help,
-        echo   delete the .venv folder and run START again.
-        echo.
-        if defined WITNESS_FRESH pause
-    )
+REM Something was just installed and there is an NVIDIA card: say so if the
+REM OCR engine cannot use it, instead of quietly running on CPU. This runs after
+REM every install, not only the first one, so a torch build that got swapped
+REM is reported too.
+if defined WITNESS_NOCUDA (
+    echo.
+    echo   NOTE: an NVIDIA card was found, but the OCR engine cannot use it, so
+    echo   it will run on the CPU - slower, and it can miss fast popups.
+    echo   Update the NVIDIA driver and restart the PC. If that does not help,
+    echo   delete the .venv folder and run START again.
+    echo.
+    if defined WITNESS_FRESH pause
 )
 
 set "WITNESS_FRESH="
 set "WITNESS_PY="
 set "WITNESS_PYVER="
 set "WITNESS_NEEDINSTALL="
-set "WITNESS_NOSTAMP="
 set "WITNESS_GPU="
 set "WITNESS_WANTTORCH="
 set "WITNESS_TORCHFAIL="
+set "WITNESS_PINFAIL="
 set "WITNESS_PIPFAIL="
 set "WITNESS_PARTIAL="
 set "WITNESS_IMPORTFAIL="
+set "WITNESS_NOCUDA="
 set "WITNESS_DIR="
 exit /b 0
