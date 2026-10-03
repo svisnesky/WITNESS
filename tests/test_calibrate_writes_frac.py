@@ -4,9 +4,9 @@ It used to write only the legacy pixel `detect_region`, while the shipped
 `detect_region_frac` always wins, and then print "You're calibrated". These
 tests load the result the way live mode does and check that the crop equals the
 box that was drawn. Now that Calibrate really changes detection, the safety rails
-are tested too: the .bak backup, refusing edits it can't prove clean, never
-writing settings_override.yaml, and leaving the rest of the file byte-for-byte
-alone (em dashes, CRLF, a Notepad BOM, an ANSI-saved file).
+are tested too: the .bak and write-once .orig backups, refusing edits it can't
+prove clean, never writing settings_override.yaml, and leaving the rest of the
+file byte-for-byte alone (em dashes, CRLF, a Notepad BOM, an ANSI-saved file).
 
 Nothing here opens a window: the selection and the screen grab are stubbed.
 """
@@ -109,6 +109,36 @@ def test_backup_is_made_and_the_rest_of_the_file_is_untouched(tmp_path):
     assert 1 <= len(changed) <= 8
 
 
+def test_a_second_calibration_keeps_the_original_recoverable(tmp_path):
+    """Run 1 boxes the wrong spot and is accepted (Enter means Yes); run 2 is
+    accepted too. The .bak now holds run 1's bad region, so the region that
+    worked before any calibration must survive somewhere else on disk, not
+    only in run 1's closed console."""
+    d = _app_dir(tmp_path)
+    p = str(d / "config.yaml")
+    original = open(p, "rb").read()
+    bad1 = {"x": 100, "y": 100, "w": 400, "h": 120}
+    bad2 = {"x": 2000, "y": 300, "w": 500, "h": 150}
+    calibrate.write_region(p, calibrate.box_to_frac(bad1, 3840, 2160), bad1)
+    after_run1 = open(p, "rb").read()
+    calibrate.write_region(p, calibrate.box_to_frac(bad2, 3840, 2160), bad2)
+
+    assert (d / "config.yaml.orig").read_bytes() == original
+    # .bak still undoes just the last run
+    assert (d / "config.yaml.bak").read_bytes() == after_run1
+    assert not list(d.glob("*.tmp"))
+
+
+def test_a_failed_backup_writes_nothing(tmp_path):
+    d = _app_dir(tmp_path)
+    p = d / "config.yaml"
+    before = p.read_bytes()
+    (d / "config.yaml.bak").mkdir()          # the backup can't be written
+    with pytest.raises(calibrate.CalibrateError):
+        calibrate.write_region(str(p), calibrate.box_to_frac(BOX_4K, 3840, 2160), BOX_4K)
+    assert p.read_bytes() == before
+
+
 def test_crlf_and_bom_are_preserved(tmp_path):
     text = open(SHIPPED, encoding="utf-8").read().replace("\n", "\r\n")
     d = _app_dir(tmp_path, config_text="x")
@@ -171,6 +201,7 @@ def test_a_layout_it_cannot_edit_cleanly_is_left_alone(tmp_path):
         calibrate.write_region(str(p), calibrate.box_to_frac(BOX_4K, 3840, 2160))
     assert p.read_text(encoding="utf-8") == text
     assert not (d / "config.yaml.bak").exists()
+    assert not (d / "config.yaml.orig").exists()
 
 
 # --- which file it writes ----------------------------------------------------
@@ -285,6 +316,7 @@ def test_image_argument_flow_writes_and_prints_the_box(tmp_path, monkeypatch, ca
     assert "Wrote detect_region_frac" in out
     assert "x=700 y=760 w=520 h=140" in out
     assert (d / "config.yaml.bak").exists()
+    assert "config.yaml.orig" in out          # the user is told where it is
     cfg = _load(d / "config.yaml")
     assert capture._resolve(None, cfg["detect_region_frac"], 1920, 1080) == box
 
@@ -315,6 +347,7 @@ def test_declining_the_confirmation_writes_nothing(tmp_path, monkeypatch):
     assert calibrate.main([]) == 1
     assert (d / "config.yaml").read_bytes() == before
     assert not (d / "config.yaml.bak").exists()
+    assert not (d / "config.yaml.orig").exists()
 
 
 def test_a_cropped_image_is_refused(tmp_path, monkeypatch):

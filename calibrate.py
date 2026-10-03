@@ -19,7 +19,8 @@ Calibrating used to be a no-op that still said "You're calibrated": it wrote
 only the pixel block, which detect_region_frac overrides. Now that it really
 changes detection, a mis-drawn box can break a region that worked. So before
 anything is written it prints the box in pixels and asks, the old file is
-copied to <file>.bak, and the new text is parsed back and compared, so a file
+copied to <file>.bak (and, on the first run only, to <file>.orig, which later
+runs never overwrite), and the new text is parsed back and compared, so a file
 it cannot edit cleanly is left untouched.
 """
 
@@ -167,34 +168,54 @@ def _read_text(path: str):
                                  f"{enc} text, so it was left alone.")
 
 
-def write_region(path: str, frac: dict, box: dict = None) -> str:
-    """Back up `path` to `path`.bak, then write the new region into it.
-    Returns the backup path. Raises CalibrateError (nothing written) when the
-    edit can't be proven clean."""
-    text, enc, bom = _read_text(path)
-    new_text = update_region_text(text, frac, box)
-    check_rewrite(text, new_text, frac, box)
-    with open(path, "rb") as f:
-        original = f.read()
-    bak = path + ".bak"
-    with open(bak, "wb") as f:
-        f.write(original)
-    data = new_text.encode(enc)
-    if bom:
-        data = codecs.BOM_UTF8 + data
+def _write_bytes(path: str, data: bytes):
+    """Write through a temp file and a rename, so a crash never leaves half a
+    file behind. Raises OSError."""
     tmp = path + ".tmp"
     try:
         with open(tmp, "wb") as f:
             f.write(data)
         os.replace(tmp, path)
-    except OSError as e:
+    except OSError:
         try:
             os.remove(tmp)
         except OSError:
             pass
-        raise CalibrateError(f"couldn't write {os.path.basename(path)} ({e}). "
+        raise
+
+
+def write_region(path: str, frac: dict, box: dict = None):
+    """Back up `path`, then write the new region into it.
+
+    Two backups: `path`.bak is the file as it was before THIS run (undo the
+    last calibration), and `path`.orig is the file as it was before the FIRST
+    one, written once and never overwritten. With only the .bak, two accepted
+    mis-drawn boxes in a row left the region that used to work nowhere on disk.
+
+    Returns (bak, orig). Raises CalibrateError, with the file unchanged, when
+    the edit can't be proven clean or a backup can't be written."""
+    text, enc, bom = _read_text(path)
+    new_text = update_region_text(text, frac, box)
+    check_rewrite(text, new_text, frac, box)
+    name = os.path.basename(path)
+    with open(path, "rb") as f:
+        original = f.read()
+    bak, orig = path + ".bak", path + ".orig"
+    try:
+        if not os.path.exists(orig):
+            _write_bytes(orig, original)
+        _write_bytes(bak, original)
+    except OSError as e:
+        raise CalibrateError(f"couldn't back up {name} ({e}). Nothing changed.")
+    data = new_text.encode(enc)
+    if bom:
+        data = codecs.BOM_UTF8 + data
+    try:
+        _write_bytes(path, data)
+    except OSError as e:
+        raise CalibrateError(f"couldn't write {name} ({e}). "
                              "Is it open in another program? Nothing changed.")
-    return bak
+    return bak, orig
 
 
 # --- which file, which settings -------------------------------------------------
@@ -418,13 +439,15 @@ def main(argv=None) -> int:
         if _ask(f"\nSave this region to {rel}? [Y/n]: ") not in ("", "y", "yes"):
             print("Cancelled. Nothing changed.")
             return 1
-        bak = write_region(target, frac, box)
+        bak, orig = write_region(target, frac, box)
     except CalibrateError as e:
         print(f"\n[X] {e}")
         return 1
 
     print(f"\nBackup of the old file: {os.path.relpath(bak, BASE)}"
           f"  (copy it back over {rel} to undo)")
+    print(f"As it was before your first calibration: {os.path.relpath(orig, BASE)}"
+          "  (kept, never overwritten)")
     print(f"Wrote detect_region_frac into {rel}: {frac}")
     print(f"At {W}x{H} that is x={live['x']} y={live['y']} w={live['w']} h={live['h']}.")
     print("Restart WITNESS if it's running. To check the box, run Diagnose Capture.bat")
