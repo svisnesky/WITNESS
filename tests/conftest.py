@@ -101,3 +101,17 @@ def blocked_side_effects():
     """What the code under test tried to open or play since this test began."""
     mark = len(BLOCKED)
     yield lambda: BLOCKED[mark:]
+
+
+@pytest.fixture(autouse=True)
+def _restore_announcer_switch():
+    """main._run_live_inner pins announcer's tts_online for the session
+    (announcer.configure). Put it back after each test, so one test's session
+    cannot decide whether another test's render may go online."""
+    import sys
+    mod = sys.modules.get("announcer")
+    saved = (getattr(mod, "_ONLINE", None), getattr(mod, "_CONFIGURED_AT", None))
+    yield
+    mod = sys.modules.get("announcer")
+    if mod is not None:
+        mod._ONLINE, mod._CONFIGURED_AT = saved

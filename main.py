@@ -2795,7 +2795,25 @@ def run_live(cfg: dict, dry_run: bool = False, stop_event=None, on_count=None):
         _close_session_log()
 
 
+def _configure_announcer(cfg) -> None:
+    """Pin this session's tts_online in announcer (its configure()).
+
+    Without it the announcer reads the switch from the config.yaml and
+    settings_override.yaml beside announcer.py, so `main.py --config
+    other.yaml` with tts_online: false still sent narration text to
+    Microsoft's speech service. Guarded: an announcer without configure()
+    keeps reading the files, as before."""
+    try:
+        import announcer
+        fn = getattr(announcer, "configure", None)
+        if callable(fn):
+            fn(cfg)
+    except Exception as e:
+        print(f"  [announcer] could not apply tts_online: {e}")
+
+
 def _run_live_inner(cfg: dict, dry_run: bool = False, stop_event=None, on_count=None):
+    _configure_announcer(cfg)
     det, mode = build_detector(cfg)
 
     from ocr import OCREngine
