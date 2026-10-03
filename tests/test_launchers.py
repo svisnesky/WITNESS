@@ -418,19 +418,39 @@ def test_update_bat_forces_the_update_and_works_with_an_old_updater(tmp_path):
     code_lines = [ln.strip() for _, ln in _code_lines("Update WITNESS.bat")]
     py = code_lines.index('python -c "' + code + '"')
     assert 'call "%~dp0_env.bat"' in code_lines[py + 1:]
-    assert code_lines[-1] == "pause"
+    assert code_lines[-3:] == ["pause", "exit /b 0", ")"]
+
+
+def test_update_bat_never_rereads_itself_after_updating():
+    """The update can rewrite Update WITNESS.bat while cmd is running it, and
+    cmd would then resume the new bytes at the old offset, mid-line (a ZIP
+    install's CRLF copy rewritten as LF lands on 'Run setup again: ...').
+    The update and everything after it are one block, which cmd parses in
+    full before running, and the block ends the script."""
+    lines = _lines("Update WITNESS.bat")
+    py = [i for i, ln in enumerate(lines) if "check_and_update" in ln]
+    assert len(py) == 1
+    assert _enclosing_opener("Update WITNESS.bat", py[0]).strip() == "("
+    members = [m for _, m in _parse_blocks("Update WITNESS.bat")[1]
+               if py[0] in m][0]
+    inside = [lines[j].strip() for j in members]
+    assert inside[-2:] == ["exit /b 0", ")"]
+    after = [ln for ln in lines[members[-1] + 1:] if ln.strip()]
+    assert after == [], after
 
 
 def test_update_bat_survives_being_rewritten_while_it_runs():
     """The 1bd0911 Update WITNESS.bat gets overwritten by the update it runs.
     cmd then resumes the NEW file at the OLD byte offset (217 if the old copy
     had LF endings, 223 if CRLF; the old updater writes LF). Both must land on
-    a line start so the new flow runs cleanly instead of a half-line."""
+    a line start so the new flow runs cleanly instead of a half-line, and
+    before the update block, so the resumed run executes all of it."""
     new_lf = _read("Update WITNESS.bat").encode("ascii")
     for off in (217, 223):
         assert new_lf[off - 1:off] == b"\n", off
     assert new_lf[217:223] == b"echo.\n"
     assert new_lf[223:].startswith(b'call "%~dp0_env.bat"\n')
+    assert new_lf.index(b"\n(\n") > 223
 
 
 def test_calibrate_bat_describes_the_real_capture_and_passes_args():
