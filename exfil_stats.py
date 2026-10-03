@@ -489,11 +489,12 @@ AUDIT_PAIRS = (
 # Tags that mean "an enemy died by your hand".
 _ELIM = ("kill", "elim")
 
-# A match boundary. Written into the SESSION-wide tag list at each exfil, so a
-# session count can't carry a pending elim from one match into the next: a
-# match that ends on RUNNER ELIM would otherwise fold the next match's opening
-# FINISHER onto it and lose an elim. It counts as nothing. Per-match tag lists
-# (the audit's match_tags) never contain it. No popup is ever tagged 'exfil'.
+# A match boundary. Whoever keeps a SESSION-wide tag list appends it at each
+# exfil (this module never does), so a session count can't carry a pending
+# elim from one match into the next: a match that ends on RUNNER ELIM would
+# otherwise fold the next match's opening FINISHER onto it and lose an elim. It
+# counts as nothing. Per-match tag lists (the audit's match_tags) never contain
+# it. No popup is ever tagged 'exfil'.
 MATCH_BREAK = "exfil"
 
 

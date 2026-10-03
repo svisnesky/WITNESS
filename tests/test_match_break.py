@@ -3,8 +3,9 @@
 count_events folds a FINISHER onto a pending RUNNER ELIM (same runner, melee
 finished). Over a whole session that fold could reach across an exfil: match 1
 ends on RUNNER ELIM, match 2 opens with a standalone FINISHER, and the session
-count loses an elim. main.py appends exfil_stats.MATCH_BREAK to session_tags
-at each exfil; count_events resets on it and counts nothing for it.
+count loses an elim. count_events resets on MATCH_BREAK and counts nothing for
+it. Appending it to the session's tag list at each exfil is the caller's job
+(main.py), so these tests drive count_events directly.
 """
 import os
 import sys
@@ -49,9 +50,9 @@ def test_live_counter_agrees():
 
 
 def test_the_marker_value_is_stable_and_never_a_popup_tag():
-    """gui.py falls back to the literal 'exfil' when this attribute is absent,
-    so the value must not change. And it must never collide with a tag that
-    classify_event can produce."""
+    """A tag parser elsewhere (gui.py) may key on this value, so keep it
+    stable. And it must never collide with a tag that classify_event can
+    produce."""
     assert exfil_stats.MATCH_BREAK == "exfil"
     import main
     popup_tags = {"down", "manual_kill", "kill", "assist", "precision",
