@@ -25,6 +25,18 @@ import updater  # noqa: E402
 LATEST = "c" * 40
 
 
+@pytest.fixture(autouse=True)
+def _clean_updater_state(monkeypatch):
+    """Every test starts with no changed files and no abort, and leaves the
+    module as it found it. A real check_and_update rebinds LAST_CHANGED_FILES
+    with a plain global write; the monkeypatch taken here is what restores it
+    afterwards (it once leaked ["requirements.txt"] out of this file)."""
+    monkeypatch.setattr(updater, "LAST_CHANGED_FILES", [])
+    updater.ABORT_WRITES.clear()
+    yield
+    updater.ABORT_WRITES.clear()
+
+
 def git_blob_sha(data: bytes) -> str:
     """git's object id for a blob, written out independently of updater.py so
     a bug there cannot agree with itself here."""
@@ -470,9 +482,11 @@ def test_an_unwritable_file_does_not_strand_the_rest(tmp_path, monkeypatch):
             raise PermissionError(13, "Permission denied")
         return real_open(path, mode, *a, **k)
 
-    monkeypatch.setattr("builtins.open", locked)
-    changed, msg = updater.check_and_update(str(tmp_path))
-    monkeypatch.undo()
+    # A context, not monkeypatch.undo(): undo() would also roll back
+    # _clean_updater_state and wipe LAST_CHANGED_FILES before the asserts.
+    with monkeypatch.context() as m:
+        m.setattr("builtins.open", locked)
+        changed, msg = updater.check_and_update(str(tmp_path))
     assert changed is True
     assert "could not write games/marathon.yaml" in msg
     assert updater.LAST_CHANGED_FILES == ["main.py"]
@@ -493,9 +507,11 @@ def test_an_unwritable_app_version_still_reports_the_change(tmp_path, monkeypatc
             raise PermissionError(13, "Permission denied")
         return real_open(path, mode, *a, **k)
 
-    monkeypatch.setattr("builtins.open", locked)
-    changed, msg = updater.check_and_update(str(tmp_path))
-    monkeypatch.undo()
+    # A context, not monkeypatch.undo(): undo() would also roll back
+    # _clean_updater_state and wipe LAST_CHANGED_FILES before the asserts.
+    with monkeypatch.context() as m:
+        m.setattr("builtins.open", locked)
+        changed, msg = updater.check_and_update(str(tmp_path))
     assert changed is True
     assert msg.startswith("Updated 2 file(s)")
     assert "could not record the version" in msg
@@ -604,9 +620,7 @@ class Relaunch:
 
 
 def _fake_update(monkeypatch, changed, msg, files):
-    # Restored after the test, so a fake list never leaks into the next one.
-    monkeypatch.setattr(updater, "LAST_CHANGED_FILES", [])
-
+    # The fake's global write is undone by _clean_updater_state.
     def fake(base_dir, force=False):
         updater.LAST_CHANGED_FILES = list(files)
         return changed, msg
@@ -801,3 +815,25 @@ def test_a_console_that_cannot_print_does_not_stop_the_relaunch(monkeypatch):
     updater._say("Updated 1 file(s): ☠.py")   # must not raise
     monkeypatch.setattr(sys, "stdout", None)        # pythonw
     updater._say("Updated 1 file(s)")
+
+
+# --------------------------------------------------------------------------
+# No module state leaks between tests (or out of this file)
+#
+# A real check_and_update assigns updater.LAST_CHANGED_FILES with a plain
+# `global` write, which only a monkeypatch taken BEFORE the run can undo. The
+# desktop launcher's update check (gui.py) reads that list to decide whether
+# to run pip, so a stale ["requirements.txt"] left behind would change what a
+# later test sees, depending only on test order. These two run in file order:
+# the first leaves state behind the way a real run (or a test that forgot its
+# cleanup) does, the second must still start clean. _clean_updater_state is
+# what makes the second pass.
+
+def test_leak_canary_leaves_state_behind():
+    updater.LAST_CHANGED_FILES = ["requirements.txt"]
+    updater.ABORT_WRITES.set()
+
+
+def test_leak_canary_next_test_starts_clean():
+    assert updater.LAST_CHANGED_FILES == []
+    assert not updater.ABORT_WRITES.is_set()
