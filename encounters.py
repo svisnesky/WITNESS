@@ -44,11 +44,7 @@ def resolve_gamertag(cfg) -> str:
     """Your gamertag by the key-absent rule: DEFAULT_GAMERTAG when the key is
     missing from cfg, otherwise the configured value stripped ('' = no tag;
     YAML's bare `gamertag:` is None, which also means no tag)."""
-    try:
-        present = "gamertag" in cfg
-    except TypeError:            # cfg is None or not a mapping
-        present = False
-    if not present:
+    if not hasattr(cfg, "get") or "gamertag" not in cfg:   # None, or no key
         return DEFAULT_GAMERTAG
     return str(cfg.get("gamertag") or "").strip()
 
@@ -59,6 +55,7 @@ def _hint_no_tag() -> None:
     if not _hinted_no_tag:
         _hinted_no_tag = True
         print(NO_TAG_HINT)
+
 
 # Streamer watchlist: feed names that trigger the big alert (banner + voiced
 # call-out, and a saved clip when one of them downs you). Overridden by
