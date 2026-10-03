@@ -3887,15 +3887,24 @@ def run_bench(cfg, frames: int = 25):
     from ocr import OCREngine
 
     print("Benchmarking capture + OCR on this machine...")
+    gpu = None             # True / False when PyTorch could say, else None
     try:
         import torch
-        if torch.cuda.is_available():
+        gpu = bool(torch.cuda.is_available())
+        if gpu:
             print(f"  GPU: {torch.cuda.get_device_name(0)} (OCR runs on GPU)")
         else:
             print("  GPU: none detected by PyTorch — OCR will run on CPU "
                   "(works, but catches fewer fast popups; see README)")
     except Exception:
         pass
+
+    # The SAME thread cap and priority as live detection. Without it CPU torch
+    # used every core here but only ocr_threads (2) live, so the verdict was
+    # too optimistic on exactly the CPU/AMD machines that miss kills.
+    _tune_performance(cfg)
+    print(f"  OCR threads: {max(1, int(cfg.get('ocr_threads', 2)))} "
+          "(same cap as live)")
 
     engine = OCREngine(cfg.get("ocr_engine", "easyocr"), cfg.get("ocr_upscale", 3), max_dim=cfg.get("ocr_max_dim", 800))
     poll_fps = max(1, cfg.get("poll_fps", 5))
@@ -3912,15 +3921,29 @@ def run_bench(cfg, frames: int = 25):
     avg, worst = sum(times) / len(times), max(times)
     print(f"  {frames} frames: avg {avg:.0f} ms, worst {worst:.0f} ms "
           f"(budget: {budget_ms:.0f} ms per frame at poll_fps={poll_fps})")
+    for line in _bench_verdict(avg, worst, budget_ms, gpu):
+        print(line)
+
+
+BENCH_GPU_HINT = ("  NVIDIA card? Delete the .venv folder and run START again - "
+                  "setup installs GPU PyTorch when it finds nvidia-smi.")
+
+
+def _bench_verdict(avg, worst, budget_ms, gpu) -> list:
+    """The benchmark's verdict lines. The GPU advice appears only when PyTorch
+    says there is no CUDA (it used to point at QUICKSTART steps that don't
+    exist, and printed even when the GPU was already in use)."""
     if worst < budget_ms * 0.7:
-        print("  VERDICT: plenty of headroom — this machine handles it easily.")
-    elif avg < budget_ms:
-        print("  VERDICT: workable. If kills get missed, lower poll_fps to 3 "
-              "or ocr_upscale to 2 in config.yaml.")
+        return ["  VERDICT: plenty of headroom — this machine handles it easily."]
+    if avg < budget_ms:
+        lines = ["  VERDICT: workable. If kills get missed, set poll_fps: 3 "
+                 "and ocr_upscale: 2 in config.yaml."]
     else:
-        print("  VERDICT: too slow at current settings. Set poll_fps: 3 and "
-              "ocr_upscale: 2 — or install the GPU build "
-              "(see QUICKSTART).")
+        lines = ["  VERDICT: too slow at current settings. Set poll_fps: 3 and "
+                 "ocr_upscale: 2 in config.yaml."]
+    if gpu is False:
+        lines.append(BENCH_GPU_HINT)
+    return lines
 
 
 if __name__ == "__main__":
