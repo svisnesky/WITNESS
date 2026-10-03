@@ -258,7 +258,7 @@ def test_missing_file_is_downloaded(tmp_path, monkeypatch):
 
 def test_existing_config_yaml_is_never_fetched_or_written(tmp_path, monkeypatch):
     _fresh_zip(tmp_path)
-    mine = b"auto_update: true\ngamertag: MRVIZNASTY\nobs_password: hunter2\n"
+    mine = b"auto_update: true\ngamertag: MRVIZNASTY\nweb_port: 8123\n"
     _write(tmp_path, "config.yaml", mine)
     gh = FakeGitHub(REPO)
     monkeypatch.setattr(updater, "_get", gh)
@@ -581,6 +581,9 @@ class Relaunch:
 
 
 def _fake_update(monkeypatch, changed, msg, files):
+    # Restored after the test, so a fake list never leaks into the next one.
+    monkeypatch.setattr(updater, "LAST_CHANGED_FILES", [])
+
     def fake(base_dir, force=False):
         updater.LAST_CHANGED_FILES = list(files)
         return changed, msg
