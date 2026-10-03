@@ -208,9 +208,10 @@ kill_coalesce_seconds: 8.0  # after a kill, wait this long for more kills before
 
 # --- OCR ---
 # engine: "easyocr" (GPU, robust; the tested default) or "tesseract".
-# tesseract is EXPERIMENTAL: it needs the Tesseract program installed and on
-# PATH, and it does not make the install smaller (setup installs EasyOCR and
-# PyTorch either way). It only saves GPU memory while running.
+# tesseract is EXPERIMENTAL: it needs the Tesseract program installed (if
+# WITNESS can't find it, add the Tesseract-OCR folder to PATH), and it does
+# not make the install smaller (setup installs EasyOCR and PyTorch either
+# way). It only saves GPU memory while running.
 ocr_engine: "easyocr"
 ocr_upscale: 3             # upscale the cropped region Nx before OCR (helps small fonts).
                           # Capped by ocr_max_dim so it never makes a giant, slow image.
@@ -299,7 +300,8 @@ make_shorts: false     # at session end, render each clip as a 1080x1920 vertica
                        # Off by default: extra render time + disk per clip.
 shorts_labels: true    # bake a label into each short: the event tag
                        # (e.g. "DOWN + FINISHER") and the game name
-ffmpeg_path: ""        # leave empty to auto-find ffmpeg.exe in this folder / PATH
+ffmpeg_path: ""        # empty = find ffmpeg automatically; an ffmpeg.exe in
+                       # this folder always wins. Or a full path to ffmpeg.exe.
 
 # --- Kill feed name tracking (the Menace Report) ---
 # Read gamertags off the kill feed: who you downed (scanned right after each
@@ -418,9 +420,11 @@ youtube_upload_shorts: false         # every vertical Short (quota-heavy)
 youtube_privacy: "unlisted"   # unlisted | private | public
 
 # --- Live web dashboard (view on a phone/iPad browser over the LAN) ---
-web_dashboard: true    # serve a live kill feed page. Console launcher only: the
-                       # window app always serves itself. To lock the dashboard
-                       # to this PC, use web_lan: false (below).
+web_dashboard: true    # serve a live kill feed page. false = the console
+                       # launcher serves none; the window app always runs one
+                       # (the window IS the dashboard). To keep the dashboard
+                       # on this PC only, in either launcher, set
+                       # web_lan: false (below).
 web_port: 8000         # open http://<your-PC-IP>:8000 on the device
 web_lan: true          # true = reachable from devices on your Wi-Fi (the iPad).
                        # NOTE: the dashboard has no password — anyone on the same
