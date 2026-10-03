@@ -21,12 +21,14 @@ def record_session(base_dir, session):
     """Append a session dict and rebuild the dashboard. Returns the html path."""
     csv_path, html_path = _paths(base_dir)
     new = not os.path.exists(csv_path)
-    with open(csv_path, "a", newline="") as f:
+    # utf-8 both ways (the rows are dates and numbers, so an existing file
+    # written in the Windows code page reads back the same).
+    with open(csv_path, "a", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(f, fieldnames=FIELDS)
         if new:
             w.writeheader()
         w.writerow({k: session.get(k, "") for k in FIELDS})
-    with open(csv_path, newline="") as f:
+    with open(csv_path, newline="", encoding="utf-8") as f:
         rows = list(csv.DictReader(f))
     with open(html_path, "w", encoding="utf-8") as f:
         f.write(_build_html(rows))

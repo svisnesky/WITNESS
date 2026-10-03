@@ -68,7 +68,9 @@ class DetectionCanary:
             return ("broken",
                     f"the game credited {self.game_events} kill(s) this session "
                     f"and WITNESS detected 0. The popup wording or position has "
-                    f"probably changed — re-run calibration, and check "
+                    f"probably changed. Run Diagnose Capture.bat with a kill popup "
+                    f"on screen: if the popup is outside the region, run "
+                    f"1 - Calibrate.bat; if it is inside, check "
                     f"popup_trigger_phrases against what the game now prints.")
 
         # 2. Detected far fewer than the game credited, across several matches.
@@ -77,14 +79,16 @@ class DetectionCanary:
             return ("broken",
                     f"the game credited {self.game_events} kill(s) but WITNESS "
                     f"only detected {self.our_events}. Detection is missing more "
-                    f"than half — check the popup region and phrases.")
+                    f"than half — check the popup region and phrases "
+                    f"(Diagnose Capture.bat shows both).")
 
         # 3. Nothing is being read at all: capture or region, not the phrases.
         if self.frames >= MIN_BLIND_FRAMES and self.frames_with_text == 0:
             return ("blind",
                     f"{self.frames} frames read and not one contained any text. "
                     f"The capture source or detect_region is wrong — run "
-                    f"Test Screenshot to see what WITNESS is actually looking at.")
+                    f"Diagnose Capture.bat while the game is on screen to see "
+                    f"what WITNESS is actually looking at.")
 
         # 4. Text is there, but no trigger ever matched. Suspicious only.
         if (self.triggers == 0 and self.frames_with_text >= MIN_QUIET_FRAMES

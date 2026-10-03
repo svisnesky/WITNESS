@@ -498,8 +498,10 @@ class TeachWizard:
         tk.Label(card, text="Switch WITNESS to this game now?", bg=PANEL,
                  fg=TEXT, font=("Consolas", 11, "bold")).pack(
                      anchor="w", padx=18, pady=(14, 2))
-        tk.Label(card, text="You can change it back anytime in the dashboard "
-                 "settings.", bg=PANEL, fg=MUTED, font=LABEL, wraplength=440,
+        tk.Label(card, text=f"Restart WITNESS to start detecting {self.name}. "
+                 "To switch back to Marathon, set game: marathon (or delete the "
+                 "game: line) in settings_override.yaml.",
+                 bg=PANEL, fg=MUTED, font=LABEL, wraplength=440,
                  justify="left", anchor="w").pack(anchor="w", padx=18,
                                                   pady=(0, 14))
 

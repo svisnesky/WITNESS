@@ -38,11 +38,35 @@ def _device_and_vram():
     return device, vram
 
 
+def apply_thread_cap(cfg) -> int:
+    """Cap torch/OpenCV CPU threads at ocr_threads, the same cap live mode
+    applies (main._tune_performance). Without it the benchmark ran OCR on every
+    core while live detection gets 2 threads, so CPU-only and AMD machines got
+    a verdict that was too optimistic. Set directly rather than importing main;
+    the setting is process-wide, which is fine because live sets the same."""
+    try:
+        n = max(1, int(cfg.get("ocr_threads", 2)))
+    except (TypeError, ValueError):
+        n = 2
+    try:
+        import torch
+        torch.set_num_threads(n)
+    except Exception:
+        pass
+    try:
+        import cv2
+        cv2.setNumThreads(n)
+    except Exception:
+        pass
+    return n
+
+
 def run_benchmark(cfg, n: int = 20) -> dict:
     """OCR a sample frame `n` times and return a result dict. Never raises —
     returns {'error': ...} if the engine can't load."""
     cfg = cfg or {}
     poll = int(cfg.get("poll_fps", 5) or 5)
+    threads = apply_thread_cap(cfg)   # before the engine is built, as live does
     try:
         from ocr import OCREngine
         engine = OCREngine(cfg.get("ocr_engine", "easyocr"),
@@ -71,6 +95,7 @@ def run_benchmark(cfg, n: int = 20) -> dict:
         "device": device,
         "engine": cfg.get("ocr_engine", "easyocr"),
         "vram_mb": round(vram),
+        "ocr_threads": threads,
         "n": int(n),
         # headroom = OCR can keep up with the poll rate with margin to spare
         "keeps_up": throughput >= poll,
