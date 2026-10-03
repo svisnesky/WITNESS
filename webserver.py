@@ -1285,11 +1285,7 @@ class _QuietServer(ThreadingHTTPServer):
 def start_web(state, port, base_dir, host="0.0.0.0"):
     imgs = {"/skull.png": "witness_logo.png",
             "/wordmark.png": "witness_wordmark.png"}
-    try:                          # show the current build in the corner
-        with open(os.path.join(base_dir, ".app_version"), encoding="utf-8") as f:
-            state.version = f.read().strip()[:7]
-    except Exception:
-        state.version = "dev"
+    state.version = build_label(base_dir)   # bottom-right corner + /api/info
 
     class Handler(BaseHTTPRequestHandler):
         # HTTP/1.1 with keep-alive: iOS Safari's video player streams via
@@ -1613,6 +1609,30 @@ def start_web(state, port, base_dir, host="0.0.0.0"):
         threading.Thread(target=_fill_lan_urls,
                          args=(state, srv.server_address[1]), daemon=True).start()
     return srv
+
+
+def build_label(base_dir: str) -> str:
+    """'0.1.0 (1a2b3c4)': the release number from version.py plus the build sha
+    the updater writes to .app_version.
+
+    Always the sha next to the number, never instead of it: the updater ships
+    every commit on main, so a hand-kept number goes stale between releases.
+    Without a sha (a ZIP install that hasn't updated yet) it's '0.1.0 (dev)'.
+    With neither, '' and the page hides the line. It used to say just 'dev' on
+    every such install, which read like debug output in bug reports."""
+    try:
+        from version import VERSION
+        ver = str(VERSION or "").strip()
+    except Exception:            # version.py not there yet, or broken
+        ver = ""
+    try:
+        with open(os.path.join(base_dir, ".app_version"), encoding="utf-8") as f:
+            sha = f.read().strip()[:7]
+    except Exception:
+        sha = ""
+    if sha:
+        return f"{ver} ({sha})" if ver else sha
+    return f"{ver} (dev)" if ver else ""
 
 
 def _fill_lan_urls(state, port):

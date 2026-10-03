@@ -221,3 +221,46 @@ def test_the_page_shows_the_address_only_on_the_pc():
     assert "window.pywebview" in p and "onThePC() && lan.length" in p
     # the How-to-use modal carries it too, with the firewall hint
     assert 'id="helpurl"' in p and "Private networks" in p
+
+
+# --- the build label ----------------------------------------------------------
+
+def _fake_version(monkeypatch, value):
+    import types
+    if value is None:
+        monkeypatch.setitem(sys.modules, "version", None)   # import -> ImportError
+    else:
+        monkeypatch.setitem(sys.modules, "version",
+                            types.SimpleNamespace(VERSION=value))
+
+
+def test_build_label_is_the_number_and_the_sha(tmp_path, monkeypatch):
+    _fake_version(monkeypatch, "0.1.0")
+    (tmp_path / ".app_version").write_text("1a2b3c4d5e6f\n", encoding="utf-8")
+    assert webserver.build_label(str(tmp_path)) == "0.1.0 (1a2b3c4)"
+
+
+def test_build_label_without_a_sha_says_dev_next_to_the_number(tmp_path, monkeypatch):
+    _fake_version(monkeypatch, "0.1.0")
+    assert webserver.build_label(str(tmp_path)) == "0.1.0 (dev)"
+
+
+def test_build_label_without_version_py(tmp_path, monkeypatch):
+    """version.py ships from another change; until it lands this must not
+    break, and must not go back to a bare 'dev'."""
+    _fake_version(monkeypatch, None)
+    assert webserver.build_label(str(tmp_path)) == ""
+    (tmp_path / ".app_version").write_text("1a2b3c4d", encoding="utf-8")
+    assert webserver.build_label(str(tmp_path)) == "1a2b3c4"
+
+
+def test_start_web_publishes_the_label(tmp_path, monkeypatch):
+    _fake_version(monkeypatch, "0.1.0")
+    st = _state()
+    srv = webserver.start_web(st, 0, str(tmp_path), "127.0.0.1")
+    try:
+        assert st.snapshot()["version"] == "0.1.0 (dev)"
+        assert webserver._api_info(st)["version"] == "0.1.0 (dev)"
+    finally:
+        srv.shutdown()
+        srv.server_close()
