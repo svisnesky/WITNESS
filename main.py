@@ -14,6 +14,7 @@ from __future__ import annotations
 import argparse
 import csv
 import os
+import re
 import shutil
 import sys
 import threading
@@ -3135,7 +3136,6 @@ def _recap_verdict(session_dir, failures) -> tuple:
 def _recap_attempts(session_dir) -> int:
     """How many recap builds of this session have failed: the attempts=N in
     .recap_failed (1 for a file from before the counter), 0 for none."""
-    import re
     path = os.path.join(session_dir or "", ".recap_failed")
     try:
         with open(path, encoding="utf-8", errors="replace") as f:
@@ -3218,7 +3218,8 @@ def _build_session_artifacts(cfg, session_dir, tags, rc=None, report_speech=""):
                 out = os.path.join(session_dir, "reels", "play_of_the_night.mp4")
                 tracks = (match_reel.list_music(os.path.join(base, "music"))
                           if cfg.get("reel_music", True) else [])
-                tagtxt = str(best.get("tag", "")).replace("+", " + ").upper()
+                tagtxt = (str(best.get("tag", "")).replace("+", " + ")
+                          .replace("_", " ").upper())
                 sub = [f"BEST OF {len(clips)} CLIP{'S' if len(clips) != 1 else ''}"
                        + (f"  ·  {tagtxt}" if tagtxt else ""),
                        time.strftime("%Y-%m-%d")]
@@ -3384,6 +3385,30 @@ def resume_unfinished_recap(web=None) -> bool:
         return False
 
 
+# NNN_<tags>_HH-MM-SS, anchored at both ends: the tag part may itself contain
+# '_' (a +1 KILL press is 'manual_kill', a watchlist death 'downedby_<name>').
+_CLIP_NAME_RE = re.compile(r"^(\d+)_(.+)_(\d{2}-\d{2}-\d{2})$")
+
+
+def _clip_tags_from_name(fname: str) -> list:
+    """Event tags from an organized clip's file name; [] if it doesn't fit.
+
+    Splitting on '_' read '002_manual_kill_20-05-00' as tag 'manual' at clock
+    'kill': a hand-credited kill came back from disk as a 0-kill 'SAVED'
+    clip in rebuilds, resumes and Play of the Night. clip_index.parse_name is
+    used when its answer has a real clock (the reel-pipeline package anchors
+    it at the end, the same way); otherwise the end-anchored match here."""
+    try:
+        import clip_index
+        _n, tags, clock = clip_index.parse_name(fname)
+        if tags and re.fullmatch(r"\d{2}:\d{2}:\d{2}", clock or ""):
+            return list(tags)
+    except Exception:
+        pass
+    m = _CLIP_NAME_RE.match(os.path.splitext(os.path.basename(fname))[0])
+    return [t for t in m.group(2).split("+") if t] if m else []
+
+
 def _session_clips_from_dir(session_dir: str):
     """List this session's organized clips (top level only) as reel dicts,
     inferring the kill count from the filename tag (e.g. down+finisher = 2)."""
@@ -3397,13 +3422,15 @@ def _session_clips_from_dir(session_dir: str):
         f = os.path.basename(rel)
         if f.lower().startswith("session"):
             continue
-        # NNN_tag_time.ext  ->  tag
-        parts = f.split("_")
-        tag = parts[1] if len(parts) >= 3 else "kill"
-        tags = [p for p in tag.split("+") if p]
+        # NNN_tags_HH-MM-SS.ext -> tags. A name that doesn't fit (an OBS
+        # default 'Replay 2026-...', a hand-dropped file) stays a 1-kill
+        # 'kill' clip, as before, so it never drops out of a reel.
+        tags = _clip_tags_from_name(f)
+        tag = "+".join(tags) or "kill"
+        tags = tags or ["kill"]
         out.append({"path": full,     # may live in clips/ on a tidied session
                     "kills": _kill_count(tags),
-                    "downs": sum(1 for t in tags if t == "down"),
+                    "downs": _kill_counts(tags)[0],
                     "tag": tag})
     # Chronological — the filename's leading number is the kill count and now
     # repeats, so sorting by name cut back to earlier moments mid-reel.
