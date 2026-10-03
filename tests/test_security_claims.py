@@ -32,7 +32,7 @@ def test_no_dynamic_code_execution():
     assert not bad, f"dynamic execution introduced: {bad}"
 
 
-def test_network_destinations_are_only_the_documented_four():
+def test_network_destinations_are_only_the_documented_ones():
     """SECURITY.md lists every host the app can reach. Adding a new one must
     force an update to that list."""
     allowed = {"api.github.com", "raw.githubusercontent.com", "api.elevenlabs.io",
@@ -79,3 +79,116 @@ def test_security_doc_still_discloses_the_two_known_risks():
         doc = f.read()
     assert "no authentication" in doc.lower()
     assert "auto-update" in doc.lower() and "supply-chain" in doc.lower()
+
+
+def _security_doc():
+    with open(os.path.join(BASE, "SECURITY.md"), encoding="utf-8") as f:
+        return f.read()
+
+
+def _network_section():
+    """SECURITY.md from '## Network' up to the next '## ' heading."""
+    doc = _security_doc()
+    start = doc.index("## Network")
+    end = doc.find("\n## ", start + 1)
+    return doc[start:] if end < 0 else doc[start:end]
+
+
+def _requirements():
+    with open(os.path.join(BASE, "requirements.txt"), encoding="utf-8") as f:
+        names = []
+        for line in f:
+            line = line.split("#", 1)[0].strip()
+            if line:
+                names.append(re.split(r"[<>=!~\[ ;]", line, 1)[0].lower())
+        return names
+
+
+def _mentions_host(text, host):
+    """`host` as a whole host name: 'github.com' must not be satisfied by
+    'api.github.com' alone."""
+    return re.search(r"(?<![A-Za-z0-9.\-])" + re.escape(host)
+                     + r"(?![A-Za-z0-9\-])", text) is not None
+
+
+def test_url_literal_hosts_are_named_in_security_md():
+    """The other direction of the allowlist above: every host that appears as
+    a URL in the app's own code is named in SECURITY.md's network section."""
+    net = _network_section()
+    hosts = set()
+    for src in _app_source().values():
+        for m in re.finditer(r"https?://([A-Za-z0-9.\-]+)", src):
+            hosts.add(m.group(1))
+    missing = sorted(h for h in hosts - {"localhost", "127.0.0.1"}
+                     if not _mentions_host(net, h))
+    assert not missing, f"SECURITY.md's network table doesn't name: {missing}"
+
+
+def test_edge_tts_traffic_is_disclosed():
+    """edge-tts sends the narration text (the announcer name, and opponents'
+    gamertags in the WITNESS Report) to Microsoft. A URL grep can't see it: the
+    host lives inside the library. SECURITY.md said nothing left the PC by
+    default while this was on by default."""
+    if "edge-tts" not in _requirements():
+        return
+    assert _mentions_host(_network_section(), "speech.platform.bing.com")
+
+
+def test_library_traffic_is_disclosed():
+    """Hosts reached from inside a dependency, which the URL tests above
+    can't see. Each is checked only while its package is a requirement."""
+    net = _network_section()
+    reqs = _requirements()
+    expect = {
+        "easyocr": "github.com",                    # first-run model download
+        "google-api-python-client": "www.googleapis.com",
+    }
+    missing = [f"{pkg} -> {host}" for pkg, host in expect.items()
+               if pkg in reqs and not _mentions_host(net, host)]
+    assert not missing, f"undisclosed library traffic: {missing}"
+
+
+def test_runtime_pip_install_is_disclosed():
+    """Any app module that runs pip itself (the window app's pywebview
+    install, the updater installing new requirements) reaches PyPI."""
+    pip_call = re.compile(r"""["']-m["']\s*,\s*["']pip["']""")
+    runs_pip = [f for f, src in _app_source().items() if pip_call.search(src)]
+    if runs_pip:
+        assert _mentions_host(_network_section(), "pypi.org"), runs_pip
+
+
+def test_elevenlabs_env_var_is_disclosed():
+    """announcer.py also reads the key from an environment variable, so a
+    key can be in use without elevenlabs_key.txt in the folder."""
+    if any("ELEVENLABS_API_KEY" in src for src in _app_source().values()):
+        assert "ELEVENLABS_API_KEY" in _network_section()
+
+
+def test_security_doc_says_keep_obs_auth_on():
+    """QUICKSTART used to offer turning OBS WebSocket auth off. obs-websocket
+    listens on the network, so SECURITY.md has to say not to."""
+    doc = _security_doc().lower()
+    assert "keep obs websocket authentication on" in doc
+
+
+def test_security_doc_points_zip_users_at_a_real_update_path():
+    """'git pull' alone doesn't exist for a ZIP install (QUICKSTART's path)."""
+    doc = _security_doc()
+    assert "Update WITNESS.bat" in doc
+    assert os.path.exists(os.path.join(BASE, "Update WITNESS.bat"))
+
+
+def test_security_doc_links_point_at_this_repo():
+    """Every github.com/<owner>/<repo> path in SECURITY.md is this repo."""
+    doc = _security_doc()
+    for m in re.finditer(r"github\.com/([A-Za-z0-9_.\-]+)/([A-Za-z0-9_.\-]+)", doc):
+        assert m.group(1) == "svisnesky" and m.group(2) == "WITNESS", m.group(0)
+
+
+def test_bonjour_announcement_stays_disclosed():
+    """discovery.py announces the PC on the LAN. The paragraph saying so, and
+    its off switch, must not be lost in a rewrite of the network section."""
+    if not os.path.exists(os.path.join(BASE, "discovery.py")):
+        return
+    net = _network_section()
+    assert "_witness._tcp" in net and "bonjour_discovery: false" in net
