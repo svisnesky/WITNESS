@@ -333,3 +333,26 @@ def test_an_obs_that_is_still_booting_gets_a_moment(monkeypatch, tmp_path):
     monkeypatch.setattr(subprocess, "Popen", lambda *a, **k: popen.append(a))
     assert main._ensure_obs_running({}) == "up"
     assert popen == []
+
+
+def test_a_slow_booting_obs_gets_the_full_launch_wait(monkeypatch, capsys):
+    """A plugin-heavy OBS opened just before START can take longer than 10 s to
+    open its port. It gets the same 30 s as an OBS we launch, with a visible
+    'waiting' line, instead of a false 'WebSocket server is off'."""
+    import subprocess
+    checks, slept = [], []
+
+    def port_open(host, port, timeout=1.5):
+        checks.append(port)
+        return len(checks) >= 15           # first check + 13 s of waiting, then up
+
+    monkeypatch.setattr(main, "_on_windows", lambda: True)
+    monkeypatch.setattr(main, "_obs_port_open", port_open)
+    monkeypatch.setattr(main, "_obs_process_running", lambda: True)
+    monkeypatch.setattr(main.time, "sleep", lambda n: slept.append(n))
+    popen = []
+    monkeypatch.setattr(subprocess, "Popen", lambda *a, **k: popen.append(a))
+    assert main.OBS_BOOT_WAIT >= 30
+    assert main._ensure_obs_running({}) == "up"
+    assert popen == []
+    assert "waiting up to 30 s" in capsys.readouterr().out
