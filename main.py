@@ -93,9 +93,59 @@ def _close_session_log():
         _log_fh = None; _log_prev_stdout = None
 
 
+def _read_text_cfg(path) -> str:
+    """Text of a user-editable YAML file (config.yaml, settings_override.yaml,
+    games/*.yaml).
+
+    UTF-8 first, with or without the BOM Notepad adds. Python's default would
+    be the Windows ANSI code page: config.yaml is UTF-8 with em dashes from
+    line 1, so it failed to load at all on Japanese/Chinese/Korean Windows and
+    turned every em dash into 'â€”' (into the uploaded YouTube title) on
+    US/EU Windows. Falls back to the locale encoding for a file someone saved
+    as ANSI with a typed non-ASCII character. Raises UnicodeDecodeError when
+    neither fits."""
+    with open(path, "rb") as f:
+        raw = f.read()
+    try:
+        return raw.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        import locale
+        return raw.decode(locale.getpreferredencoding(False) or "utf-8")
+
+
+def _config_unreadable(path, e) -> RuntimeError:
+    """A plain message naming the file (and the line, when known) for a
+    config that can't be decoded or parsed. Under pythonw a raw traceback
+    here meant the window simply never opened."""
+    name = os.path.basename(path) or "config.yaml"
+    line, why = None, str(e)
+    if isinstance(e, UnicodeDecodeError):
+        try:
+            line = e.object[:e.start].count(b"\n") + 1
+        except Exception:
+            pass
+        why = (f"it is not UTF-8 text ({e.reason} at byte {e.start}); "
+               "save it as UTF-8")
+    elif isinstance(e, yaml.YAMLError):
+        mark = getattr(e, "problem_mark", None)
+        if mark is not None:
+            line = mark.line + 1
+        why = getattr(e, "problem", None) or str(e)
+        ctx = getattr(e, "context", None)
+        if ctx:
+            why = f"{why} ({ctx})"
+    where = f" (line {line})" if line else ""
+    return RuntimeError(f"{name} could not be read{where}: {why} - {path}")
+
+
 def load_config(path=CONFIG_PATH) -> dict:
-    with open(path) as f:
-        cfg = yaml.safe_load(f)
+    try:
+        cfg = yaml.safe_load(_read_text_cfg(path))
+    except (OSError, UnicodeDecodeError, yaml.YAMLError) as e:
+        raise _config_unreadable(path, e) from e
+    if not isinstance(cfg, dict):
+        raise RuntimeError(f"{os.path.basename(path) or 'config.yaml'} could not "
+                           f"be read: it is empty or not a list of settings - {path}")
     base = os.path.dirname(os.path.abspath(path)) or "."
 
     # The dashboard's settings live in an override file (config.yaml comments
@@ -104,9 +154,11 @@ def load_config(path=CONFIG_PATH) -> dict:
     ov_path = os.path.join(base, "settings_override.yaml")
     if os.path.exists(ov_path):
         try:
-            with open(ov_path) as f:
-                override = yaml.safe_load(f) or {}
+            override = yaml.safe_load(_read_text_cfg(ov_path)) or {}
+            if not isinstance(override, dict):
+                raise ValueError("it is not a list of settings")
         except Exception as e:
+            override = {}
             print(f"(could not read settings_override.yaml: {e})")
 
     # Game profile: games/<game>.yaml overrides config.yaml's detection
@@ -117,8 +169,7 @@ def load_config(path=CONFIG_PATH) -> dict:
     if game and game != "marathon":
         pfile = os.path.join(base, "games", f"{game}.yaml")
         try:
-            with open(pfile) as f:
-                profile = yaml.safe_load(f) or {}
+            profile = yaml.safe_load(_read_text_cfg(pfile)) or {}
             cfg.update(profile)
             print(f"(game profile: {profile.get('game_name', game)} — {pfile})")
         except FileNotFoundError:
@@ -231,12 +282,16 @@ def save_setting_overrides(changes: dict) -> None:
     current = {}
     if os.path.exists(path):
         try:
-            with open(path) as f:
-                current = yaml.safe_load(f) or {}
+            current = yaml.safe_load(_read_text_cfg(path)) or {}
+            if not isinstance(current, dict):
+                current = {}
         except Exception:
             current = {}
     current.update(changes)
-    with open(path, "w") as f:
+    # Written as UTF-8, matching the read: safe_dump escapes non-ASCII today,
+    # but a write in the ANSI code page next to a UTF-8 read is how a file
+    # corrupts itself on the first round trip.
+    with open(path, "w", encoding="utf-8") as f:
         yaml.safe_dump(current, f, default_flow_style=False)
 
 
