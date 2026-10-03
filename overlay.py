@@ -1,7 +1,7 @@
-"""Transient floating image callout (the Marathon skull) over the game.
+"""Transient floating image callout (the WITNESS headshot skull) over the game.
 
 Launched as its own process by main.py so it never blocks the capture loop:
-    pythonw overlay.py "C:\\path\\marathon_skull.png" 1400 1.0 120 top-right 40
+    pythonw overlay.py "C:\\path\\witness_headshot.png" 1400 1.0 120 top-right 40
     args: image  duration_ms  alpha  size_px(height)  position  margin_px
 
 The image floats with a transparent background (no visible box). On Windows it

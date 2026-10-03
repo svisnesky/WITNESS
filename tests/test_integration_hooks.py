@@ -131,3 +131,30 @@ def test_updater_exposes_what_the_launcher_and_bat_use():
     assert isinstance(updater.LAST_CHANGED_FILES, list)
     assert callable(updater.ensure_requirements)
     assert "force" in inspect.signature(updater.check_and_update).parameters
+
+
+# --- decision 10: Marathon skull art is gone once main stopped needing it ----
+
+def test_marathon_skull_png_is_not_shipped_and_only_named_as_an_old_setting():
+    """landing-page-and-assets kept marathon_skull.png because main.py still
+    used it as the tray fallback; main-runtime-hardening swapped that to
+    witness_logo.png. With both merged nothing reads the file, so it goes.
+    The name may remain only as main.py's old-config string comparison."""
+    import subprocess
+    r = subprocess.run(["git", "ls-files"], cwd=HERE, capture_output=True,
+                       text=True, timeout=30)
+    if r.returncode != 0:
+        pytest.skip("not a git checkout")
+    tracked = r.stdout.splitlines()
+    assert "marathon_skull.png" not in tracked
+    hits = []
+    for rel in tracked:
+        if rel.startswith("tests/") or not rel.endswith(
+                (".py", ".bat", ".yaml", ".yml", ".html", ".md", ".txt", ".json")):
+            continue
+        with open(os.path.join(HERE, rel), encoding="utf-8", errors="replace") as f:
+            for line in f:
+                if "marathon_skull.png" in line:
+                    hits.append((rel, line.strip()))
+    assert all(rel == "main.py" for rel, _ in hits), hits
+    assert any('img_name == "marathon_skull.png"' in ln for _, ln in hits)
