@@ -1,10 +1,11 @@
 """A tiny built-in web dashboard so a phone/iPad/second screen can watch the
 kill feed live over the local network. No dependencies (stdlib http.server).
 
-Open http://<PC-IP>:<port> in the device's browser (same Wi-Fi). The page polls
+Open <PC-IP>:<port> in the device's browser (same Wi-Fi). The page polls
 /status once a second; the recorder updates a shared LiveState as kills happen.
 """
 
+import ipaddress
 import json
 import os
 import socket
@@ -185,7 +186,8 @@ class LiveState:
         self._replay_seq = 0
         self.tag_counts = {}  # kill-type breakdown for the dashboard tiles
         self.update_msg = ""  # auto-updater status, shown in the dashboard
-        self.version = ""     # current build (short sha), shown bottom-right
+        self.version = ""     # build label '0.1.0 (1a2b3c4)', bottom-right + /api/info
+        self.build_sha = ""   # bare short sha, for the Bonjour TXT (see read_build_sha)
         self.detect = {}      # live detection health (fps/device/vram), from perf monitor
         self.recap = {}       # end-of-session build status ({status, note, report})
         self.heat = {}        # live killstreak ({streak, label, color})
@@ -193,6 +195,17 @@ class LiveState:
         # First-class state rather than text inside the recap banner, so the iOS
         # app can raise a real alert (and clear it) instead of parsing a sentence.
         self.alerts = {}
+        # Why the last START failed ('' = it didn't), and whether a START is in
+        # progress. The desktop launcher (gui._WebSession) sets both as plain
+        # attributes. Before these, an OBS mistake on START left the button on
+        # STARTING… for 12 s, then back to START, with the reason nowhere a
+        # window-app user could see it (pythonw has no console).
+        self.last_error = ""
+        self.starting = False
+        # 'ip:port' addresses a phone/iPad on the same Wi-Fi can open, best
+        # first. Filled once by start_web when it serves the LAN. No scheme:
+        # the page adds it.
+        self.lan_urls = []
         self._cfg = None       # live config dict (bound per session)
         self._save_cb = None   # persists changed settings to disk
 
@@ -297,26 +310,28 @@ class LiveState:
             self._exporting = True
         cfg = self._cfg or {}
 
+        def rc(**kw):            # tagged, so the Live page words it as an export
+            kw.setdefault("kind", "export")
+            self.set_recap(**kw)
+
         def work():
             try:
                 import main
                 sdir = main._resolve_session_dir(cfg, session)
                 if not sdir:
-                    self.set_recap(status="error",
-                                   note="couldn't find that session folder")
+                    rc(status="error", note="couldn't find that session folder")
                     return
                 import export_reel
-                self.set_recap(status="building", note="starting export…")
+                rc(status="building", note="starting export…")
                 out = export_reel.build(sdir, selection, opts=opts, cfg=cfg,
-                                        on_note=self.set_recap)
+                                        on_note=rc)
                 if out:
-                    self.set_recap(status="ready",
-                                   note=f"exported {os.path.basename(out)}")
+                    rc(status="ready", note=f"exported {os.path.basename(out)}")
                 else:
-                    self.set_recap(status="error", note="export failed")
+                    rc(status="error", note="export failed")
             except Exception as e:
                 print(f"  [export] failed: {e}")
-                self.set_recap(status="error", note=f"export failed: {e}")
+                rc(status="error", note=f"export failed: {e}")
             finally:
                 with self._lock:
                     self._exporting = False
@@ -329,35 +344,60 @@ class LiveState:
 
         Rendering takes minutes, and the dashboard poll would time out waiting —
         so this reports 'started' and progress shows up on the recap banner the
-        same way an end-of-session build does."""
+        same way an end-of-session build does.
+
+        REFUSES while a session is running, like request_export: a rebuild runs
+        the whole ffmpeg pipeline during gameplay and ends by tidying the folder,
+        which moves the live session's clips out from under its match reels.
+        Deliberately NOT refused on recap status 'building': a resume that
+        raised leaves 'building' set forever, and this button is the way out."""
         import threading
         with self._lock:
+            if self.running:
+                return {"ok": False,
+                        "error": "stop the session first — rebuilding while "
+                                 "recording competes with the live reels"}
             if getattr(self, "_rebuilding", False):
                 return {"ok": False, "error": "a rebuild is already running"}
             self._rebuilding = True
         cfg = self._cfg or {}
 
+        def rc(**kw):            # tagged, so the Live page words it as a rebuild
+            kw.setdefault("kind", "rebuild")
+            self.set_recap(**kw)
+
         def work():
             try:
                 import main
                 # set_recap takes KEYWORDS, not a dict.
-                self.set_recap(status="building", note="starting rebuild…")
-                # Pass set_recap through so each stage ("building session
+                rc(status="building", note="starting rebuild…")
+                # Pass the callback through so each stage ("building session
                 # montage…", "cutting Play of the Night…", "rendering vertical
                 # Shorts…") reaches the UI. Without this the status sat on one
                 # message for the several minutes a render takes, which is
                 # indistinguishable from being hung.
-                main.rebuild_session(cfg, session, rc=self.set_recap)
-                self.set_recap(status="ready", note="rebuild complete")
+                main.rebuild_session(cfg, session, rc=rc)
+                # rebuild_session sets the final status itself on every path
+                # ('ready' / 'error' with the failed stages). This used to set
+                # 'ready — rebuild complete' unconditionally right after, which
+                # overwrote every failure: the Archive said "Done — reloading"
+                # over a rebuild that had built nothing.
+                with self._lock:
+                    hung = self.recap.get("status") == "building"
+                if hung:             # never left without an answer
+                    rc(status="error", note="rebuild ended without reporting a "
+                                            "result — see the session log")
             except Exception as e:
                 print(f"  [rebuild] failed: {e}")
-                self.set_recap(status="error", note=f"rebuild failed: {e}")
+                rc(status="error", note=f"rebuild failed: {e}")
             finally:
                 with self._lock:
                     self._rebuilding = False
 
         threading.Thread(target=work, daemon=True).start()
-        return {"ok": True, "started": session}
+        # the web route passes a full path; report just the session's name
+        return {"ok": True,
+                "started": os.path.basename(str(session).rstrip("/\\")) or session}
 
     def add_replay(self, label, path):
         with self._lock:
@@ -454,7 +494,15 @@ class LiveState:
 
     def set_recap(self, **kw):
         """End-of-session build status, so the dashboard can show 'building…' /
-        'ready' and the WITNESS Report instead of relying on a browser popup."""
+        'ready' / 'error' and the WITNESS Report instead of relying on a browser
+        popup.
+
+        `kind` says who wrote it — 'recap' (the end-of-session build or the
+        launch resume: the default), 'rebuild' or 'export' — so the Live page
+        can word a failure correctly. Every write sets it, so an old export's
+        tag can't stick to the next night's recap. Status values are unchanged:
+        the Archive and Clips pollers stop on 'ready' / 'error'."""
+        kw.setdefault("kind", "recap")
         with self._lock:
             self.recap.update(kw)
 
@@ -464,6 +512,9 @@ class LiveState:
             if running:
                 self.started = time.strftime("%H:%M")
                 self._mono = time.monotonic()
+                # it started: the last failure is history, and so is "starting"
+                self.last_error = ""
+                self.starting = False
 
     def record(self, count, tag, text):
         with self._lock:
@@ -513,6 +564,10 @@ class LiveState:
                     "update": self.update_msg, "version": self.version,
                     "update_changed": getattr(self, "update_changed", False),
                     "updating": getattr(self, "_updating", False),
+                    # getattr: the launcher assigns these from outside
+                    "last_error": str(getattr(self, "last_error", "") or ""),
+                    "starting": bool(getattr(self, "starting", False)),
+                    "lan_urls": list(getattr(self, "lan_urls", None) or []),
                     "detect": dict(self.detect),
                     "recap": dict(self.recap),
                     "heat": dict(self.heat),
@@ -552,6 +607,54 @@ def _record_dir(state) -> str:
         return main.cached_record_dir() or ""
     except Exception:
         return ""
+
+
+_SESSIONS_DIR = "Marathon Sessions"
+
+
+def _web_session_dir(state, which) -> str:
+    """The session folder a DASHBOARD request names, or '' if it names anything
+    else.
+
+    main._resolve_session_dir is built for the --rebuild CLI and accepts any
+    existing folder, so '/Users/me/Pictures' or '../..' in a request used to be
+    tidied (images moved into exfil/, videos into clips/), rendered into and
+    thumbnailed. A web request may only name a session: 'latest', or one bare
+    folder name directly inside a 'Marathon Sessions' folder.
+
+    Finding the root is left to main._resolve_session_dir (cached record dir,
+    then asking OBS) so the Archive and the clip viewer keep working right after
+    launch; this only adds the name check and the containment check."""
+    which = str(which or "").strip()
+    try:
+        import main
+    except Exception:
+        return ""
+    cfg = getattr(state, "_cfg", None) or {}
+    nc = os.path.normcase
+    if which in ("", "latest"):
+        sdir = main._resolve_session_dir(cfg, "latest")
+        return os.path.abspath(sdir) if sdir and os.path.isdir(sdir) else ""
+    if not _SAFE_PART.match(which) or which in (".", ".."):
+        return ""
+    sdir = main._resolve_session_dir(cfg, which)
+    # Relative = it came from the CLI's "existing folder" branch, i.e. a folder
+    # in the current directory that merely shares the name. A real session is
+    # always <record dir>/Marathon Sessions/<name>, an absolute path.
+    if not sdir or not os.path.isabs(sdir) or not os.path.isdir(sdir):
+        return ""
+    parent = os.path.dirname(sdir)
+    if nc(os.path.basename(parent)) != nc(_SESSIONS_DIR):
+        return ""
+    # Must sit DIRECTLY in that folder once links are resolved, under the very
+    # name asked for. Comparing basenames (not full paths) keeps a mapped drive
+    # that realpath() turns into a UNC path working; '...' or 'x.' (which
+    # Windows collapses onto another folder) fail the name match.
+    real = os.path.realpath(sdir)
+    if (nc(os.path.dirname(real)) != nc(os.path.realpath(parent))
+            or nc(os.path.basename(real)) != nc(which)):
+        return ""
+    return sdir
 
 
 def _api_info(state) -> dict:
@@ -603,8 +706,7 @@ def _api_session(state, session: str) -> dict:
     data["report"] = ""
     if match and match.get("has_report"):
         try:
-            import main
-            sdir = main._resolve_session_dir(state._cfg or {}, sid)
+            sdir = _web_session_dir(state, sid)
             with open(os.path.join(sdir, "witness_report.txt"), encoding="utf-8") as f:
                 data["report"] = f.read()
         except Exception:
@@ -621,11 +723,12 @@ def _clip_data(state, session: str) -> dict:
     markers on the scrub bar."""
     try:
         import clip_index
-        import main
         import montage
         cfg = state._cfg or {}
-        sdir = main._resolve_session_dir(cfg, session or "latest")
+        sdir = _web_session_dir(state, session or "latest")
         if not sdir:
+            if str(session or "latest") != "latest":
+                return {"error": "couldn't find that session folder", "clips": []}
             return {"error": "no session folder found — press START once so the "
                              "app learns your OBS folder", "clips": []}
         base = os.path.dirname(os.path.abspath(__file__))
@@ -642,10 +745,11 @@ def _clip_thumb(state, session: str, rel: str) -> str:
     Returns '' for anything that isn't a real clip inside the session."""
     try:
         import export_reel
-        import main
         import montage
         cfg = state._cfg or {}
-        sdir = main._resolve_session_dir(cfg, session or "latest")
+        # The session is checked too, not just rel: even a GET writes a .thumbs
+        # folder into whatever directory it resolves to.
+        sdir = _web_session_dir(state, session or "latest")
         if not sdir or not rel or ".." in rel.replace("\\", "/").split("/"):
             return ""
         root = os.path.realpath(sdir)
@@ -842,17 +946,29 @@ def _archive_page(base_dir: str, record_dir: str) -> str:
                        if s.get("report") else "")
         # A session with clips but no reels had a failed recap. Say so, and offer
         # the fix right here — the clips are all that matter and they survived.
-        has_reels = any(_media_kind(r) in ("session_reel", "reel", "potn")
-                        for _l, r in s["media"])
+        # ANY rendered output counts (session reel, match reels, Shorts, the
+        # montage); replays and the spoken report don't. Counting only some
+        # kinds warned "the recap failed" at a night whose montage and Shorts
+        # built fine because match reels were switched off.
+        has_reels = any(rel == "session_reel.mp4"
+                        or rel.startswith(("reels/", "shorts/", "highlights"))
+                        for _l, rel in s["media"])
         warn = ("" if has_reels or not s["clips"] else
                 '<div class="rc none" style="color:var(--warn,#f5a623)">'
                 'This session has clips but no reels — the recap failed. '
                 'Rebuild it below.</div>')
+        # The clip viewer could only ever open the latest session; nothing led
+        # to an older one. Each session with clips now links to its own.
+        pick = ("" if not s["clips"] else
+                f'<div class="mrow"><span class="play">&#9986;</span>'
+                f'<a class="ml" href="/clips?s={_uparse.quote(s["id"])}">'
+                f'Pick clips / cut a reel</a><span class="meta">choose, trim '
+                f'and export your own reel from this session</span></div>')
         blocks.append(f"""<details><summary><b>{_esc(date)}</b>
           <span class="meta">{s['clips']} clip{'s' if s['clips'] != 1 else ''}
           &middot; {_fmt_size(s['size'])}</span></summary>
           <h4>Matches</h4>{rec_html}{warn}{report_html}
-          <h4>Watch / share</h4>{rows}
+          <h4>Watch / share</h4>{rows}{pick}
           <div class="mrow"><button class="mini rb"
             onclick="rebuild('{_esc(s['id'])}',this)">Rebuild reels</button>
             <span class="meta">re-renders the montage, reels and Shorts from the
@@ -869,9 +985,40 @@ def _archive_page(base_dir: str, record_dir: str) -> str:
     return ARCHIVE_PAGE.replace("%%BODY%%", body)
 
 
-def _stats_page(base_dir: str) -> str:
+def _gamertag(cfg):
+    """The gamertag the recorder will match, by the key-absent rule, or None
+    when no config is bound (unknown: say nothing about it).
+
+    A config with NO gamertag key predates the setting and keeps
+    encounters.DEFAULT_GAMERTAG; an explicit blank (or YAML's bare
+    `gamertag:`) means no tag. `cfg.get("gamertag") or DEFAULT` would turn a
+    deliberate blank back into the default. encounters.resolve_gamertag
+    (config-and-identity) is the one rule; the fallback here is the same rule
+    for a checkout that doesn't have it yet."""
+    if cfg is None:
+        return None
+    try:
+        import encounters
+    except Exception:
+        encounters = None
+    resolve = getattr(encounters, "resolve_gamertag", None)
+    if resolve is not None:
+        try:
+            return str(resolve(cfg) or "").strip()
+        except Exception:
+            pass
+    if "gamertag" not in cfg:
+        return str(getattr(encounters, "DEFAULT_GAMERTAG", "") or "").strip()
+    return str(cfg.get("gamertag") or "").strip()
+
+
+def _stats_page(base_dir: str, cfg=None) -> str:
     """Career + economy + squad leaderboard, built from stats/squad_stats.csv
-    (with match_stats.csv as the fallback for your own older rows)."""
+    (with match_stats.csv as the fallback for your own older rows).
+
+    cfg is the bound live config: with a blank gamertag the Menace Report can
+    never fill, so its empty state says how to turn it on rather than
+    promising names "as downs happen"."""
     import csv as _csv
 
     rows = []
@@ -961,6 +1108,9 @@ def _stats_page(base_dir: str) -> str:
         if killers:
             menace_html += ('<h3>Downed you</h3>'
                             + names_table(killers, "nem", "NEMESIS", "Last time"))
+    elif _gamertag(cfg) == "":
+        menace_html = ('<h3>Menace report</h3><p class="empty2">Set gamertag in '
+                       'config.yaml (your exact in-game name) to turn this on.</p>')
     else:
         menace_html = ('<h3>Menace report</h3><p class="empty2">No names yet — '
                        'gamertags are read off the kill feed as downs happen.</p>')
@@ -1004,6 +1154,154 @@ def local_ip():
         return "127.0.0.1"
 
 
+_LAN_NETS = [ipaddress.ip_network(n) for n in
+             ("192.168.0.0/16", "10.0.0.0/8", "172.16.0.0/12")]
+
+
+def lan_ips(primary=None, others=None) -> list:
+    """IPv4 addresses a phone on the same Wi-Fi could open, best first.
+
+    local_ip() (the adapter the default route uses) leads. Then any other
+    private address of this PC, 192.168.x first: with a VPN up, local_ip() is
+    the VPN adapter, and the Wi-Fi address is one of the others. Hyper-V, WSL
+    and Docker adapters also sit in 172.16/12 and are unreachable from a phone,
+    which is why they come after the primary rather than replacing it.
+    Loopback (no network: local_ip() falls back to 127.0.0.1) and link-local
+    (169.254, an adapter that never got an address) are dropped; the others
+    are limited to the private ranges.
+
+    primary/others are for tests; normally they're looked up. gethostbyname_ex
+    can be slow on Windows with broken name resolution, so call this once, off
+    the request path (start_web does it on a thread)."""
+    def v4(ip):
+        try:
+            a = ipaddress.ip_address(ip)
+        except ValueError:
+            return None
+        return a if a.version == 4 else None
+
+    def lan(ip):
+        a = v4(ip)
+        return bool(a) and any(a in n for n in _LAN_NETS)
+
+    first = local_ip() if primary is None else primary
+    if others is None:
+        try:
+            others = socket.gethostbyname_ex(socket.gethostname())[2]
+        except Exception:
+            others = []
+    a = v4(first)
+    usable = a is not None and not (a.is_loopback or a.is_link_local
+                                    or a.is_unspecified)
+    out = [first] if usable else []
+    rest = [ip for ip in others if lan(ip) and ip not in out]
+    rest = list(dict.fromkeys(rest))
+    rest.sort(key=lambda ip: 0 if ip.startswith("192.168.") else 1)
+    return out + rest
+
+
+def _split_host_port(value: str):
+    """'name:port' as sent in a Host header -> (name, port-or-None).
+    Handles '[v6]:port' and a bare unbracketed v6 literal."""
+    v = (value or "").strip()
+    if v.startswith("["):
+        end = v.find("]")
+        if end < 0:
+            return v, None
+        rest = v[end + 1:]
+        return v[1:end], (rest[1:] if rest.startswith(":") and rest[1:] else None)
+    if v.count(":") == 1:
+        name, port = v.split(":", 1)
+        return name, (port or None)
+    return v, None
+
+
+def _own_hostnames() -> set:
+    try:
+        hn = socket.gethostname().strip().lower().rstrip(".")
+    except Exception:
+        hn = ""
+    return {hn, hn.split(".")[0]} - {""}
+
+
+def _host_allowed(name: str) -> bool:
+    """Is this Host header name one that really means THIS PC?
+
+    The guard against DNS rebinding: a hostile page can make its OWN domain
+    resolve to 127.0.0.1 or the PC's LAN IP, and the browser then treats the
+    dashboard as same-origin with that page. The one thing the attacker can't
+    change is the Host header — it carries their domain. So answer only to:
+      - IP literals (v4/v6). The iPad and the iOS app connect by IP. NOT pinned
+        to local_ip(): VPN, WSL and Hyper-V adapters make that a different
+        address than the one the iPad uses, and the LAN IP can change while
+        the app runs.
+      - localhost, and the PC's own hostname.
+      - any *.local name (mDNS — answered only on the local link, never by a
+        public DNS server an attacker controls).
+      - any single-label name ('GAMING-PC', NetBIOS/LLMNR). Like .local, those
+        resolve only on the local network; every name an attacker can publish
+        has a dot in it.
+    """
+    h = (name or "").strip().lower().rstrip(".")
+    if not h:
+        return True                 # no Host at all: not a browser
+    try:
+        ipaddress.ip_address(_uparse.unquote(h).split("%", 1)[0])
+        return True
+    except ValueError:
+        pass
+    if h == "localhost" or h.endswith(".local") or "." not in h:
+        return True
+    return h in _own_hostnames()
+
+
+def _origin_matches(source: str, host_header: str) -> bool:
+    """Does an Origin (or Referer) header name the same host:port as Host?
+    Browsers attach Origin to every cross-site POST, including no-cors ones,
+    so a mismatch means another site's page is driving the dashboard."""
+    try:
+        u = _uparse.urlsplit((source or "").strip())
+        oport = u.port
+    except ValueError:
+        return False
+    if u.scheme not in ("http", "https") or not u.hostname:
+        return False               # 'null', file:, a garbled value
+    if oport is None:
+        oport = 443 if u.scheme == "https" else 80
+    name, port = _split_host_port(host_header)
+    try:
+        hport = int(port) if port else 80
+    except ValueError:
+        return False
+    return (u.hostname.lower().rstrip(".") == name.lower().rstrip(".")
+            and oport == hport)
+
+
+_refusals_logged = set()
+
+
+def request_refusal(headers, post: bool) -> str:
+    """'' when a request may proceed, else a short reason for the 403.
+
+    Host must mean this PC (see _host_allowed). On a POST, an Origin header —
+    or a Referer when there's no Origin — must name the same host:port as Host.
+    A request with neither is allowed: the iOS app and plain navigations send
+    none, and every browser attaches Origin to a cross-site POST.
+
+    Deliberately NOT required: a JSON Content-Type (five dashboard buttons send
+    none, and they'd silently stop working) or a login token (owner's call:
+    the iPad bookmark keeps working; LAN access is disclosed in SECURITY.md)."""
+    host = headers.get("Host") or ""
+    name, _port = _split_host_port(host)
+    if not _host_allowed(name):
+        return f"host {name[:60]!r} is not this PC"
+    if post:
+        src = headers.get("Origin") or headers.get("Referer") or ""
+        if src and not _origin_matches(src, host):
+            return f"request came from another site ({src[:60]!r})"
+    return ""
+
+
 class _QuietServer(ThreadingHTTPServer):
     """Don't print a traceback when a client simply hangs up.
 
@@ -1016,6 +1314,14 @@ class _QuietServer(ThreadingHTTPServer):
     handlers didn't catch either; it and BrokenPipe/ConnectionReset are all
     ConnectionError. Anything else is a real bug and still prints."""
 
+    # HTTPServer turns SO_REUSEADDR on. On Linux/macOS that only lets a restart
+    # rebind past TIME_WAIT. On WINDOWS it lets a second process bind the very
+    # same port while the first still listens — so a second WITNESS came up
+    # "fine" on :8000, ran a second OCR loop on the GPU and saved duplicate
+    # replays, with the two servers splitting the iPad's requests. Off on
+    # Windows, a second copy fails to bind instead (the launcher reports it).
+    allow_reuse_address = (os.name != "nt")
+
     def handle_error(self, request, client_address):
         import sys
         if isinstance(sys.exc_info()[1], ConnectionError):
@@ -1026,11 +1332,8 @@ class _QuietServer(ThreadingHTTPServer):
 def start_web(state, port, base_dir, host="0.0.0.0"):
     imgs = {"/skull.png": "witness_logo.png",
             "/wordmark.png": "witness_wordmark.png"}
-    try:                          # show the current build in the corner
-        with open(os.path.join(base_dir, ".app_version"), encoding="utf-8") as f:
-            state.version = f.read().strip()[:7]
-    except Exception:
-        state.version = "dev"
+    state.version = build_label(base_dir)   # bottom-right corner + /api/info
+    state.build_sha = read_build_sha(base_dir)   # what main.py should advertise
 
     class Handler(BaseHTTPRequestHandler):
         # HTTP/1.1 with keep-alive: iOS Safari's video player streams via
@@ -1042,6 +1345,20 @@ def start_web(state, port, base_dir, host="0.0.0.0"):
 
         def log_message(self, *a):
             pass  # quiet
+
+        def _refused(self, post=False) -> bool:
+            """Answer 403 and return True when request_refusal() says no."""
+            why = request_refusal(self.headers, post)
+            if not why:
+                return False
+            if why not in _refusals_logged and len(_refusals_logged) < 20:
+                _refusals_logged.add(why)      # one line per cause, not per poll
+                print(f"  [web] refused a request: {why}")
+            self.send_error(403, "Forbidden",
+                            "WITNESS refused this request: " + why + ". Open the "
+                            "dashboard by the PC's IP address (as shown in the "
+                            "WITNESS window), localhost, or its .local name.")
+            return True
 
         def _send(self, body, ctype, cache=True):
             self.send_response(200)
@@ -1095,6 +1412,8 @@ def start_web(state, port, base_dir, host="0.0.0.0"):
                     remaining -= len(chunk)
 
         def do_GET(self):
+            if self._refused():
+                return
             path = self.path.split("?")[0]
             try:
                 if path == "/status":
@@ -1107,7 +1426,7 @@ def start_web(state, port, base_dir, host="0.0.0.0"):
                         "modes": MODES,
                     }).encode(), "application/json", cache=False)
                 elif path == "/stats":
-                    self._send(apply_theme(_stats_page(base_dir),
+                    self._send(apply_theme(_stats_page(base_dir, state._cfg),
                                            state._cfg).encode("utf-8"),
                                "text/html; charset=utf-8", cache=False)
                 elif path == "/api/play":
@@ -1245,13 +1564,26 @@ def start_web(state, port, base_dir, host="0.0.0.0"):
             except ValueError:
                 n = 0
             self._body = self.rfile.read(n) if n > 0 else b""
+            # After the body is drained (so a refusal can't desync keep-alive),
+            # before ANY route acts: settings, start/stop, update, rebuild.
+            if self._refused(post=True):
+                return
             try:
-                if path == "/clip":
-                    state.request_clip()
-                    self._send(b'{"ok":true}', "application/json", cache=False)
-                elif path == "/addkill":
-                    state.request_kill()
-                    self._send(b'{"ok":true}', "application/json", cache=False)
+                if path in ("/clip", "/addkill"):
+                    # Only a running session consumes these; LiveState.reset()
+                    # throws an idle press away at the next START. So say so
+                    # (200 + ok:false: the iOS app's post() treats any non-2xx
+                    # as "the PC didn't respond"). The PC's global hotkeys
+                    # don't come through here and are unchanged.
+                    if not state.running:
+                        self._send(b'{"ok":false,"error":"not running"}',
+                                   "application/json", cache=False)
+                    else:
+                        if path == "/clip":
+                            state.request_clip()
+                        else:
+                            state.request_kill()
+                        self._send(b'{"ok":true}', "application/json", cache=False)
                 elif path == "/benchmark":
                     try:
                         import benchmark
@@ -1265,11 +1597,20 @@ def start_web(state, port, base_dir, host="0.0.0.0"):
                         body = json.loads(self._body or b"{}")
                     except Exception:
                         body = {}
-                    self._send(json.dumps(state.request_export(
-                        base_dir, str(body.get("session") or "latest"),
-                        body.get("clips") or [],
-                        body.get("opts") or {})).encode(),
-                        "application/json", cache=False)
+                    if not isinstance(body, dict):
+                        body = {}
+                    # Validate the session HERE: an export writes <dir>/reels/,
+                    # so a request must not be able to name any other folder.
+                    sdir = _web_session_dir(state, str(body.get("session") or "latest"))
+                    if not sdir:
+                        result = {"ok": False,
+                                  "error": "couldn't find that session folder"}
+                    else:
+                        result = state.request_export(
+                            base_dir, sdir, body.get("clips") or [],
+                            body.get("opts") or {})
+                    self._send(json.dumps(result).encode(),
+                               "application/json", cache=False)
                 elif path == "/update":
                     self._send(json.dumps(state.request_update(base_dir)).encode(),
                                "application/json", cache=False)
@@ -1281,8 +1622,17 @@ def start_web(state, port, base_dir, host="0.0.0.0"):
                         body = json.loads(self._body or b"{}")
                     except Exception:
                         body = {}
-                    sess = str(body.get("session") or "latest")
-                    result = state.request_rebuild(sess)
+                    if not isinstance(body, dict):
+                        body = {}
+                    # A rebuild TIDIES the folder (moves every image into exfil/
+                    # and every video into clips/), so only a real session may
+                    # be named. The validated absolute path is what's passed on.
+                    sdir = _web_session_dir(state, str(body.get("session") or "latest"))
+                    if not sdir:
+                        result = {"ok": False,
+                                  "error": "couldn't find that session folder"}
+                    else:
+                        result = state.request_rebuild(sdir)
                     self._send(json.dumps(result).encode(),
                                "application/json", cache=False)
                 elif path == "/start":
@@ -1307,7 +1657,58 @@ def start_web(state, port, base_dir, host="0.0.0.0"):
 
     srv = _QuietServer((host, int(port)), Handler)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
+    if host in ("0.0.0.0", "", "::"):
+        # The phone/iPad address, worked out ONCE and off the startup path
+        # (snapshot() is polled every second by every client, and the lookup
+        # can stall on Windows). The window app shows it; before, it existed
+        # only as a print into the session log. Bound to 127.0.0.1
+        # (web_lan: false) there is no phone address, so none is shown.
+        threading.Thread(target=_fill_lan_urls,
+                         args=(state, srv.server_address[1]), daemon=True).start()
     return srv
+
+
+def build_label(base_dir: str) -> str:
+    """'0.1.0 (1a2b3c4)': the release number from version.py plus the build sha
+    the updater writes to .app_version.
+
+    Always the sha next to the number, never instead of it: the updater ships
+    every commit on main, so a hand-kept number goes stale between releases.
+    Without a sha (a ZIP install that hasn't updated yet) it's '0.1.0 (dev)'.
+    With neither, '' and the page hides the line. It used to say just 'dev' on
+    every such install, which read like debug output in bug reports."""
+    try:
+        from version import VERSION
+        ver = str(VERSION or "").strip()
+    except Exception:            # version.py not there yet, or broken
+        ver = ""
+    sha = read_build_sha(base_dir)
+    if sha:
+        return f"{ver} ({sha})" if ver else sha
+    return f"{ver} (dev)" if ver else ""
+
+
+def read_build_sha(base_dir: str) -> str:
+    """The 7-character sha the updater writes to .app_version, or '' before
+    the first update.
+
+    start_web publishes it as state.build_sha for the Bonjour TXT 'v' that the
+    iPad's PC picker shows. discovery.advertise keeps only 12 characters there,
+    and the full label ('0.1.0 (1a2b3c4)') is 15, so advertising state.version
+    showed '0.1.0 (1a2b3'. main.py should pass
+    getattr(state, "build_sha", "") or state.version."""
+    try:
+        with open(os.path.join(base_dir, ".app_version"), encoding="utf-8") as f:
+            return f.read().strip()[:7]
+    except Exception:
+        return ""
+
+
+def _fill_lan_urls(state, port):
+    try:
+        state.lan_urls = [f"{ip}:{int(port)}" for ip in lan_ips()]
+    except Exception:
+        state.lan_urls = []
 
 
 ARCHIVE_PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
@@ -1370,7 +1771,7 @@ ARCHIVE_PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
   .rb { margin-right:10px; }
 </style></head><body><div class="wrap">
   <div class="top"><img src="/skull.png" alt=""><span class="wm">WITNESS</span>
-    <nav class="nav"><a href="/">Live</a><a href="/clips">Clips</a><a href="/archive">Reels</a>
+    <nav class="nav"><a href="/">Live</a><a href="/clips">Clips</a>
       <a href="/stats">Stats</a><a class="on" href="/archive">Archive</a>
       <a href="/archive" title="Refresh — new reels finish rendering after you stop">&#8635; Refresh</a></nav></div>
   <div class="kick">Archive</div>
@@ -1475,7 +1876,7 @@ STATS_PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
     border:1px solid var(--sborder); border-radius:12px; padding:20px; }
 </style></head><body><div class="wrap">
   <div class="top"><img src="/skull.png" alt=""><span class="wm">WITNESS</span>
-    <nav class="nav"><a href="/">Live</a><a href="/clips">Clips</a><a href="/archive">Reels</a>
+    <nav class="nav"><a href="/">Live</a><a href="/clips">Clips</a>
       <a class="on" href="/stats">Stats</a><a href="/archive">Archive</a></nav></div>
   <div class="kick">Career</div>
   <h2>Career stats</h2>
@@ -1529,11 +1930,20 @@ PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
   .rc-dot { width:11px; height:11px; border-radius:50%; background:var(--accent); flex:none; }
   .rc-dot.pulse { animation:rcpulse 1s ease-in-out infinite; }
   .rc-dot.done { background:var(--green); box-shadow:0 0 10px var(--green); animation:none; }
+  .recap.err { border-color:var(--danger); background:linear-gradient(180deg,rgba(255,77,61,.12),var(--surface)); }
+  .rc-dot.err { background:var(--danger); box-shadow:0 0 10px var(--danger); animation:none; }
   @keyframes rcpulse { 0%,100%{ opacity:1; } 50%{ opacity:.3; } }
   .rc-note { color:var(--sec); font:500 13px var(--ui); margin-top:6px; }
   .rc-report { margin:12px 0 4px; padding:14px 16px; background:#0e0b16;
     border:1px solid rgba(145,132,217,.28); border-radius:10px; overflow-x:auto;
     font:500 12px/1.5 var(--mono); color:var(--sec); white-space:pre-wrap; }
+  .phoneurl { margin:-14px 0 20px; font:500 12.5px var(--ui); color:var(--muted); }
+  .phoneurl b, .help b.addr { color:var(--accent-light); font:600 13px var(--mono);
+    user-select:text; -webkit-user-select:text; }
+  .phoneurl .also { color:var(--dim); font:500 11.5px var(--mono); user-select:text; }
+  .errbox { margin-bottom:22px; border:1px solid var(--danger); border-radius:14px;
+    padding:16px 18px; background:linear-gradient(180deg,rgba(255,77,61,.12),var(--surface)); }
+  .errbox .rc-note { color:var(--text); white-space:pre-wrap; }
   .rc-btn { display:inline-block; margin-top:10px; background:var(--accent); color:#12121a;
     text-decoration:none; border-radius:9px; padding:10px 18px; font:700 12px var(--ui);
     letter-spacing:.04em; }
@@ -1551,7 +1961,7 @@ PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
     box-shadow:0 0 10px var(--danger); }
   .nav { margin-left:14px; display:flex; gap:4px; flex-wrap:wrap; }
   .nav a { font:500 12.5px var(--ui); color:var(--muted); padding:6px 10px;
-    border-radius:7px; cursor:pointer; white-space:nowrap; }
+    border-radius:7px; cursor:pointer; white-space:nowrap; text-decoration:none; }
   .nav a:hover { color:var(--sec); }
   .nav a.on { color:var(--text); background:var(--surface); }
   .runbtn { margin-left:auto; background:transparent; border:1px solid rgba(255,75,66,.5);
@@ -1611,6 +2021,8 @@ PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
   .btn.ghost { background:transparent; color:var(--accent-light);
     border:1px solid var(--accent-deep); }
   .btn.fired { background:var(--green); color:#0b0f12; border-color:var(--green); }
+  .btn:disabled { opacity:.45; cursor:default; transform:none; filter:none; }
+  .btn.refused { color:var(--danger-br); border:1px solid var(--danger); background:transparent; }
 
   /* match timeline */
   .tl { margin-top:26px; }
@@ -1735,16 +2147,21 @@ PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
     <span class="wm">WITNESS</span>
     <span class="livepill" id="livepill"><i></i>LIVE</span>
     <nav class="nav">
-      <a class="on">Live</a>
-      <a onclick="location.href='/clips'">Clips</a>
-      <a onclick="location.href='/archive'">Reels</a>
-      <a onclick="location.href='/stats'">Stats</a>
-      <a onclick="location.href='/archive'">Archive</a>
+      <a class="on" href="/">Live</a>
+      <a href="/clips">Clips</a>
+      <a href="/stats">Stats</a>
+      <a href="/archive">Archive</a>
       <a onclick="openSettings()">Settings</a>
       <a onclick="openHelp()">How to use</a>
     </nav>
     <button class="runbtn" id="runbtn" onclick="toggleRun()">START</button>
   </header>
+  <div class="phoneurl" id="phoneurl" style="display:none"></div>
+
+  <section class="errbox" id="errbox" style="display:none">
+    <div class="rc-hd"><span class="rc-dot err"></span><span>START didn&rsquo;t work</span></div>
+    <div class="rc-note" id="errnote"></div>
+  </section>
 
   <section class="recap" id="recap" style="display:none">
     <div class="rc-hd"><span class="rc-dot" id="rcdot"></span><span id="rctitle">Building your recap&hellip;</span></div>
@@ -1832,6 +2249,9 @@ PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
 <div class="modal" id="helpmodal">
   <div class="settings help">
     <h2>How to use</h2>
+    <h3>On your phone or iPad</h3>
+    <p>Open <b class="addr" id="helpurl">this PC&rsquo;s IP address, port 8000</b> in Safari or Chrome on a phone or iPad on the same Wi-Fi. The WITNESS window on the PC shows the address under the header.</p>
+    <p class="m">Nothing loads? The first time WITNESS runs, Windows asks whether Python may use the network &mdash; allow <b>Private networks</b>. Set your Wi-Fi to Private too (Settings &rarr; Network &amp; internet &rarr; Wi-Fi &rarr; your network &rarr; Network profile type &rarr; Private). Turn off any VPN on the PC, or use the 192.168 address.</p>
     <h3>Kill counter + feed</h3>
     <p>Kills are detected automatically from the game screen. The big number and the feed update within a second or two of each kill.</p>
     <h3>Save clip</h3>
@@ -1869,6 +2289,7 @@ PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
 <script>
   async function tick(){
     try{
+      var asked = Date.now();
       var r = await fetch('/status',{cache:'no-store'});
       var d = await r.json();
       if (d.count > lastCount && lastCount >= 0){ ding(); flashCount(); }
@@ -1896,7 +2317,7 @@ PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
       document.getElementById('statustext').textContent = d.running ? 'WATCHING' : 'READY';
       document.getElementById('sub').textContent =
         d.running && d.elapsed ? 'SESSION  ' + fmtElapsed(d.elapsed)
-        : (d.running ? 'STARTING\\u2026' : 'Press START to begin watching');
+        : (d.running || d.starting ? 'STARTING\\u2026' : 'Press START to begin watching');
       if (d.update){
         var m = document.getElementById('updmsg');
         m.textContent = 'Updater: ' + d.update;
@@ -1911,6 +2332,13 @@ PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
       var ub = document.getElementById('upd');
       if (ub){ ub.disabled = !!d.updating;
                ub.textContent = d.updating ? 'Checking…' : 'Check for update'; }
+      // Save clip / +1 Kill do nothing without a session (the request is
+      // dropped at the next START), so they're off until one is running.
+      ['clip', 'addk'].forEach(function(id){
+        var b = document.getElementById(id);
+        b.disabled = !d.running;
+        b.title = d.running ? '' : 'Press START first';
+      });
       if (d.version){ document.getElementById('ver').textContent = 'WITNESS \\u00b7 ' + d.version; }
       if (d.running && d.detect && typeof d.detect.fps === 'number'){
         var v = d.detect;
@@ -1922,30 +2350,87 @@ PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
           (v.vram_mb ? (v.vram_mb/1024).toFixed(1)+' GB VRAM' : (v.device==='CPU'?'CPU':'')) +
           ' \\u00b7 live';
       }
-      // End-of-session recap status — only when NOT running (a fresh START hides it)
+      // End-of-session recap / rebuild / export status — only when NOT running
+      // (a fresh START hides it). 'error' has its own red box: a failed build
+      // used to vanish (only building/ready were drawn), and 'ready' always
+      // said "Everything built", even over a night that built nothing.
       var rc = d.recap || {};
       var rcbox = document.getElementById('recap');
-      if (!d.running && (rc.status === 'building' || rc.status === 'ready')){
+      var rck = RC_TITLES[rc.kind] ? rc.kind : 'recap';
+      if (!d.running && (rc.status === 'building' || rc.status === 'ready'
+                         || rc.status === 'error')){
         rcbox.style.display = 'block';
-        var built = rc.status === 'ready';
-        rcbox.className = 'recap' + (built ? ' done' : '');
-        document.getElementById('rcdot').className = 'rc-dot ' + (built ? 'done' : 'pulse');
+        var built = rc.status === 'ready', failed = rc.status === 'error';
+        rcbox.className = 'recap' + (built ? ' done' : (failed ? ' err' : ''));
+        document.getElementById('rcdot').className =
+          'rc-dot ' + (built ? 'done' : (failed ? 'err' : 'pulse'));
         document.getElementById('rctitle').textContent =
-          built ? 'Recap ready' : 'Building your recap\\u2026';
-        document.getElementById('rcnote').textContent = built
-          ? 'Everything built \\u2014 watch your reels in the Archive. Safe to close.'
-          : ((rc.note || 'working\\u2026') + '   \\u2014   keep WITNESS open until this finishes');
+          RC_TITLES[rck][built ? 1 : (failed ? 2 : 0)];
+        var note;
+        if (failed){
+          note = (rc.note || 'something went wrong') + (rck === 'export'
+            ? ' \\u2014 check the clips you picked and export again'
+            : ' \\u2014 open the Archive and press Rebuild reels after fixing it');
+        } else if (built){
+          note = rc.note || 'Everything built \\u2014 watch your reels in the Archive. Safe to close.';
+        } else {
+          note = (rc.note || 'working\\u2026') + '   \\u2014   keep WITNESS open until this finishes';
+        }
+        document.getElementById('rcnote').textContent = note;
         var rep = document.getElementById('rcreport');
-        if (rc.report){ rep.textContent = rc.report; rep.style.display = 'block'; }
+        // the WITNESS Report belongs to the night's recap, not to an export
+        if (rc.report && rck === 'recap'){ rep.textContent = rc.report; rep.style.display = 'block'; }
         else { rep.style.display = 'none'; }
-        document.getElementById('rcarchive').style.display = built ? 'inline-block' : 'none';
+        document.getElementById('rcarchive').style.display =
+          (built || failed) ? 'inline-block' : 'none';
       } else { rcbox.style.display = 'none'; }
+      // The phone/iPad address, on the PC only: the phone already knows it,
+      // and the header there is laid out for the iPad. No scheme in the data;
+      // this page's own (http:) is the right one.
+      var lan = (d.lan_urls || []).map(function(a){ return location.protocol + '//' + a; });
+      var pu = document.getElementById('phoneurl');
+      if (onThePC() && lan.length){
+        var lanSig = lan.join(' ');
+        if (pu.dataset.sig !== lanSig){       // rebuild only on change
+          pu.dataset.sig = lanSig;
+          pu.textContent = 'On your phone/iPad (same Wi-Fi): ';
+          var addr = document.createElement('b');
+          addr.textContent = lan[0];
+          pu.appendChild(addr);
+          if (lan.length > 1){
+            var also = document.createElement('span');
+            also.className = 'also';
+            also.textContent = '   \\u00b7  or ' + lan.slice(1).join(', ');
+            pu.appendChild(also);
+          }
+        }
+        pu.style.display = 'block';
+      } else { pu.style.display = 'none'; }
+      if (lan.length){ document.getElementById('helpurl').textContent = lan.join('  or  '); }
+      // A START that failed says why (the launcher sets last_error). Shown only
+      // while idle, so it can never cover the kill feed of a running session.
+      var eb = document.getElementById('errbox');
+      if (d.last_error && !d.running && !d.starting){
+        document.getElementById('errnote').textContent = d.last_error;
+        eb.style.display = 'block';
+      } else { eb.style.display = 'none'; }
+      runStarting = !!d.starting;
+      // The START we sent has failed: stop waiting for the 12 s release. Only a
+      // status asked for AFTER the press returned counts, so an old error
+      // can't release a fresh press.
+      if (runBusy && runWant && runPostedAt && asked >= runPostedAt
+          && !d.running && !d.starting && d.last_error){ runBusy = false; }
+      if (runBusy && d.running === runWant){ runBusy = false; }
       var rb = document.getElementById('runbtn');
-      if (!runBusy){
+      if (d.starting && !d.running){
+        // still starting (OBS launch + connect can take a minute): say so on
+        // every device, including one that didn't press the button
+        rb.className = 'runbtn busy';
+        rb.textContent = 'STARTING\\u2026';
+      } else if (!runBusy){
         rb.className = 'runbtn' + (d.running ? ' on' : '');
         rb.textContent = d.running ? 'STOP' : 'START';
       }
-      if (runBusy && d.running === runWant){ runBusy = false; }
       var feed = document.getElementById('feed');
       if(!d.events.length){ feed.innerHTML = '<div class="empty">Waiting for kills...</div>'; }
       else {
@@ -1992,6 +2477,17 @@ PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
     setTimeout(tick, 1000);
   }
   var lastReels = -1, reelSig = '', repSig = '', lastCount = -1;
+  // The desktop window (pywebview injects window.pywebview, sometimes after
+  // load, so this is asked every tick) or a browser on the PC itself.
+  function onThePC(){
+    return !!window.pywebview || location.hostname === 'localhost'
+           || location.hostname === '127.0.0.1';
+  }
+  // recap box titles per writer: [building, ready, error]
+  var RC_TITLES = {
+    recap:   ['Building your recap\\u2026', 'Recap ready', 'Recap had problems'],
+    rebuild: ['Rebuilding reels\\u2026', 'Rebuild done', 'Rebuild had problems'],
+    export:  ['Exporting your reel\\u2026', 'Export ready', 'Export failed']};
   tick();
 
   // --- kill ding (WebAudio, unlocked by the first tap anywhere) ---
@@ -2131,26 +2627,42 @@ PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
     } catch(e){}
   }
 
-  var runBusy = false, runWant = false;
+  var runBusy = false, runWant = false, runPostedAt = 0, runStarting = false;
   async function toggleRun(){
-    if (runBusy) return;
     var rb = document.getElementById('runbtn');
+    if (runBusy || rb.className.indexOf('busy') !== -1) return;
     var starting = rb.textContent === 'START';
-    runWant = starting; runBusy = true;
+    runWant = starting; runBusy = true; runPostedAt = 0;
     rb.className = 'runbtn busy';
     rb.textContent = starting ? 'STARTING\\u2026' : 'STOPPING\\u2026';
     try { await fetch(starting ? '/start' : '/stop', {method:'POST'}); } catch(e){}
-    // tick() clears runBusy once d.running matches what we asked for
-    setTimeout(function(){ runBusy = false; }, 12000);  // safety release
+    runPostedAt = Date.now();
+    // tick() clears runBusy once d.running matches what we asked for, or as
+    // soon as the launcher reports that the START failed
+    setTimeout(releaseRun, 12000);  // safety release
+  }
+  // The safety release waits while the launcher says a START is still in
+  // progress: flipping back to START mid-way just invited a second press.
+  function releaseRun(){
+    if (runStarting){ setTimeout(releaseRun, 2000); return; }
+    runBusy = false;
   }
 
-  async function saveClip(){
-    var btn = document.getElementById('clip');
-    btn.textContent = 'SAVING...';
-    btn.classList.add('fired');
-    try { await fetch('/clip', {method:'POST'}); } catch(e){}
-    setTimeout(function(){ btn.textContent='SAVE CLIP'; btn.classList.remove('fired'); }, 1500);
+  // Both buttons report what the server said: they used to flash green
+  // SAVING.../COUNTED with no session running, while the request was dropped.
+  async function pressAction(id, path, okText, idleText){
+    var btn = document.getElementById(id);
+    if (btn.disabled) return;
+    var said = okText, cls = 'fired';
+    try {
+      var j = await (await fetch(path, {method:'POST'})).json();
+      if (j && j.ok === false){ said = 'NOT RUNNING'; cls = 'refused'; }
+    } catch(e){ said = 'OFFLINE'; cls = 'refused'; }
+    btn.textContent = said;
+    btn.classList.add(cls);
+    setTimeout(function(){ btn.textContent = idleText; btn.classList.remove(cls); }, 1500);
   }
+  function saveClip(){ return pressAction('clip', '/clip', 'SAVING...', 'SAVE CLIP'); }
 
   async function runBench(){
     var btn = document.getElementById('benchbtn');
@@ -2183,13 +2695,7 @@ PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
     btn.disabled = false; btn.textContent = label;
   }
 
-  async function addKill(){
-    var btn = document.getElementById('addk');
-    btn.textContent = 'COUNTED';
-    btn.classList.add('fired');
-    try { await fetch('/addkill', {method:'POST'}); } catch(e){}
-    setTimeout(function(){ btn.textContent='+1 KILL'; btn.classList.remove('fired'); }, 1500);
-  }
+  function addKill(){ return pressAction('addk', '/addkill', 'COUNTED', '+1 KILL'); }
 
   function flashCount(){
     var el = document.getElementById('count');
@@ -2457,7 +2963,10 @@ CLIPS_PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
 </div></div>
 
 <script>
-var CLIPS = [], SESSION = "latest", curr = -1;
+// ?s=<session> comes from the Archive's "Pick clips" link; no ?s= = the latest.
+// The server checks the name (only a real session folder resolves).
+var CLIPS = [], curr = -1,
+    SESSION = new URLSearchParams(location.search).get('s') || 'latest';
 
 function esc(s){ return String(s==null?"":s).replace(/&/g,"&amp;")
   .replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;"); }
