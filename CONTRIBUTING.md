@@ -15,9 +15,9 @@ python -m pytest tests/ -q
 
 `requirements-dev.txt` is what the tests need and nothing else (it skips the
 multi-GB OCR install). Two tests also want `ffmpeg` on your PATH. CI runs the
-suite on Windows and Linux for every push and pull request, and it has to pass
-before anything lands on `main`: every install updates itself from `main` on
-its next launch.
+suite on Windows and Linux for pull requests and pushes to `main`. Nothing
+enforces it, so make sure it is green on your PR before it merges: every
+install updates itself from `main` on its next launch.
 
 ## Rules that keep installs working
 
