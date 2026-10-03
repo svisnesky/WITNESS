@@ -69,7 +69,7 @@ def _structural(line):
 
 
 def _is_rem(line):
-    s = line.strip().lower()
+    s = line.strip().lower().lstrip("@")
     return s == "rem" or s.startswith("rem ")
 
 
@@ -441,16 +441,27 @@ def test_update_bat_never_rereads_itself_after_updating():
 
 def test_update_bat_survives_being_rewritten_while_it_runs():
     """The 1bd0911 Update WITNESS.bat gets overwritten by the update it runs.
-    cmd then resumes the NEW file at the OLD byte offset (217 if the old copy
-    had LF endings, 223 if CRLF; the old updater writes LF). Both must land on
-    a line start so the new flow runs cleanly instead of a half-line, and
-    before the update block, so the resumed run executes all of it."""
+    cmd then resumes the NEW file at the OLD byte offset: 217 if the old copy
+    had LF endings (written by the 1bd0911 updater), 223 if CRLF (a GitHub
+    ZIP). Which form the NEW copy has depends on the updater that writes it:
+    the 1bd0911 updater writes LF, the fixed updater (F17) writes .bat files
+    as CRLF. Merge order decides which one runs, so all four combinations
+    must resume on a line start (not "'w.' is not recognized") and before the
+    update block, so the resumed run executes all of it."""
     new_lf = _read("Update WITNESS.bat").encode("ascii")
-    for off in (217, 223):
-        assert new_lf[off - 1:off] == b"\n", off
-    assert new_lf[217:223] == b"echo.\n"
-    assert new_lf[223:].startswith(b'call "%~dp0_env.bat"\n')
-    assert new_lf.index(b"\n(\n") > 223
+    new_crlf = new_lf.replace(b"\n", b"\r\n")
+    harmless = {b"", b"echo.", b"@rem"}
+    for form, data, eol in (("LF", new_lf, b"\n"), ("CRLF", new_crlf, b"\r\n")):
+        block = data.index(eol + b"(" + eol)
+        for off in (217, 223):
+            where = f"{form} copy resumed at {off}"
+            assert data[off - len(eol):off] == eol, where
+            assert off < block, where
+            # Up to setup, nothing but blank/comment/echo. lines runs again.
+            rest = data[off:].split(eol)
+            call = rest.index(b'call "%~dp0_env.bat"')
+            assert all(ln.lower() in harmless for ln in rest[:call]), where
+            assert rest[call + 1] == b"if errorlevel 1 exit /b 1", where
 
 
 def test_calibrate_bat_describes_the_real_capture_and_passes_args():
