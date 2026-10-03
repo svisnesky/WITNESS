@@ -29,3 +29,11 @@ def test_check_voice_is_not_sold_as_a_tts_diagnosis():
     assert len(row) == 1
     assert "ElevenLabs" in row[0]
     assert "which announcer voice" not in row[0]
+
+
+def test_readme_does_not_name_a_security_md_section():
+    # The SECURITY.md headings belong to another package and were renamed
+    # ("Reporting something" -> "Reporting a vulnerability"); a quoted section
+    # name here goes stale silently. Link the file, not a heading.
+    text = _flat(_readme())
+    assert not re.search(r'"[^"]+" section of \[SECURITY\.md\]', text)

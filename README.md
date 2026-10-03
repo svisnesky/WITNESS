@@ -256,8 +256,7 @@ commands to check them yourself. The short version:
   WITNESS announces itself on your local network so the iOS app can find it.
   It never leaves your LAN.
 
-Found a security problem? See the "Reporting something" section of
-[SECURITY.md](SECURITY.md).
+Found a security problem? [SECURITY.md](SECURITY.md) says how to report it.
 
 ## Requirements
 
