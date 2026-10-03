@@ -1,0 +1,115 @@
+name: Bug report
+description: Something in WITNESS doesn't work the way it should.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. Before you start, check the "If something's off"
+        list in [QUICKSTART.md](https://github.com/svisnesky/WITNESS/blob/main/QUICKSTART.md#if-somethings-off).
+
+        **Privacy: this issue is public.** Session logs contain:
+        - other players' gamertags (`[names]` lines),
+        - your Windows username inside clip paths (`[organize] clip ->` lines),
+        - your PC's LAN address (the `Live view:` line).
+
+        Replace those with `X` before you paste or attach a log, or set
+        `track_names: false` in config.yaml before reproducing the problem.
+        `diagnose_full.png` from Diagnose Capture is a picture of your whole
+        screen: look at it before you attach it.
+
+        Security problems don't go here: see [SECURITY.md](https://github.com/svisnesky/WITNESS/blob/main/SECURITY.md).
+  - type: input
+    id: version
+    attributes:
+      label: WITNESS version
+      description: Bottom-right corner of the dashboard, or the first lines of the session log.
+      placeholder: "WITNESS · 0.1.0 (abc1234)"
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: log
+    attributes:
+      label: Session log
+      description: |
+        From `logs/session_<date>_<time>.log` in the WITNESS folder (the session where it went wrong).
+        Drag the file in, or paste the part around the problem. For slowdowns, also attach `logs/perf_<date>_<time>.csv`.
+        Redact it first (see the privacy note above).
+    validations:
+      required: true
+  - type: input
+    id: windows
+    attributes:
+      label: Windows version
+      placeholder: "Windows 11 24H2"
+    validations:
+      required: true
+  - type: input
+    id: gpu
+    attributes:
+      label: GPU
+      placeholder: "RTX 3070 8 GB"
+    validations:
+      required: true
+  - type: input
+    id: resolution
+    attributes:
+      label: Monitor resolution
+      placeholder: "2560x1440"
+    validations:
+      required: true
+  - type: input
+    id: obs
+    attributes:
+      label: OBS version
+      description: OBS → Help → About.
+      placeholder: "31.0.2"
+    validations:
+      required: true
+  - type: dropdown
+    id: display
+    attributes:
+      label: How does Marathon run?
+      options:
+        - Borderless windowed
+        - Fullscreen
+        - Windowed
+        - Not sure
+    validations:
+      required: true
+  - type: dropdown
+    id: capture
+    attributes:
+      label: OBS capture source
+      options:
+        - Display Capture
+        - Game Capture
+        - Window Capture
+        - "OBS Virtual Camera (capture_source: obs_virtualcam)"
+        - Not sure
+    validations:
+      required: true
+  - type: dropdown
+    id: launcher
+    attributes:
+      label: How do you start WITNESS?
+      options:
+        - START Kill Recorder (Window).bat / desktop icon
+        - START Kill Recorder.bat (console)
+        - Something else
+    validations:
+      required: false
+  - type: checkboxes
+    id: privacy
+    attributes:
+      label: Privacy
+      options:
+        - label: I removed other players' gamertags, my Windows username and my LAN address from anything I pasted or attached.
+          required: true
