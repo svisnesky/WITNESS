@@ -373,7 +373,8 @@ tts_online: true
 # Deepen any voice; "-18Hz" on Christopher = the deep broadcast voice.
 announcer_pitch: "-18Hz"
 # How the announcer says your name (spell it phonetically if it reads oddly).
-announcer_player_name: ""   # empty = "your runner"
+announcer_player_name: ""   # empty = "your runner" in match reels,
+                            # "the runner" in the WITNESS Report
 reel_music_volume: 0.08   # 0-1 loudness of the music bed under the game audio
                           # (0.08 = quiet background; 0 = off, 0.22 = old level)
 
