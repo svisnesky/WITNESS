@@ -1736,7 +1736,9 @@ def _advertise_for_ipad(cfg, host, port, st, webserver):
         try:
             import discovery
             app._advertiser = discovery.advertise(
-                port, webserver.local_ip(), version=getattr(st, "version", ""),
+                port, webserver.local_ip(),
+                # bare sha: the TXT 'v' is cut to 12 chars (see main.py)
+                version=(getattr(st, "build_sha", "") or getattr(st, "version", "")),
                 api=getattr(webserver, "API_VERSION", 1))
         except Exception as e:
             _note(f"  [discovery] skipped: {e}")

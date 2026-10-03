@@ -1279,7 +1279,10 @@ def _setup_session(cfg, dry_run):
                         import discovery
                         _advertiser = discovery.advertise(
                             port, webserver.local_ip(),
-                            version=getattr(_web_state, "version", ""),
+                            # bare sha: the TXT 'v' is cut to 12 chars and the
+                            # full label '0.1.0 (1a2b3c4)' is 15
+                            version=(getattr(_web_state, "build_sha", "")
+                                     or getattr(_web_state, "version", "")),
                             api=webserver.API_VERSION)
                     except Exception as e:
                         print(f"  [discovery] skipped: {e}")
