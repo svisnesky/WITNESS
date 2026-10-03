@@ -846,17 +846,77 @@ def _obs_port_open(host: str, port: int, timeout: float = 1.5) -> bool:
         return False
 
 
-def _ensure_obs_running(cfg) -> None:
+def _on_windows() -> bool:
+    return sys.platform == "win32"
+
+
+# The value config.yaml used to ship. It was never a real password: treat it as
+# "not set", and say so when OBS turns the connection down.
+OBS_PASSWORD_PLACEHOLDER = "CHANGE_ME"
+
+# Every OBS setup error starts with "OBS": the desktop launcher shows a message
+# with that prefix as-is in its START error banner.
+OBS_WS_OFF = ("OBS is open but its WebSocket server is off: Tools > WebSocket "
+              "Server Settings > Enable WebSocket server (port {port})")
+OBS_WS_OLD = (" - port 4444 answers, which looks like OBS 27 (websocket 4.x); "
+              "WITNESS needs OBS 28 or newer")
+OBS_NOT_FOUND = ("OBS is not running and obs64.exe was not found: start OBS "
+                 "yourself or set obs.exe_path in config.yaml")
+OBS_BAD_PASSWORD = ("OBS rejected the WebSocket password: copy it from OBS Tools > "
+                    "WebSocket Server Settings > Show Connect Info into "
+                    "obs.password in config.yaml")
+OBS_REFUSED = ("OBS: cannot reach the WebSocket server - Tools > WebSocket "
+               "Server Settings > Enable")
+
+
+def _obs_password(obs_cfg) -> str:
+    """obs.password from config, with the old CHANGE_ME placeholder as ''."""
+    pw = (obs_cfg or {}).get("password", "")
+    pw = "" if pw is None else str(pw)
+    return "" if pw.strip() == OBS_PASSWORD_PLACEHOLDER else pw
+
+
+def _obs_process_running() -> bool:
+    """Is obs64.exe running? (Windows: tasklist.) False when it can't tell.
+
+    Matches the image name only: tasklist's 'INFO: No tasks are running...'
+    text is localized. CREATE_NO_WINDOW, or a console flashes under pythonw."""
+    try:
+        import subprocess
+        r = subprocess.run(["tasklist", "/FI", "IMAGENAME eq obs64.exe", "/NH"],
+                           capture_output=True, timeout=10,
+                           creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        out = r.stdout or b""
+        if isinstance(out, bytes):
+            out = out.decode("ascii", "replace")   # OEM code page: names are ASCII
+        return "obs64.exe" in out.lower()
+    except Exception:
+        return False
+
+
+def _ensure_obs_running(cfg) -> str:
     """If OBS's websocket isn't reachable, launch OBS ourselves and wait for it
     (Windows). Kills the classic 'connection refused because OBS wasn't open'
-    startup failure. Controlled by obs.auto_launch (default true)."""
-    obs_cfg = cfg.get("obs", {})
+    startup failure. Controlled by obs.auto_launch (default true).
+
+    Returns 'up' (the WebSocket port answers), 'launched' (we started OBS),
+    'not_found' (OBS isn't running and obs64.exe wasn't found) or 'disabled'
+    (auto_launch off, or not Windows). Raises RuntimeError when OBS is already
+    running with its WebSocket server off: launching it again only produced
+    OBS's 'already running' dialog and a 30-second wait."""
+    obs_cfg = cfg.get("obs", {}) or {}
     host = obs_cfg.get("host", "localhost")
     port = obs_cfg.get("port", 4455)
     if _obs_port_open(host, port):
-        return
-    if not obs_cfg.get("auto_launch", True) or sys.platform != "win32":
-        return
+        return "up"
+    if not obs_cfg.get("auto_launch", True) or not _on_windows():
+        return "disabled"
+
+    if _obs_process_running():
+        msg = OBS_WS_OFF.format(port=port)
+        if int(port) != 4444 and _obs_port_open(host, 4444):
+            msg += OBS_WS_OLD
+        raise RuntimeError(msg)
 
     exe = (obs_cfg.get("exe_path") or "").strip()
     if not exe:
@@ -866,9 +926,7 @@ def _ensure_obs_running(cfg) -> None:
                 exe = cand
                 break
     if not exe or not os.path.exists(exe):
-        print("OBS isn't running and obs64.exe wasn't found — start OBS "
-              "manually (or set obs.exe_path in config.yaml).")
-        return
+        return "not_found"
 
     print("OBS isn't running — launching it for you...")
     try:
@@ -878,16 +936,74 @@ def _ensure_obs_running(cfg) -> None:
                           "--disable-shutdown-check"],
                          cwd=os.path.dirname(exe))
     except Exception as e:
-        print(f"Could not launch OBS: {e}")
-        return
+        raise RuntimeError(f"OBS could not be started ({e}): start OBS yourself "
+                           "or set obs.exe_path in config.yaml")
     # Wait for the websocket to come up (OBS cold start takes a few seconds).
     for _ in range(30):
         time.sleep(1)
         if _obs_port_open(host, port):
             print("OBS is up.")
-            return
+            return "launched"
     print("OBS was launched but its WebSocket isn't answering yet — check "
           "Tools -> WebSocket Server Settings is enabled.")
+    return "launched"
+
+
+def _obs_error_kind(e) -> str:
+    """'auth' (OBS turned the password down), 'refused' (nothing listening on
+    the port) or 'other' (timeouts, code 207 'not ready', anything else)."""
+    text = str(e).lower()
+    # obsws-python: "failed to identify client with the server ..." (wrong
+    # password: OBS closes the socket, code 4009 is dropped) and
+    # "authentication enabled but no password provided".
+    if "identify" in text or "no password" in text:
+        return "auth"
+    if (isinstance(e, ConnectionRefusedError)
+            or getattr(e, "winerror", None) == 10061
+            or "10061" in text or "connection refused" in text):
+        return "refused"
+    return "other"
+
+
+OBS_CONNECT_ATTEMPTS = 20
+OBS_CONNECT_WAIT = 1.5
+
+
+def _connect_obs(obs, status: str, raw_password="") -> None:
+    """obs.connect(), retried while OBS boots, with a clear 'OBS ...' error.
+
+    A freshly launched OBS opens its port before it can answer ('code 207: not
+    ready'), so timeouts and not-ready keep retrying (20 x 1.5 s). A rejected
+    password stops after 3 tries: obsws-python reports a socket closed during
+    the handshake with the same 'failed to identify' text, so one failure is
+    not proof. While OBS is still starting (we launched it) it gets 6."""
+    auth_limit = 6 if status == "launched" else 3
+    auth_fails = 0
+    for attempt in range(OBS_CONNECT_ATTEMPTS):
+        try:
+            obs.connect()
+            return
+        except Exception as e:
+            kind = _obs_error_kind(e)
+            if kind == "auth":
+                auth_fails += 1
+                if auth_fails >= auth_limit:
+                    msg = OBS_BAD_PASSWORD
+                    if str(raw_password).strip() == OBS_PASSWORD_PLACEHOLDER:
+                        msg += " (it is still CHANGE_ME)"
+                    raise RuntimeError(msg) from e
+            if attempt >= OBS_CONNECT_ATTEMPTS - 1:
+                if kind == "refused":
+                    raise RuntimeError(OBS_REFUSED) from e
+                raise RuntimeError(f"OBS did not answer: {type(e).__name__}: "
+                                   f"{e}") from e
+            if attempt == 0:
+                if status == "launched":
+                    print("OBS is still starting up — waiting for it...")
+                else:
+                    print(f"Can't reach OBS yet ({type(e).__name__}: {e}) - "
+                          "retrying for about 30 s...")
+            time.sleep(OBS_CONNECT_WAIT)
 
 
 def _setup_session(cfg, dry_run):
@@ -895,32 +1011,23 @@ def _setup_session(cfg, dry_run):
     of session state (obs, web, counters, etc.)."""
     from obs_client import OBSClient, DryRunOBS
 
-    obs_cfg = cfg.get("obs", {})
+    obs_cfg = cfg.get("obs", {}) or {}
+    status = "dry-run"
     if dry_run:
         obs = DryRunOBS()
     else:
-        _ensure_obs_running(cfg)
+        status = _ensure_obs_running(cfg)
+        if status == "not_found":
+            raise RuntimeError(OBS_NOT_FOUND)
         obs = OBSClient(
             host=obs_cfg.get("host", "localhost"),
             port=obs_cfg.get("port", 4455),
-            password=obs_cfg.get("password", ""),
+            password=_obs_password(obs_cfg),
             counter_source=obs_cfg.get("counter_source", "KillCounter"),
             counter_format=obs_cfg.get("counter_format", "Kills: {count}"),
             auto_start_replay_buffer=obs_cfg.get("auto_start_replay_buffer", True),
         )
-    # A freshly-launched OBS opens its websocket port BEFORE it's ready to
-    # answer requests ("code 207: OBS is not ready"). Retry the handshake
-    # until it finishes booting.
-    for attempt in range(20):
-        try:
-            obs.connect()
-            break
-        except Exception:
-            if attempt >= 19:
-                raise
-            if attempt == 0:
-                print("OBS is still starting up — waiting for it...")
-            time.sleep(1.5)
+    _connect_obs(obs, status, raw_password=obs_cfg.get("password", ""))
     obs.set_counter(0)
 
     web = None
