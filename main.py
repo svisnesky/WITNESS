@@ -1873,11 +1873,54 @@ def _fire_heat(cfg, s, ev, delay: float = 0.0):
         threading.Thread(target=speak, daemon=True).start()
 
 
+NO_TAG_LINE = ("  [names] gamertag is blank in config.yaml - set it to your exact "
+               "in-game name to enable the Menace Report, kill-name chyrons and "
+               "streamer alerts")
+
+
+def _gamertag(cfg) -> str:
+    """Your gamertag by the KEY-ABSENT rule: encounters.DEFAULT_GAMERTAG only
+    when config has no gamertag key at all (configs from before the key, Stan's
+    among them, have always run on it); a key that is present but blank (or a
+    bare `gamertag:`) means no tag. `cfg.get("gamertag") or DEFAULT` would turn
+    a new install's deliberate blank back into someone else's name."""
+    try:
+        import encounters
+        fn = getattr(encounters, "resolve_gamertag", None)
+        if callable(fn):
+            return str(fn(cfg) or "").strip()
+        default = str(getattr(encounters, "DEFAULT_GAMERTAG", "") or "")
+    except Exception:
+        default = ""
+    if "gamertag" not in (cfg or {}):
+        return default
+    return str(cfg.get("gamertag") or "").strip()
+
+
+def _announcer_name(cfg) -> str:
+    """How the announcer says your name. Absent and blank both mean none (the
+    announcer then says 'your runner'): the code default was always ''."""
+    return str((cfg or {}).get("announcer_player_name", "") or "").strip()
+
+
 def _scan_feed_names(cfg, engine, s, expect):
     """One kill-feed OCR pass to read gamertags before the feed lines expire.
     expect: 'victim' right after your kill popup, 'killed_by' on the downed
     screen — only that direction is logged, so a stale line the other way
     can't misfile."""
+    if not any(c.isalnum() for c in _gamertag(cfg)):
+        # No tag, nothing to match the feed against: skip the full-frame grab
+        # and OCR entirely, and say once per session how to turn it on.
+        if not s.setdefault("_warned_no_tag", False):
+            s["_warned_no_tag"] = True
+            print(NO_TAG_LINE)
+            if s.get("web") is not None:
+                try:
+                    s["web"].notice("Set gamertag in config.yaml for name tracking",
+                                    "alert")
+                except Exception:
+                    pass
+        return
     try:
         import encounters
         base = os.path.dirname(os.path.abspath(__file__))
@@ -2306,7 +2349,7 @@ def _build_match_reel_async(cfg, s, session_dir, stats_d):
                     script = announcer.stat_line(
                         total_kills, stats_d,
                         potg_tag=(potg["tag"] if potg else ""),
-                        player=cfg.get("announcer_player_name", ""),
+                        player=_announcer_name(cfg),
                         runner=s.get("last_runner", ""))
                     wav = announcer.synth_to_wav(
                         script,
@@ -2944,7 +2987,7 @@ def _end_session(cfg, tags, start_monotonic, start_wall, dry_run, obs=None,
                 victims, killers = [], []
             rep = witness_report.build_report(
                 session, victims, killers,
-                player=cfg.get("announcer_player_name", ""))
+                player=_announcer_name(cfg))
             report_speech = rep["speech"]
             _rc(report="\n".join(rep["lines"]), note="writing the WITNESS Report…")
             print("\n" + "\n".join(rep["lines"]))
