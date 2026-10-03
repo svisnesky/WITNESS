@@ -158,3 +158,27 @@ def test_marathon_skull_png_is_not_shipped_and_only_named_as_an_old_setting():
                     hits.append((rel, line.strip()))
     assert all(rel == "main.py" for rel, _ in hits), hits
     assert any('img_name == "marathon_skull.png"' in ln for _, ln in hits)
+
+
+# --- the desktop tiles replay main.py's real console lines -------------------
+
+def test_gui_tiles_parse_the_lines_main_prints():
+    """gui._RECON_RE was written against the planned wording; check it against
+    the f-strings main.py actually prints, rendered with real numbers."""
+    pytest.importorskip("tkinter")
+    import gui
+    src = _src("main.py")
+    assert 'f"  [reconcile] game credited more downs than detected — "' in src
+    assert 'print(f"  [reconcile] game credited more runner elims than "' in src
+    assert 'f"detected — added {missed_e}")' in src
+    tags = ["down", "kill"]
+    for line in ("  [exfil] match stats: 3 runners downed, 3 runner elims",
+                 "  [reconcile] game credited more downs than detected — added 1, count now 4",
+                 "  [reconcile] game credited more runner elims than detected — added 2",
+                 "  [reconcile] headline below the game's panel for this match — raised by 1, count now 5"):
+        gui.parse_console_line(line, tags)
+    assert tags == ["down", "kill", "down", "elim", "elim", gui._match_break()]
+    assert gui.tile_values(tags)["downs"] == 2
+    gui.parse_console_line("KILL #3 [precision]: 'PRECISION DOWN +15 XP'", tags)
+    gui.parse_console_line("(not a kill: assist) [assist]: 'RUNNER DOWN [ASSIST] +5'", tags)
+    assert tags[-2:] == ["precision", "assist"]
