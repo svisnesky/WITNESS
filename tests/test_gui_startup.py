@@ -302,6 +302,40 @@ def test_start_is_ignored_while_the_worker_is_alive(monkeypatch):
     assert calls == [1]
 
 
+def test_two_starts_at_once_run_one_session(monkeypatch):
+    """The PC window and the iPad can POST /start at the same moment, each on
+    its own server thread, and the config reload sits between the is_alive
+    check and the thread start. The barrier makes the overlap certain: if
+    both calls get into load_config together it passes and each would start
+    a session (two OCR loops, two OBS sessions). Serialised, the first call
+    waits out the barrier alone, which only makes its reload fail, and the
+    second finds the session already running."""
+    release = threading.Event()
+    calls = []
+    both_in = threading.Barrier(2, timeout=0.5)
+
+    def load():
+        both_in.wait()
+        return {}
+
+    def run_live(cfg, dry, ev):
+        calls.append(1)
+        release.wait(5)
+    _fake_app(monkeypatch, run_live, load)
+    st = _FakeState()
+    sess = gui._WebSession({}, st)
+    callers = [threading.Thread(target=sess.start) for _ in range(2)]
+    for t in callers:
+        t.start()
+    for t in callers:
+        t.join(5)
+    time.sleep(0.1)
+    release.set()
+    if sess.thread:
+        sess.thread.join(5)
+    assert calls == [1]
+
+
 def test_with_the_real_live_state(monkeypatch):
     webserver = pytest.importorskip("webserver")
 

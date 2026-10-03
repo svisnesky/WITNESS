@@ -1572,8 +1572,16 @@ class _WebSession:
         self.state = state
         self.thread = None
         self.stop_event = None
+        # Held from the is_alive check until the thread is started: the PC
+        # window and the iPad each POST /start on their own server thread,
+        # and the config reload in between takes tens of ms.
+        self._start_lock = threading.Lock()
 
     def start(self):
+        with self._start_lock:
+            self._start()
+
+    def _start(self):
         if self.thread and self.thread.is_alive():
             return      # still running, or still building the last recap
         st = self.state
