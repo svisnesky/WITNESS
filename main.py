@@ -170,8 +170,20 @@ def load_config(path=CONFIG_PATH) -> dict:
         pfile = os.path.join(base, "games", f"{game}.yaml")
         try:
             profile = yaml.safe_load(_read_text_cfg(pfile)) or {}
-            cfg.update(profile)
+            if not isinstance(profile, dict):
+                raise ValueError("it is not a list of settings")
+            # Detection, theme and feature-gate keys only. A profile is shared
+            # data, so it must not be able to change which executables run
+            # (ffmpeg_path, obs.exe_path), how videos are published
+            # (youtube_*) or who can reach the dashboard (web_lan). And
+            # cfg.update is shallow: a profile's obs: block replaced the
+            # user's whole host/port/password.
+            ignored = sorted(str(k) for k in profile if k not in PROFILE_KEYS)
+            cfg.update({k: v for k, v in profile.items() if k in PROFILE_KEYS})
             print(f"(game profile: {profile.get('game_name', game)} — {pfile})")
+            if ignored:
+                print(f"(game profile {pfile}: ignored non-profile keys {ignored}"
+                      " - set those in config.yaml)")
         except FileNotFoundError:
             print(f"(game {game!r} has no profile at {pfile} — using Marathon "
                   "settings; run  python main.py --teach  to create one)")
@@ -181,6 +193,21 @@ def load_config(path=CONFIG_PATH) -> dict:
     cfg.update(override)
     _migrate_legacy_voice(cfg, override)
     return cfg
+
+
+# What a game profile (games/<game>.yaml) may set. Everything teach.py writes,
+# plus the hand-tuned detection keys build_detector and the live loop read.
+# teach.PROFILE_DEFAULTS' keys are copied here rather than imported, so loading
+# the config never imports teach; tests/test_profile_keys.py keeps them in step.
+PROFILE_KEYS = frozenset({
+    "game_name", "popup_trigger_phrases", "popup_match_threshold",
+    "popup_confirm_frames", "popup_absence_frames", "popup_cooldown_seconds",
+    "detection_mode", "detect_region_frac", "detect_region", "require_reward",
+    "suppress_phrases", "overlay_events", "theme", "kill_coalesce_seconds",
+    # teach.PROFILE_DEFAULTS: Marathon-only systems a new game starts with off
+    "capture_exfil_stats", "runner_detection", "squad_stats", "team_wipe",
+    "track_names", "auto_sweat",
+})
 
 
 def _migrate_legacy_voice(cfg, override) -> None:
