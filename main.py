@@ -2219,6 +2219,15 @@ def run_live(cfg: dict, dry_run: bool = False, stop_event=None, on_count=None):
     _install_session_log()
     try:
         return _run_live_inner(cfg, dry_run, stop_event, on_count)
+    except Exception:
+        # Into the session log BEFORE the finally closes it. The window launcher
+        # runs pythonw (no console), catches this in gui.py and prints there,
+        # after stdout has been restored, so the cause of a failed START never
+        # reached logs/session_*.log. print(), not traceback.print_exc(): _Tee
+        # only wraps stdout, and under pythonw stderr is None.
+        import traceback
+        print(traceback.format_exc())
+        raise
     finally:
         _close_session_log()
 
