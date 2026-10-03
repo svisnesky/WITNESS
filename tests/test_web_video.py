@@ -111,7 +111,7 @@ def test_a_hang_up_prints_nothing():
 def test_a_client_vanishing_mid_video_leaves_the_server_up(url):
     s = socket.create_connection(("127.0.0.1", PORT), timeout=3)
     path = url.split(str(PORT), 1)[1]
-    s.sendall(f"GET {path} HTTP/1.1\r\nHost: x\r\n\r\n".encode())
+    s.sendall(f"GET {path} HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n".encode())
     s.recv(100)
     s.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, b"\x01\x00\x00\x00\x00\x00\x00\x00")
     s.close()                                   # RST, mid-body

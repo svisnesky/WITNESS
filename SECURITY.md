@@ -82,8 +82,8 @@ On a home network that's usually fine. On shared, dorm, office, or event Wi-Fi i
 is not.
 
 **Web pages in your own browser can't use it.** Every request has to name this
-PC: an IP address, `localhost`, the PC's own name, a `.local` name, or a bare
-network name with no dots. A POST whose Origin (or Referer) names another site
+PC: an IP address, `localhost`, a `.local` name, or the PC's own name (also
+as your router names it, such as `my-pc.lan` or `my-pc.home.arpa`). A POST whose Origin (or Referer) names another site
 is refused. These Host and Origin checks block cross-site requests (a web page you visit
 quietly posting to `localhost:8000`) and DNS rebinding. They are not a password:
 they do nothing about another device on your Wi-Fi.

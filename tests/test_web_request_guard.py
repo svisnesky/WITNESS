@@ -175,11 +175,58 @@ def test_the_server_survives_a_refusal(srv):
 
 # --- the rule itself ----------------------------------------------------------
 
+@pytest.fixture
+def pc_named(monkeypatch):
+    """Pretend this PC is DESKTOP-ABC123 and getfqdn() says what it's told."""
+    import socket
+
+    def set_names(host="DESKTOP-ABC123", fqdn="DESKTOP-ABC123"):
+        monkeypatch.setattr(socket, "gethostname", lambda: host)
+        monkeypatch.setattr(socket, "getfqdn", lambda *a: fqdn)
+        monkeypatch.setattr(webserver, "_fqdn_cache", [])
+    set_names()
+    return set_names
+
+
 @pytest.mark.parametrize("name", ["127.0.0.1", "192.168.1.50", "10.0.0.7", "::1",
                                   "fe80::1", "localhost", "LOCALHOST", "gaming-pc.local",
-                                  "Stans-PC.local.", "GAMING-PC", "x", ""])
-def test_host_names_that_mean_this_pc(name):
+                                  "Stans-PC.local.", "DESKTOP-ABC123", "desktop-abc123",
+                                  "desktop-abc123.lan", "DESKTOP-ABC123.home.arpa",
+                                  "desktop-abc123.localdomain", "desktop-abc123.internal",
+                                  "desktop-abc123.home", "desktop-abc123.lan.", ""])
+def test_host_names_that_mean_this_pc(name, pc_named):
     assert webserver._host_allowed(name), name
+
+
+@pytest.mark.parametrize("name", ["GAMING-PC", "x", "someone-else.lan",
+                                  "desktop-abc123.evil.lan", "desktop-abc123.example.com",
+                                  "desktop-abc123.lan.evil.example"])
+def test_names_that_are_not_this_pc(name, pc_named):
+    """Decision 5 lists the PC's OWN hostname: another bare name, or this PC's
+    name under a public suffix an attacker could publish, is refused."""
+    assert not webserver._host_allowed(name), name
+
+
+def test_the_fqdn_counts_as_this_pcs_name(pc_named):
+    pc_named(host="DESKTOP-ABC123", fqdn="desktop-abc123.corp.example")
+    assert webserver._host_allowed("desktop-abc123.corp.example")
+    assert not webserver._host_allowed("other.corp.example")
+
+
+def test_the_fqdn_is_looked_up_once_and_only_when_needed(pc_named, monkeypatch):
+    import socket
+    calls = []
+
+    def fqdn(*a):
+        calls.append(1)
+        return "desktop-abc123.lan"
+    monkeypatch.setattr(socket, "getfqdn", fqdn)
+    assert webserver._host_allowed("192.168.1.5")
+    assert webserver._host_allowed("desktop-abc123")
+    assert calls == []                      # IPs and the bare name never ask DNS
+    webserver._host_allowed("nope.example")
+    webserver._host_allowed("nope2.example")
+    assert calls == [1]
 
 
 @pytest.mark.parametrize("name", ["evil.example", "localhost.evil.example",

@@ -1216,12 +1216,38 @@ def _split_host_port(value: str):
     return v, None
 
 
-def _own_hostnames() -> set:
+# DNS suffixes that only the local network answers: a home router's own names
+# (stan-pc.lan, stan-pc.home.arpa) live here. Public DNS cannot serve them, so
+# an attacker cannot point one at this PC. Accepted only with the PC's own
+# hostname in front (decision 5: the PC's own hostname, not any name).
+_LOCAL_ONLY_SUFFIXES = ("lan", "home.arpa", "localdomain", "internal", "home")
+_fqdn_cache = []
+
+
+def _fqdn() -> str:
+    """socket.getfqdn(), looked up once (it can wait on DNS) and only when a
+    Host name is not already allowed otherwise."""
+    if not _fqdn_cache:
+        try:
+            name = socket.getfqdn().strip().lower().rstrip(".")
+        except Exception:
+            name = ""
+        _fqdn_cache.append(name)
+    return _fqdn_cache[0]
+
+
+def _own_hostnames(fqdn: bool = False) -> set:
+    """This PC's names: the hostname (Windows: the bare 'DESKTOP-XXXX') and its
+    first label, plus, with fqdn=True, socket.getfqdn() and its first label."""
     try:
         hn = socket.gethostname().strip().lower().rstrip(".")
     except Exception:
         hn = ""
-    return {hn, hn.split(".")[0]} - {""}
+    names = {hn, hn.split(".")[0]}
+    if fqdn:
+        f = _fqdn()
+        names |= {f, f.split(".")[0]}
+    return names - {""}
 
 
 def _host_allowed(name: str) -> bool:
@@ -1230,17 +1256,20 @@ def _host_allowed(name: str) -> bool:
     The guard against DNS rebinding: a hostile page can make its OWN domain
     resolve to 127.0.0.1 or the PC's LAN IP, and the browser then treats the
     dashboard as same-origin with that page. The one thing the attacker can't
-    change is the Host header — it carries their domain. So answer only to:
+    change is the Host header — it carries their domain. So answer only to
+    (owner decision 5):
       - IP literals (v4/v6). The iPad and the iOS app connect by IP. NOT pinned
         to local_ip(): VPN, WSL and Hyper-V adapters make that a different
         address than the one the iPad uses, and the LAN IP can change while
         the app runs.
-      - localhost, and the PC's own hostname.
+      - localhost.
       - any *.local name (mDNS — answered only on the local link, never by a
         public DNS server an attacker controls).
-      - any single-label name ('GAMING-PC', NetBIOS/LLMNR). Like .local, those
-        resolve only on the local network; every name an attacker can publish
-        has a dot in it.
+      - the PC's own hostname: bare, as socket.getfqdn() gives it, or under a
+        suffix only the home router answers (stan-pc.lan, stan-pc.home.arpa),
+        so a Safari bookmark of the router's name for this PC keeps working.
+    A bare name that is NOT this PC's is refused: decision 5 lists the PC's own
+    name, and a DNS search suffix can make a bare name resolve through DNS.
     """
     h = (name or "").strip().lower().rstrip(".")
     if not h:
@@ -1250,9 +1279,15 @@ def _host_allowed(name: str) -> bool:
         return True
     except ValueError:
         pass
-    if h == "localhost" or h.endswith(".local") or "." not in h:
+    if h == "localhost" or h.endswith(".local"):
         return True
-    return h in _own_hostnames()
+    if h in _own_hostnames():
+        return True
+    own = _own_hostnames(fqdn=True)
+    if h in own:
+        return True
+    first, _, rest = h.partition(".")
+    return first in own and rest in _LOCAL_ONLY_SUFFIXES
 
 
 def _origin_matches(source: str, host_header: str) -> bool:

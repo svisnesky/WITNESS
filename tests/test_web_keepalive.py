@@ -38,9 +38,9 @@ def test_a_post_body_does_not_poison_the_next_request(server):
     the server is HTTP/1.1 keep-alive, so a body's bytes were parsed as the start
     of the NEXT request on the same connection. Send both on ONE socket."""
     s = socket.create_connection(("127.0.0.1", KA_PORT), timeout=5)
-    s.sendall(b"POST /clip HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\n"
+    s.sendall(b"POST /clip HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\n"
               b"Content-Length: 2\r\n\r\n{}"
-              b"GET /status HTTP/1.1\r\nHost: x\r\n\r\n")
+              b"GET /status HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n")
     data = b""
     deadline = time.time() + 5
     # read until the second response's BODY is in, not just its status line
@@ -60,6 +60,6 @@ def test_a_post_body_does_not_poison_the_next_request(server):
 def test_an_absurd_content_length_is_capped(server):
     """Reading the body up front must not let a client make us allocate GBs."""
     s = socket.create_connection(("127.0.0.1", KA_PORT), timeout=3)
-    s.sendall(b"POST /clip HTTP/1.1\r\nHost: x\r\nContent-Length: 99999999999\r\n\r\n{}")
+    s.sendall(b"POST /clip HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: 99999999999\r\n\r\n{}")
     s.close()
     assert "running" in _get("/status")     # still alive
