@@ -387,3 +387,49 @@ def test_a_slow_booting_obs_gets_the_full_launch_wait(monkeypatch, capsys):
     assert main._ensure_obs_running({}) == "up"
     assert popen == []
     assert "waiting up to 30 s" in capsys.readouterr().out
+
+
+class _RefusedClient(_Client):
+    """connect() could not start the buffer (OBS refused: disabled in
+    Settings), so obs_client set replay_buffer_ok = False. Every status
+    request then fails, and each failure prints a line."""
+    replay_buffer_ok = False
+
+    def __init__(self):
+        super().__init__(rb=False)
+        self.reads = 0
+
+    def replay_buffer_active(self):
+        self.reads += 1
+        print("OBS replay buffer status failed: request refused")
+        return None
+
+
+def test_a_buffer_connect_could_not_start_is_not_polled_seven_times(monkeypatch, capsys):
+    slept = []
+    monkeypatch.setattr(main.time, "sleep", lambda n: slept.append(n))
+    client = _RefusedClient()
+    assert main._replay_buffer_ok(client) is False
+    assert client.reads == 1 and slept == []
+    assert capsys.readouterr().out.count("status failed") == 1
+
+
+def test_a_refused_buffer_that_is_running_after_all_is_believed(monkeypatch):
+    monkeypatch.setattr(main.time, "sleep", lambda n: None)
+
+    class C(_RefusedClient):
+        def replay_buffer_active(self):
+            self.reads += 1
+            return True
+    assert main._replay_buffer_ok(C()) is True
+
+
+def test_an_unchecked_buffer_still_gets_the_settle_wait(monkeypatch):
+    """replay_buffer_ok None (connect did not check) keeps the ~3 s settle."""
+    slept = []
+    monkeypatch.setattr(main.time, "sleep", lambda n: slept.append(n))
+
+    class C(_Client):
+        replay_buffer_ok = None
+    assert main._replay_buffer_ok(C(rb=False)) is False
+    assert 2.5 <= sum(slept) <= 3.5

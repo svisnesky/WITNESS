@@ -1395,17 +1395,27 @@ def _replay_buffer_ok(obs) -> bool:
     at all (a test fake) is assumed fine rather than cried wolf about.
 
     Waits up to ~3 s for a buffer that WITNESS itself just started to report
-    active, so that start does not raise a false 'clips will NOT save'."""
+    active, so that start does not raise a false 'clips will NOT save'.
+
+    Except when connect() already found it could not start the buffer
+    (obs.replay_buffer_ok is False: OBS refused, which almost always means it
+    is disabled in Settings): then one look, no settle wait. Each failed
+    status request prints its own "OBS replay buffer status failed" line, so
+    polling a buffer OBS refuses printed that line seven times before the real
+    WARNING."""
     fn = getattr(obs, "replay_buffer_active", None)
     if not callable(fn):
         return True
-    for i in range(REPLAY_BUFFER_SETTLE_POLLS + 1):
+    polls = REPLAY_BUFFER_SETTLE_POLLS
+    if getattr(obs, "replay_buffer_ok", None) is False:
+        polls = 0
+    for i in range(polls + 1):
         try:
             if fn() is True:
                 return True
         except Exception:
             pass
-        if i < REPLAY_BUFFER_SETTLE_POLLS:
+        if i < polls:
             time.sleep(REPLAY_BUFFER_SETTLE_STEP)
     return False
 
