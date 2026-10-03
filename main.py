@@ -1035,6 +1035,9 @@ OBS_BAD_PASSWORD = ("OBS rejected the WebSocket password: copy it from OBS Tools
                     "obs.password in config.yaml")
 OBS_REFUSED = ("OBS: cannot reach the WebSocket server - Tools > WebSocket "
                "Server Settings > Enable")
+# Seconds an already-running OBS gets to open its WebSocket port before
+# WITNESS says the server is off.
+OBS_BOOT_WAIT = 10
 
 
 def _obs_password(obs_cfg) -> str:
@@ -1081,6 +1084,12 @@ def _ensure_obs_running(cfg) -> str:
         return "disabled"
 
     if _obs_process_running():
+        # OBS may simply still be booting (opened a moment before START): its
+        # port opens a few seconds after the process appears. Give it that.
+        for _ in range(int(OBS_BOOT_WAIT)):
+            time.sleep(1)
+            if _obs_port_open(host, port):
+                return "up"
         msg = OBS_WS_OFF.format(port=port)
         if int(port) != 4444 and _obs_port_open(host, 4444):
             msg += OBS_WS_OLD

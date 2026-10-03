@@ -159,6 +159,7 @@ def _windows(monkeypatch, tmp_path, tasklist_out, ports=()):
         return None
 
     monkeypatch.setattr(main, "_on_windows", lambda: True)
+    monkeypatch.setattr(main, "OBS_BOOT_WAIT", 0)
     monkeypatch.setattr(main, "_obs_port_open",
                         lambda host, port, timeout=1.5: int(port) in opened)
     monkeypatch.setattr(subprocess, "run", fake_run)
@@ -312,3 +313,23 @@ def test_manual_and_watchlist_saves_report_a_failure_too(monkeypatch):
     monkeypatch.setattr(main, "show_text_overlay", lambda *a, **k: None)
     main._streamer_alert({"announcer_medals": False}, s, "killed_by", "SOMESTREAMER")
     assert web.notices.count("CLIP NOT SAVED - check OBS Replay Buffer") == 2
+
+
+def test_an_obs_that_is_still_booting_gets_a_moment(monkeypatch, tmp_path):
+    """OBS opened a second before START: the process exists, the port opens a
+    few seconds later. That is not 'WebSocket server off'."""
+    import subprocess
+    checks = []
+
+    def port_open(host, port, timeout=1.5):
+        checks.append(port)
+        return len(checks) >= 3            # closed, closed, then up
+
+    monkeypatch.setattr(main, "_on_windows", lambda: True)
+    monkeypatch.setattr(main, "OBS_BOOT_WAIT", 5)
+    monkeypatch.setattr(main, "_obs_port_open", port_open)
+    monkeypatch.setattr(main, "_obs_process_running", lambda: True)
+    popen = []
+    monkeypatch.setattr(subprocess, "Popen", lambda *a, **k: popen.append(a))
+    assert main._ensure_obs_running({}) == "up"
+    assert popen == []
