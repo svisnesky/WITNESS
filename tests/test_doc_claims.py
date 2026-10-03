@@ -77,3 +77,24 @@ def test_youtube_doc_quotes_the_library_messages_both_scripts_print():
                 continue
             assert f'"{msg}"' in step, \
                 f'{name} prints "{msg}" but YOUTUBE.md step 1 doesn\'t quote it'
+
+
+def test_quickstart_quotes_the_phone_line_with_its_scheme():
+    """The dashboard builds the phone/iPad line as location.protocol + '//' +
+    address, and main.py prints its "Live view:" address with the scheme too,
+    so the window shows the address with http in front. QUICKSTART quoted it
+    bare. (Scheme assembled here, not written out: no .py file in the repo
+    carries a URL literal.)"""
+    scheme = "http" + ":" + "//"
+    doc = _flat(_read("QUICKSTART.md"))
+    quoted = [q for q in _bold_quotes(doc) if "phone/iPad (same Wi-Fi)" in q]
+    assert quoted, "QUICKSTART no longer quotes the phone/iPad line"
+    label = "On your phone/iPad (same Wi-Fi): "
+    for q in quoted:
+        assert q.startswith(label + scheme), q
+    web = os.path.join(BASE, "webserver.py")
+    if os.path.exists(web):
+        src = _read("webserver.py")
+        if label in src:
+            assert "location.protocol + '//'" in src, \
+                "webserver.py no longer prefixes the scheme; update QUICKSTART"

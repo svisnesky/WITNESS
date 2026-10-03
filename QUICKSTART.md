@@ -82,8 +82,8 @@ forever. The app checks for updates every time it opens and updates itself.
 2. **Press START.** It launches OBS for you if needed.
 3. **Play Marathon in borderless windowed.**
 4. **Optional, on your phone/iPad:** the app window shows
-   **"On your phone/iPad (same Wi-Fi): 192.168.x.x:8000"**. Open that address
-   in the browser on a phone or iPad on the same Wi-Fi: live kill feed,
+   **"On your phone/iPad (same Wi-Fi): http://192.168.x.x:8000"**. Open that
+   address in the browser on a phone or iPad on the same Wi-Fi: live kill feed,
    instant replays, match highlight reels, and a **+1** button for anything
    the detector misses.
 5. **Press STOP** when you're done. Clips, highlight reels, vertical Shorts,
