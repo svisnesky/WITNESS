@@ -222,6 +222,13 @@ def parse_squad(frame, engine) -> list[dict]:
     return players
 
 
+# Hard ceiling (seconds, after the settle) on one exfil capture. A backstop:
+# the attempt counting below already bounds every path. It can still end the
+# empty-panel wait early on a fast GPU when the header also misses (see the
+# note in capture_exfil_stats and tests/test_exfil_capture_loop.py).
+EXFIL_DEADLINE_S = 12.0
+
+
 def capture_exfil_stats(cfg, engine, save_dir: str = "", retries: int = 3,
                         empty_retries: int = 7, settle: float = 0.8):
     """Grab the exfil screen and OCR the stat panels. The panel animates in,
@@ -246,7 +253,27 @@ def capture_exfil_stats(cfg, engine, save_dir: str = "", retries: int = 3,
         time.sleep(settle)
     limit = max(1, retries)
     attempt = 0
+    best_frame = None
+    squad_tried = False
+    # This runs ON the detection thread: while it spins, nothing is detected,
+    # no clip is saved and STOP can't land. Every exit below is bounded by
+    # `limit`, and this deadline backstops the lot. It is not only a CPU-OCR
+    # backstop: a one-off pass at 4K costs ~0.4-0.55 s even on an RTX 5080
+    # (2026-07-27 perf log: one capture blocked ~4.2 s of the 5 fps loop).
+    # - Panel empty, header read on spin 1: later spins are 1 pass + 0.6 s,
+    #   so all 7 empty_retries spins fit (~7-8 s).
+    # - Panel empty AND header missed: every spin is 5 passes (4 header bands
+    #   + the panel) + 0.6 s, ~2.6-3.4 s, so the deadline ends the wait after
+    #   4-5 of the 7 spins on a GPU. Kept at 12 s on purpose: the panel
+    #   animates in on the wall clock, and by then this case has waited longer
+    #   than the whole 7-spin wait above. ~21 s would keep all 7 spins but
+    #   only blocks detection and STOP for longer.
+    # CPU OCR (seconds a pass) hits the deadline after a spin or two.
+    t0 = time.monotonic()
     while attempt < limit:
+        if time.monotonic() - t0 > EXFIL_DEADLINE_S:
+            print("  [exfil] gave up waiting for the panel/header")
+            break
         frame = _grab_full(cfg)
         if save_dir and not saved:
             try:
@@ -265,16 +292,24 @@ def capture_exfil_stats(cfg, engine, save_dir: str = "", retries: int = 3,
         stats = _parse_panel(frame, engine)
         if len(stats) > len(best):
             best = stats
+            best_frame = frame
         # a good read has most of the labels; stop early once we have them
         if len(best) >= 4 and outc:
             pass  # fall through to squad + break below
         elif len(best) >= 4 and attempt + 1 < max(1, retries):
             # stats are done but the outcome header hasn't read yet — one more
-            # spin for the header before giving up on it
+            # spin for the header before giving up on it. This spin MUST count
+            # as an attempt: when this was a for-range loop, `continue` moved
+            # on by itself, but commit 39ef6e3 made it a manual while loop and
+            # the `continue` then skipped `attempt += 1`. A panel that read
+            # with a header that never did spun forever and hung detection,
+            # clip saving and STOP for the rest of the night.
+            attempt += 1
             time.sleep(0.4)
             continue
         if len(best) >= 4:
             if cfg.get("squad_stats", True):
+                squad_tried = True
                 try:
                     squad = parse_squad(frame, engine)
                 except Exception as e:
@@ -288,6 +323,15 @@ def capture_exfil_stats(cfg, engine, save_dir: str = "", retries: int = 3,
                   f"(attempt {attempt}/{limit})")
         if attempt < limit:
             time.sleep(0.6)  # let the panel finish animating in
+    # The deadline can stop the loop with a good panel read but before the
+    # squad pass ran. Parse the squad from the frame that gave the best read,
+    # so a header miss doesn't also cost the trios gamertags.
+    if (len(best) >= 4 and not squad_tried and best_frame is not None
+            and cfg.get("squad_stats", True)):
+        try:
+            squad = parse_squad(best_frame, engine)
+        except Exception as e:
+            print(f"  [exfil] squad parse failed: {e}")
     if not best:
         print("  [exfil] stats panel never read — no ground-truth audit for "
               "this match")
@@ -445,6 +489,14 @@ AUDIT_PAIRS = (
 # Tags that mean "an enemy died by your hand".
 _ELIM = ("kill", "elim")
 
+# A match boundary. Whoever keeps a SESSION-wide tag list appends it at each
+# exfil (this module never does), so a session count can't carry a pending
+# elim from one match into the next: a match that ends on RUNNER ELIM would
+# otherwise fold the next match's opening FINISHER onto it and lose an elim. It
+# counts as nothing. Per-match tag lists (the audit's match_tags) never contain
+# it. No popup is ever tagged 'exfil'.
+MATCH_BREAK = "exfil"
+
 
 def count_events(tags) -> tuple:
     """(downs, elims) from an ORDERED list of event tags — the canonical count,
@@ -458,13 +510,26 @@ def count_events(tags) -> tuple:
     A FINISHER with no elim in front of it IS its own elim, though — that's you
     finishing a runner who never showed a RUNNER ELIM popup.
 
+    A MATCH_BREAK tag (a session list, at each exfil) counts as nothing and
+    ends any pending elim, so a FINISHER can't fold across two matches.
+
     Measured across both audited sessions (2026-07-27 and 2026-07-29): folding a
     trailing FINISHER matches the game's Runner Elims on 6 of 7 matches, versus
-    4 of 7 when every finisher was counted separately. The one miss is an
-    under-count on a match whose popup OCR'd as 'RUNNER ELIM [ASSIST F10 Xp'."""
+    4 of 7 when every finisher was counted separately. The one miss (07-27 m6)
+    is an under-count whose cause is LIKELY, not confirmed (no frames from that
+    moment), an own RUNNER ELIM popup that never fired inside a continuous
+    popup chain. It is NOT that match's 'RUNNER ELIM [ASSIST F10 Xp' read: a
+    bracket-dropped '[ASSIST' is a real assist. _normalize strips both brackets,
+    so the bracket can't change the tag, and 07-27 m5 rules out the general
+    "dropped bracket = own kill" rule (its 'HAPA RUNNER DOIN [ASSIST 5 XP' would
+    become a false down). The narrower "bracket-dropped ELIM = own" rule fits
+    only because it was built from that one raw (n=1). Don't ship it on that."""
     downs = elims = 0
     pending_elim = False          # an elim that hasn't had its FINISHER yet
     for t in tags or []:
+        if t == MATCH_BREAK:
+            pending_elim = False      # new match: nothing folds across it
+            continue
         if t in ("down", "manual_kill"):
             downs += 1
         elif t in _ELIM:

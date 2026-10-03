@@ -1,0 +1,328 @@
+"""OCR falls back to the CPU ONLY when PyTorch has no kernels for the GPU.
+
+Recent cu128 PyTorch wheels dropped GTX 10-series and older (sm_50-61), but
+torch.cuda.is_available() is still True on those cards, so the first OCR call
+died with "no kernel image is available". Those cards now get CPU OCR, loudly.
+
+The other half matters just as much: a CUDA out-of-memory (or any other error)
+must re-raise, never quietly move a working RTX card to CPU OCR mid-game. And
+the arch check must follow CUDA's real compatibility rules: RTX 40-series is
+sm_89, which official wheels don't list (it runs the sm_86 kernels), so a naive
+`sm_89 in get_arch_list()` would have put every 40-series card on the CPU.
+
+torch / easyocr / pytesseract are faked here (none are installed on the Mac
+that runs this suite). Nothing touches a real GPU.
+"""
+import os
+import sys
+import types
+
+import numpy as np
+import pytest
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+import ocr  # noqa: E402
+
+CU128 = ["sm_75", "sm_80", "sm_86", "sm_90", "sm_100", "sm_120"]
+CU126 = ["sm_50", "sm_60", "sm_70", "sm_75", "sm_80", "sm_86", "sm_90"]
+
+NO_KERNEL = RuntimeError(
+    "CUDA error: no kernel image is available for execution on the device\n"
+    "CUDA kernel errors might be asynchronously reported at some other API call")
+OOM = RuntimeError(
+    "CUDA out of memory. Tried to allocate 20.00 MiB (GPU 0; 15.92 GiB total "
+    "capacity; 14.80 GiB already allocated)")
+
+
+class _Rig:
+    """A fake torch + easyocr pair. Records every Reader built and every
+    warm-up readtext."""
+
+    def __init__(self, cuda=True, cap=(12, 0), archs=None, warmup_error=None,
+                 build_error=None, arch_error=None):
+        self.cuda, self.cap, self.archs = cuda, cap, CU128 if archs is None else archs
+        self.warmup_error, self.build_error = warmup_error, build_error
+        self.arch_error = arch_error
+        self.readers = []           # gpu= argument of each Reader built
+        self.readtexts = []         # shapes passed to readtext
+        self.empty_cache_calls = 0
+
+    def install(self, monkeypatch):
+        rig = self
+
+        def get_arch_list():
+            if rig.arch_error:
+                raise rig.arch_error
+            return list(rig.archs)
+
+        def empty_cache():
+            rig.empty_cache_calls += 1
+
+        torch = types.ModuleType("torch")
+        torch.cuda = types.SimpleNamespace(
+            is_available=lambda: rig.cuda,
+            get_device_capability=lambda *a: rig.cap,
+            get_arch_list=get_arch_list,
+            get_device_name=lambda *a: "Fake GeForce",
+            memory_reserved=lambda *a: 0,
+            empty_cache=empty_cache,
+        )
+
+        class Reader:
+            def __init__(self, langs, gpu=True):
+                rig.readers.append(gpu)
+                if gpu and rig.build_error:
+                    raise rig.build_error
+                # easyocr's own rule: gpu=True only means CUDA if it's there
+                self.device = "cuda" if (gpu and rig.cuda) else "cpu"
+
+            def readtext(self, img, **kw):
+                rig.readtexts.append((self.device, img.shape))
+                if self.device == "cuda" and rig.warmup_error:
+                    raise rig.warmup_error
+                return []
+
+        easyocr = types.ModuleType("easyocr")
+        easyocr.Reader = Reader
+        monkeypatch.setitem(sys.modules, "torch", torch)
+        monkeypatch.setitem(sys.modules, "easyocr", easyocr)
+        return self
+
+
+def _load(monkeypatch, **kw):
+    rig = _Rig(**kw).install(monkeypatch)
+    eng = ocr.OCREngine("easyocr")
+    eng._ensure_loaded()
+    return rig, eng
+
+
+def test_a_working_rtx_card_stays_on_the_gpu(monkeypatch, capsys):
+    rig, eng = _load(monkeypatch, cap=(12, 0))          # RTX 5080 on cu128
+    assert rig.readers == [True]
+    assert eng.device == "cuda"
+    assert rig.readtexts == [("cuda", (32, 32))]          # one tiny warm-up
+    out = capsys.readouterr().out
+    assert "OCR device: cuda (Fake GeForce)" in out
+    assert "GPU OCR unavailable" not in out
+
+
+def test_rtx_40_series_is_not_mistaken_for_unsupported(monkeypatch):
+    """sm_89 is in no official arch list; it runs the sm_86 kernels."""
+    rig, eng = _load(monkeypatch, cap=(8, 9), archs=CU128)
+    assert rig.readers == [True] and eng.device == "cuda"
+
+
+def test_ptx_entry_counts_as_supported(monkeypatch):
+    rig, eng = _load(monkeypatch, cap=(12, 0),
+                     archs=["sm_80", "sm_90", "compute_90"])
+    assert rig.readers == [True] and eng.device == "cuda"
+
+
+def test_pascal_on_a_cu126_build_stays_on_the_gpu(monkeypatch):
+    """sm_61 runs sm_60 kernels: GTX 10-series is fine on a build that has them."""
+    rig, eng = _load(monkeypatch, cap=(6, 1), archs=CU126)
+    assert rig.readers == [True] and eng.device == "cuda"
+
+
+def test_pascal_on_a_cu128_build_goes_straight_to_cpu(monkeypatch, capsys):
+    rig, eng = _load(monkeypatch, cap=(6, 1), archs=CU128)
+    assert rig.readers == [False]                         # never built on GPU
+    assert eng.device == "cpu"
+    out = capsys.readouterr().out
+    assert "GPU OCR unavailable on this card (sm_61 is not in this PyTorch build" in out
+    assert "Set poll_fps: 3 and ocr_upscale: 2 for lighter load." in out
+    assert "OCR device: cpu" in out
+
+
+def test_unknown_arch_list_still_tries_the_gpu(monkeypatch):
+    rig, eng = _load(monkeypatch, cap=(6, 1), archs=[])
+    assert rig.readers == [True] and eng.device == "cuda"
+    rig, eng = _load(monkeypatch, arch_error=RuntimeError("driver says no"))
+    assert rig.readers == [True] and eng.device == "cuda"
+
+
+def test_no_kernel_image_on_warmup_rebuilds_on_cpu(monkeypatch, capsys):
+    rig, eng = _load(monkeypatch, cap=(12, 0), warmup_error=NO_KERNEL)
+    assert rig.readers == [True, False]
+    assert eng.device == "cpu"
+    assert rig.empty_cache_calls == 1                     # failed reader's VRAM back
+    out = capsys.readouterr().out
+    assert ("GPU OCR unavailable on this card (CUDA error: no kernel image is "
+            "available for execution on the device) - using CPU.") in out
+    assert out.count("GPU OCR unavailable") == 1
+
+
+def test_not_compatible_message_on_build_also_falls_back(monkeypatch):
+    err = RuntimeError("NVIDIA GeForce GTX 1080 with CUDA capability sm_61 is "
+                       "not compatible with the current PyTorch installation.")
+    rig, eng = _load(monkeypatch, build_error=err)
+    assert rig.readers == [True, False] and eng.device == "cpu"
+
+
+def test_out_of_memory_reraises_and_never_moves_to_cpu(monkeypatch):
+    rig = _Rig(warmup_error=OOM).install(monkeypatch)
+    eng = ocr.OCREngine("easyocr")
+    with pytest.raises(RuntimeError, match="out of memory"):
+        eng._ensure_loaded()
+    assert rig.readers == [True]                          # no CPU reader built
+    assert eng._loaded is False
+
+
+def test_out_of_memory_mentioning_an_arch_still_reraises(monkeypatch):
+    err = RuntimeError("CUDA out of memory on sm_120 device")
+    rig = _Rig(build_error=err).install(monkeypatch)
+    with pytest.raises(RuntimeError, match="out of memory"):
+        ocr.OCREngine("easyocr")._ensure_loaded()
+    assert rig.readers == [True]
+
+
+def test_any_other_gpu_error_reraises(monkeypatch):
+    rig = _Rig(warmup_error=RuntimeError("cuDNN error: CUDNN_STATUS_INTERNAL_ERROR")
+               ).install(monkeypatch)
+    with pytest.raises(RuntimeError, match="CUDNN_STATUS_INTERNAL_ERROR"):
+        ocr.OCREngine("easyocr")._ensure_loaded()
+    assert rig.readers == [True]
+
+
+def test_no_cuda_keeps_todays_call_and_skips_the_warmup(monkeypatch):
+    """No CUDA: Reader(gpu=True) exactly as before, easyocr picks the CPU."""
+    rig, eng = _load(monkeypatch, cuda=False)
+    assert rig.readers == [True]
+    assert rig.readtexts == []
+    assert eng.device == "cpu"
+
+
+def test_load_happens_once(monkeypatch):
+    rig, eng = _load(monkeypatch)
+    eng._ensure_loaded()
+    eng._ensure_loaded()
+    assert rig.readers == [True] and len(rig.readtexts) == 1
+
+
+def test_the_fallback_leaves_the_frozen_caps_alone():
+    assert ocr.OCR_MAX_DIM == 800
+    assert ocr.OCR_ONEOFF_MAX_DIM == 1600
+    e = ocr.OCREngine()
+    assert (e._cap(None), e._cap(0)) == (800, 1600)
+
+
+def test_is_kernel_incompat_is_narrow():
+    assert ocr._is_kernel_incompat(NO_KERNEL)
+    assert not ocr._is_kernel_incompat(OOM)
+    assert not ocr._is_kernel_incompat(RuntimeError("CUDA error: unspecified launch failure"))
+    assert not ocr._is_kernel_incompat(RuntimeError("device-side assert triggered"))
+    assert not ocr._is_kernel_incompat(ValueError("bad option sm_count"))  # needs digits
+
+
+# --- Tesseract: fail at load with a fix-it message ---------------------------
+
+class _NotFound(EnvironmentError):
+    pass
+
+
+def _fake_pytesseract(monkeypatch, version_error=None):
+    pt = types.ModuleType("pytesseract")
+    pt.pytesseract = types.SimpleNamespace(tesseract_cmd="tesseract")
+    pt.TesseractNotFoundError = _NotFound
+    calls = []
+
+    def get_tesseract_version():
+        calls.append(pt.pytesseract.tesseract_cmd)
+        if version_error is not None:
+            raise version_error
+        return "5.3.0"
+
+    pt.get_tesseract_version = get_tesseract_version
+    monkeypatch.setitem(sys.modules, "pytesseract", pt)
+    return pt, calls
+
+
+def _no_tesseract_anywhere(monkeypatch, present=()):
+    monkeypatch.setattr(ocr.shutil, "which", lambda name: None)
+    monkeypatch.setattr(ocr.os.path, "isfile", lambda p: p in present)
+
+
+def test_missing_tesseract_raises_the_friendly_error_at_load(monkeypatch):
+    _fake_pytesseract(monkeypatch, version_error=_NotFound())
+    _no_tesseract_anywhere(monkeypatch)
+    eng = ocr.OCREngine("tesseract")
+    with pytest.raises(RuntimeError) as ei:
+        eng._ensure_loaded()
+    msg = str(ei.value)
+    assert "ocr_engine is 'tesseract' but tesseract.exe was not found" in msg
+    assert "github.com/UB-Mannheim/tesseract/wiki" in msg
+    assert "switch back to easyocr" in msg
+    assert "http" not in msg                    # bare host path, per SECURITY.md
+    assert eng._loaded is False
+
+
+def test_tesseract_found_in_program_files_when_not_on_path(monkeypatch, capsys):
+    """The UB-Mannheim installer doesn't add itself to PATH."""
+    pt, calls = _fake_pytesseract(monkeypatch)
+    _no_tesseract_anywhere(monkeypatch, present=(ocr._TESSERACT_WIN_PATHS[1],))
+    eng = ocr.OCREngine("tesseract")
+    eng._ensure_loaded()
+    assert pt.pytesseract.tesseract_cmd == ocr._TESSERACT_WIN_PATHS[1]
+    assert calls == [ocr._TESSERACT_WIN_PATHS[1]]
+    assert eng.device == "cpu"
+    assert "OCR device: cpu (tesseract)" in capsys.readouterr().out
+
+
+def test_tesseract_on_path_wins(monkeypatch):
+    pt, _calls = _fake_pytesseract(monkeypatch)
+    monkeypatch.setattr(ocr.shutil, "which", lambda name: "/usr/bin/tesseract")
+    ocr.OCREngine("tesseract")._ensure_loaded()
+    assert pt.pytesseract.tesseract_cmd == "/usr/bin/tesseract"
+
+
+def test_an_odd_tesseract_version_string_does_not_end_the_session(monkeypatch):
+    """pytesseract raises SystemExit on a version it can't parse; the binary
+    is there, so loading carries on as it always did."""
+    _fake_pytesseract(monkeypatch, version_error=SystemExit("Invalid tesseract version"))
+    monkeypatch.setattr(ocr.shutil, "which", lambda name: "/usr/bin/tesseract")
+    eng = ocr.OCREngine("tesseract")
+    eng._ensure_loaded()
+    assert eng._loaded and eng.device == "cpu"
+
+
+# --- When "at load" happens: the first OCR call ------------------------------
+# OCREngine loads lazily. main.py builds the engine before its capture loop but
+# the first load is the loop's first read_lines, so these checks land on frame
+# one unless the caller runs _ensure_loaded() first (a main.py change, F60).
+
+FRAME = np.zeros((40, 200, 3), np.uint8)
+
+
+def test_building_the_engine_loads_nothing(monkeypatch):
+    """Construction never touches the backend, so it can't fail: a missing
+    tesseract.exe is only found by _ensure_loaded() or the first OCR call."""
+    _fake_pytesseract(monkeypatch, version_error=_NotFound())
+    _no_tesseract_anywhere(monkeypatch)
+    eng = ocr.OCREngine("tesseract")
+    assert eng._loaded is False and eng.device is None
+
+
+def test_missing_tesseract_surfaces_on_the_first_ocr_call(monkeypatch):
+    """Without a preload, the friendly error (not TesseractNotFoundError) is
+    what the first read_lines raises."""
+    _fake_pytesseract(monkeypatch, version_error=_NotFound())
+    _no_tesseract_anywhere(monkeypatch)
+    eng = ocr.OCREngine("tesseract")
+    with pytest.raises(RuntimeError) as ei:
+        eng.read_lines(FRAME)
+    assert not isinstance(ei.value, _NotFound)
+    assert "tesseract.exe was not found" in str(ei.value)
+
+
+def test_unsupported_card_falls_back_before_the_first_real_read(monkeypatch):
+    """The warm-up runs inside the first read_lines' load, so a card with no
+    kernels is on the CPU before the real frame is read: no exception."""
+    rig = _Rig(cap=(6, 1), archs=CU126, warmup_error=NO_KERNEL).install(monkeypatch)
+    eng = ocr.OCREngine("easyocr")
+    assert rig.readers == []                     # nothing built yet
+    assert eng.read_lines(FRAME) == []
+    assert rig.readers == [True, False]
+    assert rig.readtexts[0] == ("cuda", (32, 32))   # the warm-up
+    assert [d for d, _shape in rig.readtexts[1:]] == ["cpu"]
+    assert eng.device == "cpu"

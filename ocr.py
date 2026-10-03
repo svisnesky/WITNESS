@@ -6,6 +6,9 @@ Preprocess (upscale + grayscale + threshold) then read text with either EasyOCR
 
 from __future__ import annotations
 
+import os
+import re
+import shutil
 from typing import List
 
 import cv2
@@ -63,6 +66,90 @@ def preprocess(img_bgr: np.ndarray, upscale: int = 3, binarize: bool = True,
     return thresh
 
 
+# --- GPU kernel compatibility ------------------------------------------------
+#
+# The installer puts one CUDA build of PyTorch on every NVIDIA card. Recent cu128
+# wheels carry no kernels for GTX 10-series and older (sm_50-61), yet
+# torch.cuda.is_available() is still True there, so the first OCR call died with
+# "no kernel image is available". Those cards now fall back to CPU OCR, loudly.
+#
+# That fallback is deliberately NARROW. Only a definite kernel/architecture
+# mismatch may move OCR to the CPU. An out-of-memory error, a driver hiccup or
+# anything else re-raises exactly as before: quietly putting a working card on
+# CPU OCR means slower reads, missed popups and CPU load mid-game.
+_KERNEL_INCOMPAT = ("no kernel image", "not compatible with the current pytorch")
+_SM_TOKEN = re.compile(r"\bsm_\d+")
+
+CPU_FALLBACK_MSG = ("GPU OCR unavailable on this card ({reason}) - using CPU. "
+                    "Set poll_fps: 3 and ocr_upscale: 2 for lighter load.")
+
+
+def _is_kernel_incompat(err) -> bool:
+    """True only for errors that mean 'this PyTorch build has no kernels for
+    this GPU'. Out-of-memory is never one, whatever else the text says."""
+    msg = str(err).lower()
+    if "out of memory" in msg:
+        return False
+    return any(s in msg for s in _KERNEL_INCOMPAT) or bool(_SM_TOKEN.search(msg))
+
+
+def _cuda_arch_problem(torch) -> str:
+    """'' when this PyTorch build can run on the current GPU, or when we can't
+    tell; otherwise a short reason.
+
+    Not a plain `sm_XY in get_arch_list()` test: official wheels skip arches
+    that run another arch's kernels. RTX 40-series (sm_89) has no sm_89 entry
+    and runs the sm_86 kernels, so a membership test would put every 40-series
+    card on CPU. CUDA's rules: an sm_XY kernel runs on the same major version
+    at the same or a newer minor; a compute_XY (PTX) entry JIT-compiles for
+    any GPU at XY or newer."""
+    try:
+        major, minor = (int(v) for v in torch.cuda.get_device_capability())
+        archs = [str(a) for a in (torch.cuda.get_arch_list() or [])]
+    except Exception:
+        return ""
+    parsed = []
+    for a in archs:
+        m = re.match(r"(sm|compute)_(\d+)", a)
+        if m:
+            parsed.append((m.group(1), int(m.group(2))))
+    if not parsed:
+        return ""                        # nothing to judge by: try the GPU
+    cap = major * 10 + minor
+    for kind, n in parsed:
+        if kind == "sm" and n // 10 == major and n % 10 <= minor:
+            return ""
+        if kind == "compute" and n <= cap:
+            return ""
+    return (f"sm_{major}{minor} is not in this PyTorch build: "
+            f"{' '.join(archs)}")
+
+
+def _first_line(err) -> str:
+    lines = str(err).strip().splitlines()
+    return (lines[0] if lines else type(err).__name__)[:160]
+
+
+# Where the UB-Mannheim installer puts tesseract.exe. It does not add itself to
+# PATH by default, and pytesseract only looks on PATH.
+_TESSERACT_WIN_PATHS = ("C:/Program Files/Tesseract-OCR/tesseract.exe",
+                        "C:/Program Files (x86)/Tesseract-OCR/tesseract.exe")
+
+TESSERACT_MISSING_MSG = (
+    "ocr_engine is 'tesseract' but tesseract.exe was not found - install it "
+    "(github.com/UB-Mannheim/tesseract/wiki) or switch back to easyocr")
+
+
+def _find_tesseract() -> str:
+    found = shutil.which("tesseract")
+    if found:
+        return found
+    for path in _TESSERACT_WIN_PATHS:
+        if os.path.isfile(path):
+            return path
+    return ""
+
+
 class OCREngine:
     """Wrapper that lazily loads whichever backend is configured."""
 
@@ -76,20 +163,96 @@ class OCREngine:
         self.languages = list(languages)
         self._reader = None      # easyocr
         self._loaded = False
+        self.device = None       # 'cuda' / 'cpu' once loaded
 
     def _ensure_loaded(self):
         if self._loaded:
             return
         if self.engine_name == "easyocr":
-            import easyocr
-
-            # gpu=True uses your NVIDIA card if torch+CUDA are installed.
-            self._reader = easyocr.Reader(self.languages, gpu=True)
+            self._load_easyocr()
         elif self.engine_name == "tesseract":
-            import pytesseract  # noqa: F401  (import validates availability)
+            self._load_tesseract()
         else:
             raise ValueError(f"Unknown ocr_engine: {self.engine_name!r}")
         self._loaded = True
+
+    def _load_easyocr(self):
+        import easyocr
+
+        # Rule out a PyTorch build with no kernels for this card before
+        # touching the GPU (a GTX 10-series on a cu128 wheel).
+        problem = ""
+        try:
+            import torch
+            if torch.cuda.is_available():
+                problem = _cuda_arch_problem(torch)
+        except Exception:
+            problem = ""                 # can't tell: same call as always
+
+        if not problem:
+            try:
+                # gpu=True, exactly as before: easyocr uses the NVIDIA card
+                # when torch+CUDA are there and picks the CPU itself if not.
+                self._reader = easyocr.Reader(self.languages, gpu=True)
+                if self._reader_device() == "cuda":
+                    # One-time warm-up on a tiny blank: a card with no
+                    # kernels fails HERE, at engine load (the first OCR call),
+                    # where it can be caught and moved to the CPU, instead of
+                    # inside the first real readtext, where nothing caught it.
+                    # Milliseconds, negligible VRAM, and it bypasses
+                    # preprocess, so the caps don't apply.
+                    self._reader.readtext(np.zeros((32, 32), np.uint8))
+            except Exception as e:       # torch 2.8+ raises AcceleratorError
+                if not _is_kernel_incompat(e):
+                    raise                # OOM etc.: never a reason for CPU
+                problem = _first_line(e)
+            if problem:
+                self._reader = None      # hand back the failed GPU reader
+                import gc
+                gc.collect()
+                release_vram()
+
+        if problem:
+            print(CPU_FALLBACK_MSG.format(reason=problem))
+            self._reader = easyocr.Reader(self.languages, gpu=False)
+
+        self.device = self._reader_device() or "unknown"
+        name = ""
+        if self.device == "cuda":
+            try:
+                import torch
+                name = f" ({torch.cuda.get_device_name()})"
+            except Exception:
+                name = ""
+        print(f"OCR device: {self.device}{name}")
+
+    def _reader_device(self) -> str:
+        """'cuda' / 'cpu' / 'mps' as easyocr chose it ('cuda:0' -> 'cuda')."""
+        dev = str(getattr(self._reader, "device", "") or "")
+        return "cuda" if dev.startswith("cuda") else dev
+
+    def _load_tesseract(self):
+        import pytesseract
+
+        # Fail at engine load (the first OCR call) with a fix-it message, not
+        # with a bare TesseractNotFoundError traceback. Load is lazy, so this
+        # still lands on a session's first frame unless the caller runs
+        # _ensure_loaded() before its capture loop (main.py doesn't, yet).
+        cmd = _find_tesseract()
+        if cmd:
+            pytesseract.pytesseract.tesseract_cmd = cmd
+        not_found = getattr(pytesseract, "TesseractNotFoundError", OSError)
+        try:
+            pytesseract.get_tesseract_version()
+        except not_found:
+            raise RuntimeError(TESSERACT_MISSING_MSG) from None
+        except (Exception, SystemExit) as e:
+            # The binary IS there, which is all this check is for. pytesseract
+            # raises SystemExit on a version string it can't parse; that must
+            # not end a session that image_to_string would have run fine.
+            print(f"  [ocr] tesseract version check failed ({e}) - continuing")
+        self.device = "cpu"
+        print("OCR device: cpu (tesseract)")
 
     def _cap(self, max_dim):
         """Per-call size cap.
