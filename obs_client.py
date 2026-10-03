@@ -7,8 +7,46 @@ Two jobs:
 
 from __future__ import annotations
 
+import logging
 import threading
-from typing import Optional
+from typing import List, Optional
+
+# How deep get_scene_input_kinds follows nested scenes / groups. Real setups
+# nest one or two levels ("Live" -> "Gameplay" -> Display Capture); the limit
+# only exists so a scene that includes itself can never loop.
+_SCENE_NEST_LIMIT = 3
+
+_REQUEST_ERROR = None
+
+
+def _request_error():
+    """obsws-python's OBSSDKRequestError, imported lazily (like obsws_python
+    itself, so this module still imports where the library is missing). That
+    class means OBS ANSWERED and refused the request: the socket is healthy."""
+    global _REQUEST_ERROR
+    if _REQUEST_ERROR is None:
+        try:
+            from obsws_python.error import OBSSDKRequestError as cls
+        except Exception:
+            class cls(Exception):       # never raised: no obsws-python, no OBS
+                pass
+        _REQUEST_ERROR = cls
+    return _REQUEST_ERROR
+
+
+def _quiet_obsws_logger():
+    """obsws-python calls logger.exception() before re-raising every refused
+    request. WITNESS configures no logging, so Python's last-resort handler
+    printed a full traceback to the console / GUI log for each one, twice per
+    kill when the optional KillCounter source didn't exist. The exceptions
+    still propagate (main's connect retry and _call below see every one); only
+    the library's own duplicate logging is muted."""
+    logging.getLogger("obsws_python").setLevel(logging.CRITICAL)
+
+
+def _scene_name(resp) -> str:
+    return (getattr(resp, "current_program_scene_name", None)
+            or getattr(resp, "scene_name", None) or "")
 
 
 class OBSClient:
@@ -38,48 +76,105 @@ class OBSClient:
         self.counter_source = counter_source
         self.counter_format = counter_format
         self.auto_start_replay_buffer = auto_start_replay_buffer
+        # True/False once connect() has checked (and if need be started) the
+        # Replay Buffer; None when it wasn't checked. False means OBS refused
+        # it, which almost always means Settings > Output > Replay Buffer is
+        # disabled: kills will count but NO clip will save.
+        self.replay_buffer_ok: Optional[bool] = None
         self._client = None
+        self._closed = False
+        self._bad_counter_format = False
         # Reentrant: _call may reconnect, which re-enters the lock on this thread.
         self._lock = threading.RLock()
 
     def connect(self):
         with self._lock:
+            # main retries connect() while OBS boots; a client whose handshake
+            # worked but whose first request didn't must not be leaked.
+            self._drop_client()
+            self._closed = False
             self._connect_client()
             version = self._client.get_version()
             print(f"Connected to OBS {version.obs_version} "
                   f"(websocket {version.obs_web_socket_version}).")
             if self.auto_start_replay_buffer:
-                self._ensure_replay_buffer()
+                self.replay_buffer_ok = self._ensure_replay_buffer()
 
     def _connect_client(self):
         import obsws_python as obs
+        _quiet_obsws_logger()
         self._client = obs.ReqClient(
             host=self.host, port=self.port, password=self.password, timeout=5
         )
 
+    def _drop_client(self):
+        """Close the current socket without waiting on it.
+
+        Prefers the websocket's shutdown(), which closes the TCP socket at once.
+        ReqClient.disconnect() does a polite close that waits up to 3 s for
+        OBS's reply, and this runs on the capture thread right after a request
+        failed, i.e. exactly when OBS may not be answering. Any error is
+        ignored: a dead socket is the usual reason we're here."""
+        old = self._client
+        if old is None:
+            return
+        try:
+            ws = getattr(getattr(old, "base_client", None), "ws", None)
+            if ws is not None and callable(getattr(ws, "shutdown", None)):
+                ws.shutdown()
+            else:
+                old.disconnect()
+        except Exception:
+            pass
+
     def _reconnect(self):
-        """Silently try to re-establish the connection after a drop."""
+        """Silently try to re-establish the connection after a drop. The old
+        client is closed first; before, every reconnect left its socket open
+        for the garbage collector."""
         with self._lock:
+            if self._closed:
+                return False          # close() was deliberate: stay closed
+            self._drop_client()
             try:
                 self._connect_client()
                 return True
             except Exception:
                 return False
 
-    def _call(self, fn, default=None, label="request"):
+    def _call(self, fn, default=None, label="request", on_refused=None):
         """Run an OBS request; on a dropped connection, reconnect once and retry.
-        Serialized — see the class docstring."""
+        Serialized — see the class docstring.
+
+        A REFUSED request (OBSSDKRequestError: a missing source, a stopped
+        output) is answered over a healthy socket, so it is never a reason to
+        reconnect: it prints one line and returns `default`, or whatever
+        on_refused(error) returns when that is given. Every other exception is
+        treated as a dropped connection, exactly as before.
+
+        After close() it returns `default` at once, silently. close() drops the
+        client, so running fn() would only raise AttributeError on None and
+        print a misleading failure line; a clip worker still polling after the
+        session ended would print up to 16 of them per clip."""
+        refused = _request_error()
         with self._lock:
+            if self._closed:
+                return default
             for attempt in range(2):
                 try:
                     return fn()
+                except refused as e:
+                    if on_refused is not None:
+                        return on_refused(e)
+                    print(f"OBS {label} failed: {e}")
+                    return default
                 except Exception as e:
                     if attempt == 0 and self._reconnect():
                         continue
                     print(f"OBS {label} failed: {e}")
                     return default
 
-    def _ensure_replay_buffer(self):
+    def _ensure_replay_buffer(self) -> bool:
+        """Start the Replay Buffer if it is off. True when it is running."""
         try:
             status = self._client.get_replay_buffer_status()
             if not status.output_active:
@@ -87,9 +182,11 @@ class OBSClient:
                 print("Replay Buffer was off — started it.")
             else:
                 print("Replay Buffer already running.")
+            return True
         except Exception as e:
             print(f"WARNING: could not verify/start Replay Buffer: {e}")
             print("  -> In OBS: Settings > Output > Replay Buffer must be enabled.")
+            return False
 
     def save_replay(self) -> bool:
         """Write the current Replay Buffer to a clip. Returns True on success.
@@ -122,6 +219,7 @@ class OBSClient:
                 lambda: (self._client.start_replay_buffer(), True)[1],
                 default=False, label="restart replay buffer")
             if started:
+                self.replay_buffer_ok = True
                 print("  [obs] Replay Buffer had STOPPED — restarted it. That "
                       "clip is lost; the rest of the session will record.")
             return bool(started)
@@ -146,15 +244,89 @@ class OBSClient:
         question just as well."""
         def go():
             import blackcheck
-            scene = self._client.get_current_program_scene()
-            name = (getattr(scene, "current_program_scene_name", None)
-                    or getattr(scene, "scene_name", None))
+            name = _scene_name(self._client.get_current_program_scene())
             if not name:
                 return b""
             r = self._client.get_source_screenshot(name, "png", width,
                                                    int(width * 9 / 16), -1)
             return blackcheck.decode_datauri(getattr(r, "image_data", ""))
         return self._call(go, b"", "scene screenshot")
+
+    def get_scene_input_kinds(self) -> Optional[List[str]]:
+        """The source type (obs-websocket inputKind) of every VISIBLE item in
+        OBS's program scene, e.g. ['monitor_capture', 'text_gdiplus_v3'].
+
+        Lets the black-screen check say WHY the picture is black:
+          []                          nothing visible: unhide or add a capture source
+          only game/window capture    normal until the game is running
+          monitor_capture / other     today's warning (re-pick the display)
+        blackcheck.scene_setup() turns this list into that verdict.
+
+        Nested scenes and groups are opened up (up to 3 levels), because their
+        sources draw into this scene too. An item whose type can't be read
+        (including a nested scene OBS refuses to list) counts as 'unknown',
+        which never qualifies for the softer verdicts. A nested lookup that
+        times out is a connection problem, handled like any other: reconnect,
+        retry the whole lookup once, else None. Hidden items are left out:
+        they draw nothing.
+
+        None when it can't tell: no connection, a refused request, or a client
+        (old library, test fake) without the scene-item requests. A missing
+        method returns None BEFORE touching the socket, so it can never trigger
+        a reconnect."""
+        with self._lock:
+            client = self._client
+            if client is None or not all(
+                    callable(getattr(client, m, None))
+                    for m in ("get_current_program_scene", "get_scene_item_list")):
+                return None
+
+            def go():
+                name = _scene_name(self._client.get_current_program_scene())
+                if not name:
+                    return None
+                return self._scene_kinds(name, False, 0, frozenset([name]))
+            return self._call(go, None, "scene sources")
+
+    def _scene_kinds(self, scene, is_group, depth, parents) -> List[str]:
+        if is_group and callable(getattr(self._client,
+                                         "get_group_scene_item_list", None)):
+            resp = self._client.get_group_scene_item_list(scene)
+        else:
+            resp = self._client.get_scene_item_list(scene)
+        items = getattr(resp, "scene_items", None)
+        if not isinstance(items, list):
+            raise ValueError("OBS sent no scene item list")
+        kinds = []
+        for it in items:
+            if not isinstance(it, dict):
+                kinds.append("unknown")
+                continue
+            if it.get("sceneItemEnabled") is False:
+                continue                       # hidden: draws nothing
+            kind = it.get("inputKind")
+            if kind:
+                kinds.append(str(kind))
+                continue
+            src = it.get("sourceName")
+            nested = it.get("sourceType") == "OBS_SOURCE_TYPE_SCENE"
+            # `parents` is this branch's chain of scenes: a scene that (via
+            # another) contains itself stops here instead of looping.
+            if nested and src and src not in parents and depth < _SCENE_NEST_LIMIT:
+                # Only an ANSWERED failure (OBS refused, or replied without a
+                # list) counts as 'unknown'. A timeout or a dropped socket must
+                # reach _call: obsws-python never matches a reply to its
+                # request, so OBS's late answer stays queued and every later
+                # request reads the one before it, all session. _call's
+                # reconnect discards it on a fresh socket and retries.
+                try:
+                    kinds.extend(self._scene_kinds(src, bool(it.get("isGroup")),
+                                                   depth + 1, parents | {src}))
+                except (_request_error(), ValueError):
+                    kinds.append("unknown")
+            else:
+                kinds.append("unknown")
+        return kinds
 
     def get_record_directory(self) -> str:
         """OBS's recording output folder (where replay clips are saved)."""
@@ -164,14 +336,62 @@ class OBSClient:
             default="", label="get record dir") or ""
 
     def set_counter(self, count: int) -> None:
-        text = self.counter_format.format(count=count)
-        self._call(lambda: self._client.set_input_settings(
-            name=self.counter_source, settings={"text": text}, overlay=True),
-            label="set counter")
+        """Show the running kill count in the OBS text source.
+
+        The source is OPTIONAL (README), and most new users won't have one.
+        Before, the missing source raised on every kill, inside the detection
+        loop: two library tracebacks, a failure line and a full websocket
+        reconnect each time. Now OBS's 'no such source' answer (code 600) turns
+        the counter off for the rest of the session with ONE line; counter_source
+        "" turns it off from the start. Anything else (a timeout, a dropped
+        socket) keeps the usual reconnect-and-retry and never turns it off."""
+        with self._lock:
+            name = self.counter_source
+            if not name:
+                return
+            text = self._counter_text(count)
+
+            def refused(e):
+                if getattr(e, "code", None) == 600:
+                    print(f"No OBS text source named '{name}' - on-stream kill "
+                          "counter disabled (optional; see README)")
+                    self.counter_source = None
+                else:
+                    print(f"OBS set counter failed: {e}")
+                return None
+
+            self._call(lambda: self._client.set_input_settings(
+                name=name, settings={"text": text}, overlay=True),
+                label="set counter", on_refused=refused)
+
+    def _counter_text(self, count: int) -> str:
+        """counter_format from config.yaml, or the default when it is broken
+        (e.g. '{kills}'). A typo there used to raise out of set_counter and
+        abort the session at startup, all for an optional on-stream label."""
+        try:
+            return str(self.counter_format).format(count=count)
+        except Exception as e:
+            if not self._bad_counter_format:
+                self._bad_counter_format = True
+                print(f"obs.counter_format {self.counter_format!r} is not "
+                      f"usable ({type(e).__name__}: {e}); using 'Kills: {{count}}'")
+            return f"Kills: {count}"
+
+    def close(self) -> None:
+        """Close the websocket (end of session). Safe to call more than once.
+        A straggling request after this returns its default, without a line
+        on the console and without opening a new connection; connect() opens
+        it again."""
+        with self._lock:
+            self._closed = True
+            self._drop_client()
+            self._client = None
 
 
 class DryRunOBS:
     """Stand-in used by --dry-run: logs actions instead of hitting OBS."""
+
+    replay_buffer_ok = True
 
     def connect(self):
         print("[dry-run] (not connecting to OBS)")
@@ -186,6 +406,9 @@ class DryRunOBS:
     def get_scene_screenshot(self, width: int = 480) -> bytes:
         return b""
 
+    def get_scene_input_kinds(self):
+        return None
+
     def get_record_directory(self) -> str:
         return ""
 
@@ -197,3 +420,6 @@ class DryRunOBS:
 
     def recover_replay_buffer(self) -> bool:
         return False
+
+    def close(self) -> None:
+        pass
