@@ -237,7 +237,7 @@ class OCREngine:
         # Fail at engine load (the first OCR call) with a fix-it message, not
         # with a bare TesseractNotFoundError traceback. Load is lazy, so this
         # still lands on a session's first frame unless the caller runs
-        # _ensure_loaded() before its capture loop (main.py doesn't, yet).
+        # _ensure_loaded() before its capture loop (main._preload_ocr does).
         cmd = _find_tesseract()
         if cmd:
             pytesseract.pytesseract.tesseract_cmd = cmd

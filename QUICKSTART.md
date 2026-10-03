@@ -79,7 +79,9 @@ forever. The app checks for updates every time it opens and updates itself.
    **Check for update** button. The first time it opens, Windows may ask
    whether Python can use the network: allow it on **Private networks** (this
    is what lets your phone/iPad connect).
-2. **Press START.** It launches OBS for you if needed.
+2. **Press START.** It launches OBS for you if needed. The very first START
+   also downloads the OCR model (about 100 MB) and can take a minute; the
+   button reads STARTING… until it is ready.
 3. **Play Marathon in borderless windowed.**
 4. **Optional, on your phone/iPad:** the app window shows
    **"On your phone/iPad (same Wi-Fi): http://192.168.x.x:8000"**. Open that

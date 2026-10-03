@@ -2796,6 +2796,8 @@ def _run_live_inner(cfg: dict, dry_run: bool = False, stop_event=None, on_count=
 
     _tune_performance(cfg)
     engine = OCREngine(cfg.get("ocr_engine", "easyocr"), cfg.get("ocr_upscale", 3), max_dim=cfg.get("ocr_max_dim", 800))
+    # Before _setup_session marks the session live: see _preload_ocr.
+    _preload_ocr(engine, stop_event)
     s = _setup_session(cfg, dry_run)
 
     poll_fps = max(1, cfg.get("poll_fps", 5))
@@ -3038,6 +3040,47 @@ def _capture_recovered(s, loop) -> None:
             pass
     loop["cap_fails"] = 0
     loop["paused_at"] = None
+
+
+def _preload_ocr(engine, stop_event=None) -> None:
+    """Load the OCR engine (import EasyOCR, download its model on the first
+    run, pick the GPU) BEFORE the session goes live.
+
+    It used to load lazily on the loop's first read_lines(), after
+    _setup_session had already called web.set_running(True). A first START
+    whose model download was blocked, or whose torch/easyocr was broken, then
+    ended as a crash of a session that had gone live: the window app posted
+    only "Session crashed - see logs/", never friendly_start_error's reason in
+    the red START box. And on a fresh install the dashboard said WATCHING
+    during a download of tens of seconds, while kills went unread.
+
+    Loading is all this does: no OCR pass, and the size caps and VRAM handling
+    are untouched. A failure is retried OCR_STARTUP_TRIES times in all (as the
+    loop did; a CUDA hiccup at load can pass) and then raised, so it reaches
+    START. ImportError is raised at once: retrying can't install anything.
+    An engine without _ensure_loaded (a test fake) loads nothing here."""
+    load = getattr(engine, "_ensure_loaded", None)
+    if not callable(load):
+        return
+    for attempt in range(1, OCR_STARTUP_TRIES + 1):
+        try:
+            load()
+            return
+        except ImportError:
+            raise
+        except Exception as e:
+            if attempt >= OCR_STARTUP_TRIES:
+                print(f"  [ocr] the OCR engine would not load ({e}) - "
+                      "stopping so the error reaches START")
+                raise
+            print(f"  [ocr] the OCR engine did not load ({e}) - retrying")
+            _release_vram(engine)
+            wait = min(2.0, 0.5 * attempt)
+            if stop_event is not None:
+                if stop_event.wait(wait):
+                    raise
+            else:
+                time.sleep(wait)
 
 
 def _release_vram(engine) -> None:
