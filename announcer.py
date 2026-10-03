@@ -12,8 +12,10 @@ Voice quality tiers, tried in order:
   2. Windows System.Speech via PowerShell (offline, robotic — the fallback)
   3. macOS `say` (development testing)
 
-The switch is read once per session with configure(cfg), or per call with
-online=True/False on synth_to_wav / ensure_callout / ensure_medal_sounds.
+The switch: configure(cfg) sets it from a loaded config; a process that never
+calls configure() reads it from config.yaml / settings_override.yaml beside
+this file on the first render; online=True/False on synth_to_wav /
+ensure_callout / ensure_medal_sounds overrides it per call.
 It gates edge-tts only: ElevenLabs is already opt-in by key.
 
 Pick the voice with announcer_voice in config.yaml (e.g. "en-US-GuyNeural",
@@ -30,10 +32,16 @@ import sys
 DEFAULT_VOICE = "en-US-ChristopherNeural"
 DEFAULT_PITCH = "-18Hz"          # deep broadcast voice — Stan-approved
 
-# tts_online: may the Microsoft neural voice (edge-tts) be used? Defaults to
-# True so installs whose config.yaml predates the key (updates never overwrite
-# it) keep the voice they have. configure(cfg) sets it for the session.
-_ONLINE = True
+# tts_online: may the Microsoft neural voice (edge-tts) be used?
+#   None  = not decided yet. The first render reads it from config.yaml beside
+#           this file (settings_override.yaml wins), so the switch works even
+#           for a caller that never calls configure().
+#   bool  = decided: by configure(cfg) from the session's loaded config, or by
+#           that first read.
+# A missing key, a missing file or an unreadable one all mean True: installs
+# whose config.yaml predates the key (updates never overwrite it) keep the
+# voice they have.
+_ONLINE = None
 _told_offline = False
 
 _FALSY = {"false", "no", "off", "0", ""}
@@ -59,10 +67,49 @@ def configure(cfg) -> bool:
     return _ONLINE
 
 
+def _load_yaml(path):
+    """A YAML file as data, or None if it is missing or unreadable. UTF-8
+    first; an ANSI save (Notepad, cp1252) falls back to the locale encoding."""
+    try:
+        import yaml
+        with open(path, "rb") as f:
+            raw = f.read()
+        try:
+            text = raw.decode("utf-8-sig")
+        except UnicodeDecodeError:
+            import locale
+            text = raw.decode(locale.getpreferredencoding(False) or "latin-1",
+                              errors="replace")
+        return yaml.safe_load(text)
+    except Exception:
+        return None
+
+
+def _switch_from_disk(base_dir: str = "") -> bool:
+    """tts_online as load_config would see it: config.yaml, then
+    settings_override.yaml (which wins). For a process that never called
+    configure(). Missing or unreadable files leave the code default, True."""
+    base = base_dir or os.path.dirname(os.path.abspath(__file__))
+    seen = {}
+    for name in ("config.yaml", "settings_override.yaml"):
+        data = _load_yaml(os.path.join(base, name))
+        if isinstance(data, dict) and "tts_online" in data:
+            seen["tts_online"] = data["tts_online"]
+    return tts_online(seen)
+
+
+def _session_online() -> bool:
+    """The switch in force: configure()'s value, else read once from disk."""
+    global _ONLINE
+    if _ONLINE is None:
+        _ONLINE = _switch_from_disk()
+    return _ONLINE
+
+
 def _online_ok(online=None) -> bool:
-    """The per-call override when given, else the configured switch."""
+    """The per-call override when given, else the session's switch."""
     global _told_offline
-    ok = _ONLINE if online is None else bool(online)
+    ok = _session_online() if online is None else bool(online)
     if not ok:
         if not _told_offline:
             _told_offline = True
@@ -162,8 +209,8 @@ def synth_to_wav(text: str, out_wav: str, voice: str = DEFAULT_VOICE,
     (mp3 for the neural voice, wav for fallbacks) or None.
     pitch: e.g. "-18Hz" to deepen any voice (neural only).
     eleven_voice: ElevenLabs voice ID override (used when a key is set).
-    online: False skips the Microsoft neural voice; None = configure()'s
-    setting (tts_online, on unless config turns it off)."""
+    online: False skips the Microsoft neural voice; None = the session's
+    tts_online (configure(), else config.yaml; on unless config turns it off)."""
     os.makedirs(os.path.dirname(out_wav), exist_ok=True)
 
     path = _elevenlabs(text, os.path.splitext(out_wav)[0] + ".mp3",
@@ -286,7 +333,7 @@ def ensure_medal_sounds(base_dir: str, voice: str, ffmpeg: str,
     instant mid-game. Cached per voice under cache_medals/ — after the first
     render they work offline forever. Returns {kill_count: wav_path}.
     online: as synth_to_wav."""
-    online = _ONLINE if online is None else bool(online)
+    online = _session_online() if online is None else bool(online)
     mdir = _medal_dir(base_dir, voice, pitch, eleven_voice, online)
     os.makedirs(mdir, exist_ok=True)
     out = {}
@@ -325,7 +372,7 @@ def ensure_callout(base_dir: str, text: str, voice: str, ffmpeg: str,
     """One arbitrary arena-processed call-out (e.g. 'You just killed
     Marshyy!'), rendered on first use and cached beside the medals. Returns
     the wav path, or '' if no synth worked. online: as synth_to_wav."""
-    online = _ONLINE if online is None else bool(online)
+    online = _session_online() if online is None else bool(online)
     mdir = _medal_dir(base_dir, voice, pitch, eleven_voice, online)
     os.makedirs(mdir, exist_ok=True)
     slug = "".join(c for c in text.lower() if c.isalnum())[:48]

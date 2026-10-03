@@ -6,6 +6,10 @@ Microsoft. tts_online is the off switch. The code default is ON: configs that
 predate the key (updates never rewrite config.yaml) must keep the voice they
 have, so a missing key may never be read as false.
 
+Callers that never pass cfg (main.py, export_reel.py) still get the switch:
+the first render reads it from config.yaml / settings_override.yaml beside
+announcer.py, and configure(cfg) overrides that when a session calls it.
+
 Nothing here touches the network or a speaker: edge_tts is replaced with a
 recorder, ElevenLabs sees no key, and the offline synths are stubbed.
 """
@@ -179,3 +183,114 @@ def test_ensure_callout_offline_sends_nothing(edge, monkeypatch, tmp_path):
         assert wav and os.path.exists(wav)
         assert "offline_" in wav
         assert edge.offline == ["You just killed SOMEDUDE!"]
+
+
+# --- a caller that never ran configure() --------------------------------------
+# main.py, export_reel.py and the window app render voices without passing cfg.
+# Until (and even if) they call configure(cfg), the switch must still work, so
+# the first render reads it from config.yaml beside announcer.py.
+
+def _write(path, text):
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(text)
+
+
+def test_disk_read_missing_key_or_file_means_online(tmp_path):
+    assert announcer._switch_from_disk(str(tmp_path)) is True        # no files
+    _write(tmp_path / "config.yaml", "announcer_voice: x\n")
+    assert announcer._switch_from_disk(str(tmp_path)) is True        # no key
+
+
+def test_disk_read_honours_false(tmp_path):
+    _write(tmp_path / "config.yaml", "tts_online: false\n")
+    assert announcer._switch_from_disk(str(tmp_path)) is False
+
+
+def test_settings_override_wins_like_load_config(tmp_path):
+    _write(tmp_path / "config.yaml", "tts_online: true\n")
+    _write(tmp_path / "settings_override.yaml", "tts_online: false\n")
+    assert announcer._switch_from_disk(str(tmp_path)) is False
+    _write(tmp_path / "config.yaml", "tts_online: false\n")
+    _write(tmp_path / "settings_override.yaml", "tts_online: true\n")
+    assert announcer._switch_from_disk(str(tmp_path)) is True
+
+
+def test_an_ansi_saved_config_is_still_read(tmp_path):
+    """Notepad's ANSI (cp1252) save is not valid UTF-8."""
+    with open(tmp_path / "config.yaml", "wb") as f:
+        f.write("# caf\u00e9 \u2014 note\ntts_online: false\n".encode("cp1252"))
+    assert announcer._switch_from_disk(str(tmp_path)) is False
+
+
+def test_garbage_config_falls_back_to_the_code_default(tmp_path):
+    _write(tmp_path / "config.yaml", "tts_online: [unclosed\n")
+    assert announcer._switch_from_disk(str(tmp_path)) is True
+
+
+def test_the_shipped_config_reads_online():
+    assert announcer._switch_from_disk() is True
+
+
+def test_unconfigured_process_reads_the_switch_once(edge, monkeypatch, tmp_path):
+    _write(tmp_path / "config.yaml", "tts_online: false\n")
+    real = announcer._switch_from_disk
+    reads = []
+
+    def from_tmp(base_dir=""):
+        reads.append(1)
+        return real(str(tmp_path))
+
+    monkeypatch.setattr(announcer, "_switch_from_disk", from_tmp)
+    monkeypatch.setattr(announcer, "_ONLINE", None)        # configure() never ran
+    announcer.synth_to_wav("first", str(tmp_path / "f.wav"))
+    announcer.synth_to_wav("second", str(tmp_path / "g.wav"))
+    assert edge.sent == []
+    assert reads == [1]
+    # an explicit configure() (main's loaded cfg) still wins over the file
+    announcer.configure({"tts_online": True})
+    announcer.synth_to_wav("third", str(tmp_path / "h.wav"))
+    assert edge.sent == ["third"]
+
+
+def test_unconfigured_process_without_the_key_stays_online(edge, monkeypatch, tmp_path):
+    """The author's install: config.yaml has no tts_online line and nothing
+    calls configure(). The neural voice must still be tried."""
+    _write(tmp_path / "config.yaml", "announcer_voice: en-US-ChristopherNeural\n")
+    real = announcer._switch_from_disk
+    monkeypatch.setattr(announcer, "_switch_from_disk",
+                        lambda base_dir="": real(str(tmp_path)))
+    monkeypatch.setattr(announcer, "_ONLINE", None)
+    out = announcer.synth_to_wav("Roll the tape", str(tmp_path / "r.wav"))
+    assert edge.sent == ["Roll the tape"]
+    assert out and out.endswith(".mp3")
+
+
+# --- nothing reaches edge-tts around the gate ---------------------------------
+
+BASE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def test_only_announcer_imports_edge_tts():
+    """A second module calling edge-tts directly would bypass tts_online."""
+    hits = []
+    for name in sorted(os.listdir(BASE)):
+        if name.endswith(".py") and name != "announcer.py":
+            with open(os.path.join(BASE, name), encoding="utf-8") as f:
+                if "edge_tts" in f.read():
+                    hits.append(name)
+    assert hits == []
+
+
+def test_every_edge_tts_render_checks_the_switch_first():
+    import ast
+    path = os.path.join(BASE, "announcer.py")
+    with open(path, encoding="utf-8") as f:
+        src = f.read()
+    gated = []
+    for node in ast.parse(src).body:
+        if isinstance(node, ast.FunctionDef):
+            body = ast.get_source_segment(src, node)
+            if "edge_tts.Communicate" in body:
+                assert body.index("_online_ok(") < body.index("import edge_tts"), node.name
+                gated.append(node.name)
+    assert sorted(gated) == ["_edge_neural", "_medal_shout"]
