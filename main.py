@@ -576,19 +576,28 @@ def register_elim(elim_times: list, now: float, wipe_size: int = 3,
 
 
 def log_kill(cfg: dict, event, count: int) -> None:
+    """Append one row to session_log.csv. Never raises an OSError: Excel locks
+    a CSV it has open, and that PermissionError used to escape _handle_kill and
+    end the whole session. The row is lost; the kill, its clip and the rest of
+    the night are not."""
     path = os.path.join(os.path.dirname(CONFIG_PATH), cfg.get("session_log", "session_log.csv"))
     new_file = not os.path.exists(path)
-    with open(path, "a", newline="") as f:
-        w = csv.writer(f)
-        if new_file:
-            w.writerow(["wall_time", "count", "is_self_kill", "victim", "raw_line"])
-        w.writerow([
-            time.strftime("%Y-%m-%d %H:%M:%S"),
-            count,
-            event.is_self_kill,
-            event.victim.strip(),
-            event.raw_line,
-        ])
+    try:
+        # UTF-8: raw_line and victim are OCR text and can hold characters the
+        # Windows code page cannot encode. No code reads this file back.
+        with open(path, "a", newline="", encoding="utf-8") as f:
+            w = csv.writer(f)
+            if new_file:
+                w.writerow(["wall_time", "count", "is_self_kill", "victim", "raw_line"])
+            w.writerow([
+                time.strftime("%Y-%m-%d %H:%M:%S"),
+                count,
+                event.is_self_kill,
+                event.victim.strip(),
+                event.raw_line,
+            ])
+    except OSError as e:
+        print(f"  [log] could not write {path}: {e} (is it open in Excel?)")
 
 
 # --- offline test helpers ----------------------------------------------------
@@ -2235,7 +2244,6 @@ def run_live(cfg: dict, dry_run: bool = False, stop_event=None, on_count=None):
 def _run_live_inner(cfg: dict, dry_run: bool = False, stop_event=None, on_count=None):
     det, mode = build_detector(cfg)
 
-    from capture import make_capture
     from ocr import OCREngine
 
     _tune_performance(cfg)
@@ -2274,58 +2282,112 @@ def _run_live_inner(cfg: dict, dry_run: bool = False, stop_event=None, on_count=
     mon_stop = threading.Event()
     _start_perf_monitor(cfg, perf, mon_stop, lambda: s["count"], web=s["web"])
 
-    with make_capture(cfg) as cap:
+    def _wait(seconds):
+        # STOP must still work while a locked screen keeps the loop backing off
+        if stop_event is not None:
+            stop_event.wait(seconds)
+        else:
+            time.sleep(seconds)
+
+    loop = {"cap_fails": 0, "fails": 0, "tb_at": -1e9, "paused_at": None}
+    cm = None
+    try:
         try:
+            # The FIRST open is not retried: a capture that cannot start at all
+            # (bad capture_source, OBS Virtual Camera not running) is a setup
+            # mistake, and START should fail with the reason. Once the session
+            # is running, capture errors are retried and never end it.
+            cm, cap = _open_capture(cfg)
             while not (stop_event is not None and stop_event.is_set()):
                 loop_start = time.monotonic()
-                img = cap.grab()
-                lines = engine.read_lines(img)
-                if debug_ocr and lines:
-                    print(f"  [ocr] {' | '.join(lines)}")
-                blocked = is_suppressed(cfg, lines)
-                events = [] if blocked else detect_events(det, mode, lines, now=loop_start)
+                # --- grab. Win+L, Ctrl+Alt+Del or a UAC prompt switch to the
+                # secure desktop and mss raises on every grab until it's back.
+                # That used to end the night's recording; now it waits.
+                try:
+                    if cap is None:
+                        cm, cap = _open_capture(cfg)
+                    img = cap.grab()
+                except Exception as e:
+                    loop["cap_fails"] += 1
+                    _loop_error(loop, "capture", e)
+                    _capture_paused_notice(s, loop)
+                    if loop["cap_fails"] % CAPTURE_REOPEN_AFTER == 0:
+                        # mss is thread-bound: close and re-open on THIS thread
+                        _close_capture(cm)
+                        cm = cap = None
+                    _wait(CAPTURE_RETRY_SECONDS)
+                    continue
+                if loop["cap_fails"]:
+                    _capture_recovered(s, loop)
 
-                if s.get("canary") is not None:
-                    s["canary"].note_frame(lines)
-                    s["canary"].note_trigger(len(events))
-                for ev in events:
-                    _handle_kill(cfg, ev, s, on_count)
+                # --- OCR. A CUDA hiccup (OOM, a driver reset) gets the cached
+                # VRAM handed back and a retry. Never a switch to CPU: CPU
+                # EasyOCR at this rate is the frame-drop problem the size caps
+                # were frozen to prevent.
+                try:
+                    lines = engine.read_lines(img)
+                except ImportError:
+                    raise              # OCR is not installed: retrying can't help
+                except Exception as e:
+                    _release_vram(engine)
+                    if _loop_failed(s, loop, "ocr", e):
+                        break
+                    _wait(min(2.0, 0.5 * loop["fails"]))
+                    continue
 
-                # Right after a kill, read the victim's gamertag off the kill
-                # feed (the feed line expires in seconds — no waiting).
-                # ONLY for a real kill of yours: an assist popup would otherwise
-                # log a teammate's victim as "you downed", which is how a name
-                # you never killed ended up as the report's PRIME TARGET.
-                if cfg.get("track_names", True) and any(
-                        classify_event(e.raw_line) == "down" for e in events):
-                    _scan_feed_names(cfg, engine, s, expect="victim")
+                try:
+                    if debug_ocr and lines:
+                        print(f"  [ocr] {' | '.join(lines)}")
+                    blocked = is_suppressed(cfg, lines)
+                    events = [] if blocked else detect_events(det, mode, lines, now=loop_start)
 
-                _check_coalesce(s)
+                    if s.get("canary") is not None:
+                        s["canary"].note_frame(lines)
+                        s["canary"].note_trigger(len(events))
+                    for ev in events:
+                        _handle_kill(cfg, ev, s, on_count)
 
-                # Every frame (not just suppressed ones): the handler is
-                # edge-triggered and needs the clear frames to re-arm.
-                if cfg.get("capture_exfil_stats", True):
-                    _maybe_capture_exfil(cfg, engine, lines, s, loop_start)
-                if blocked and cfg.get("track_names", True):
-                    _maybe_capture_killer(cfg, engine, lines, s, loop_start)
+                    # Right after a kill, read the victim's gamertag off the kill
+                    # feed (the feed line expires in seconds — no waiting).
+                    # ONLY for a real kill of yours: an assist popup would otherwise
+                    # log a teammate's victim as "you downed", which is how a name
+                    # you never killed ended up as the report's PRIME TARGET.
+                    if cfg.get("track_names", True) and any(
+                            classify_event(e.raw_line) == "down" for e in events):
+                        _scan_feed_names(cfg, engine, s, expect="victim")
 
-                if not blocked:
-                    _maybe_detect_runner(cfg, engine, lines, s)
-                    _check_clutch(cfg, engine, s, loop_start)
+                    _check_coalesce(s)
 
-                if overlay_det is not None and not blocked and not s.get("clutch"):
-                    oev = overlay_det.process_frame(lines, now=loop_start)
-                    if oev:
-                        print("  -> HEADSHOT (skull popup)")
-                        show_overlay(cfg)
+                    # Every frame (not just suppressed ones): the handler is
+                    # edge-triggered and needs the clear frames to re-arm.
+                    if cfg.get("capture_exfil_stats", True):
+                        _maybe_capture_exfil(cfg, engine, lines, s, loop_start)
+                    if blocked and cfg.get("track_names", True):
+                        _maybe_capture_killer(cfg, engine, lines, s, loop_start)
 
-                _check_manual_kill(cfg, s, on_count)
-                _check_manual_clip(s)
+                    if not blocked:
+                        _maybe_detect_runner(cfg, engine, lines, s)
+                        _check_clutch(cfg, engine, s, loop_start)
 
-                # Replay Buffer health, free disk space and the black-capture
-                # re-check, on their own thread: a hung disk or OBS reply must
-                # not stop the OCR loop (see _maybe_housekeeping).
-                _maybe_housekeeping(cfg, s, loop_start)
+                    if overlay_det is not None and not blocked and not s.get("clutch"):
+                        oev = overlay_det.process_frame(lines, now=loop_start)
+                        if oev:
+                            print("  -> HEADSHOT (skull popup)")
+                            show_overlay(cfg)
+
+                    _check_manual_kill(cfg, s, on_count)
+                    _check_manual_clip(s)
+
+                    # Replay Buffer health, free disk space and the black-capture
+                    # re-check, on their own thread: a hung disk or OBS reply must
+                    # not stop the OCR loop (see _maybe_housekeeping).
+                    _maybe_housekeeping(cfg, s, loop_start)
+                except Exception as e:
+                    if _loop_failed(s, loop, "detect", e):
+                        break
+                    _wait(min(2.0, 0.5 * loop["fails"]))
+                    continue
+                loop["fails"] = 0
 
                 elapsed = time.monotonic() - loop_start
                 perf["iters"] += 1
@@ -2336,23 +2398,151 @@ def _run_live_inner(cfg: dict, dry_run: bool = False, stop_event=None, on_count=
             pass
         finally:
             mon_stop.set()   # stop the perf sampler
+            _close_capture(cm)
+    finally:
+        # On EVERY exit, a crash included: save the pending clip, put the
+        # dashboard back to READY and build the recap. These used to run only
+        # after a clean loop exit, so any exception lost the clip and the
+        # recap and left the dashboard on WATCHING with a ticking timer.
+        _finish_session(cfg, s, dry_run)
+
+
+# --- capture-loop resilience -------------------------------------------------
+# The loop never ends a session because the SCREEN is unavailable, and survives
+# a run of OCR / detection errors. Tracebacks go to the session log with print
+# (stderr is None under pythonw), at most one every LOOP_TRACEBACK_EVERY s.
+CAPTURE_RETRY_SECONDS = 1.5    # backoff between failed grabs
+CAPTURE_REOPEN_AFTER = 5       # consecutive failed grabs before re-opening it
+LOOP_GIVE_UP_AFTER = 60        # consecutive OCR/detection failures, then stop
+LOOP_TRACEBACK_EVERY = 30.0
+CAPTURE_NOTICE_EVERY = 60.0
+
+
+def _open_capture(cfg):
+    """make_capture(cfg), entered: (context manager, capture). If entering
+    fails half way the half-open capture is closed before the error goes up."""
+    from capture import make_capture
+    cm = make_capture(cfg)
+    try:
+        cap = cm.__enter__()
+    except BaseException:
+        _close_capture(cm)
+        raise
+    return cm, cap
+
+
+def _close_capture(cm) -> None:
+    if cm is None:
+        return
+    try:
+        cm.__exit__(None, None, None)
+    except Exception as e:
+        print(f"  [capture] close failed: {e}")
+
+
+def _loop_error(loop, what, e) -> None:
+    """Call from inside an except block: one line plus the traceback, at most
+    once every LOOP_TRACEBACK_EVERY seconds so a locked screen can't flood
+    the session log."""
+    import traceback
+    now = time.monotonic()
+    if now - loop["tb_at"] < LOOP_TRACEBACK_EVERY:
+        return
+    loop["tb_at"] = now
+    n = loop["cap_fails"] if what == "capture" else loop["fails"]
+    print(f"  [{what}] error ({n} in a row): {type(e).__name__}: {e}")
+    print(traceback.format_exc())
+
+
+def _capture_paused_notice(s, loop) -> None:
+    """'Detection paused' on the dashboard, at most once per minute."""
+    now = time.monotonic()
+    if loop["paused_at"] is None:
+        print("  [capture] the screen can't be captured (locked, Ctrl+Alt+Del or "
+              "a UAC prompt?) - detection paused, retrying")
+    if loop["paused_at"] is not None and now - loop["paused_at"] < CAPTURE_NOTICE_EVERY:
+        return
+    loop["paused_at"] = now
+    if s.get("web") is not None:
+        try:
+            s["web"].notice("Detection paused - screen unavailable", "alert")
+        except Exception:
+            pass
+
+
+def _capture_recovered(s, loop) -> None:
+    print(f"  [capture] screen capture is back after {loop['cap_fails']} failed "
+          "grab(s) - detecting again")
+    if loop["paused_at"] is not None and s.get("web") is not None:
+        try:
+            s["web"].notice("Detection resumed", "alert")
+        except Exception:
+            pass
+    loop["cap_fails"] = 0
+    loop["paused_at"] = None
+
+
+def _release_vram(engine) -> None:
+    """Hand cached VRAM back after an OCR error (engine's own, else ocr's).
+    The frozen size caps are not touched."""
+    try:
+        fn = getattr(engine, "release_vram", None)
+        if not callable(fn):
+            import ocr as _ocr
+            fn = getattr(_ocr, "release_vram", None)
+        if callable(fn):
+            fn()
+    except Exception:
+        pass
+
+
+def _loop_failed(s, loop, what, e) -> bool:
+    """Count one OCR/detection failure (call from inside the except block).
+    True when it's time to stop: LOOP_GIVE_UP_AFTER failures in a row."""
+    loop["fails"] += 1
+    _loop_error(loop, what, e)
+    if loop["fails"] < LOOP_GIVE_UP_AFTER:
+        return False
+    print(f"  [{what}] {loop['fails']} failures in a row - stopping detection. "
+          "The traceback above says why.")
+    if s.get("web") is not None:
+        try:
+            s["web"].notice("Detection stopped - kept failing, see log", "alert")
+        except Exception:
+            pass
+    return True
+
+
+def _finish_session(cfg, s, dry_run) -> None:
+    """The end of a session, run on every exit path. Each step is guarded on
+    its own, so a recap failure can't hide the error that ended the session
+    (that one is still propagating, and run_live logs it)."""
+    import traceback
+
+    def step(label, fn):
+        try:
+            return fn()
+        except Exception:
+            print(f"  [end] {label} failed:")
+            print(traceback.format_exc())
+            return None
 
     # Let a running check finish (bounded) so its lines land before the recap.
     hk = s.get("_hk_thread")
     if hk is not None:
-        hk.join(timeout=3.0)
-    _flush_coalesce(s)
-    if s["web"] is not None:
-        s["web"].set_running(False)
-    acc_line = exfil_stats_accuracy(s)
+        step("housekeeping", lambda: hk.join(timeout=3.0))
+    step("saving the last clip", lambda: _flush_coalesce(s))
+    if s.get("web") is not None:
+        step("dashboard", lambda: s["web"].set_running(False))
+    acc_line = step("accuracy", lambda: exfil_stats_accuracy(s))
     if acc_line:
         print(acc_line)
-    can_line = canary_report(s)
+    can_line = step("canary", lambda: canary_report(s))
     if can_line:
         print(can_line)
-    _end_session(cfg, s["session_tags"], s["session_start"],
-                 s["session_start_wall"], dry_run, s["obs"], s["session_id"],
-                 kills=s["count"], web=s["web"])
+    step("recap", lambda: _end_session(
+        cfg, s["session_tags"], s["session_start"], s["session_start_wall"],
+        dry_run, s["obs"], s["session_id"], kills=s["count"], web=s["web"]))
 
 
 def exfil_stats_accuracy(s) -> str:
