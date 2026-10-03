@@ -3814,17 +3814,26 @@ def run_tray(cfg: dict, dry_run: bool):
     worker.join(timeout=10)  # let the end-of-session recap finish
 
 
-def _resolve_session_dir(cfg, which: str) -> str:
+def _resolve_session_dir(cfg, which: str, *, strict: bool = False) -> str:
     """Session folder for --rebuild: a full path, a folder name, or 'latest'.
 
-    A full path is the CLI's ('Rebuild Last Session.bat' passes its arguments
-    through) and must be absolute. A name must be a folder INSIDE 'Marathon
-    Sessions': '..', '../x' and names that resolve elsewhere are refused.
-    Before, any existing directory was accepted, including one relative to
-    the current folder, and the dashboard routes fed request data in here
-    (they now validate first; this check stands on its own)."""
-    if which and which != "latest" and os.path.isabs(which) and os.path.isdir(which):
-        return which
+    A full path is accepted ONLY for the CLI ('Rebuild Last Session.bat'
+    passes its arguments through) and must be absolute. A name must be a
+    folder INSIDE 'Marathon Sessions': '..', '../x' and names that resolve
+    elsewhere are refused. Before, any existing directory was accepted,
+    including one relative to the current folder.
+
+    strict=True (names and 'latest' only) is for anything fed request data:
+    the dashboard routes (/rebuild, /clipdata, /clipthumb, /api/session) MUST
+    pass it or validate the name themselves (web-dashboard package). Without
+    it an absolute path from a request still resolves to any existing folder,
+    and a rebuild ends by tidying (moving) that folder's files."""
+    if which and which != "latest" and os.path.isabs(which):
+        if strict:
+            print(f"Refused a full path where a session name was expected: {which!r}")
+            return ""
+        if os.path.isdir(which):
+            return which
     root = ""
     # The cached folder first: rebuilding is an offline job on files already on
     # disk, so it must NOT require OBS to be running. cached_record_dir() is
@@ -3873,7 +3882,7 @@ def _resolve_session_dir(cfg, which: str) -> str:
     return os.path.join(root, names[0]) if names else ""
 
 
-def rebuild_session(cfg, which: str = "latest", rc=None) -> None:
+def rebuild_session(cfg, which: str = "latest", rc=None, *, strict: bool = False) -> None:
     """Re-run the end-of-session renders for a session already on disk.
 
     The clips are the only irreplaceable part; the montage, reels, Shorts and
@@ -3886,7 +3895,10 @@ def rebuild_session(cfg, which: str = "latest", rc=None) -> None:
 
     rc: optional status callback (LiveState.set_recap) so the dashboard's Rebuild
     button shows which stage is running. A multi-minute render with a single
-    unchanging message looks hung."""
+    unchanging message looks hung.
+
+    strict: names only, no full paths (see _resolve_session_dir); the dashboard's
+    Rebuild route must pass True."""
     def _say(note):
         print(f"  [rebuild] {note}")
         if rc is not None:
@@ -3894,7 +3906,7 @@ def rebuild_session(cfg, which: str = "latest", rc=None) -> None:
                 rc(status="building", note=note)
             except Exception:
                 pass
-    sdir = _resolve_session_dir(cfg, which)
+    sdir = _resolve_session_dir(cfg, which, strict=strict)
     if not sdir:
         if rc is not None:
             rc(status="error", note="couldn't find that session folder")

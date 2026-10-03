@@ -3,8 +3,9 @@
 It returned any existing directory: a name relative to the current folder,
 '../..', anything. The dashboard routes passed request data straight in, and a
 rebuild ends by tidying (moving) the files of whatever folder it was given.
-web-dashboard now validates before calling; this resolver no longer escapes
-on its own either. Full paths keep working for 'Rebuild Last Session.bat'.
+A name can no longer escape the root. Full paths keep working for 'Rebuild Last
+Session.bat'; callers fed request data pass strict=True (names only), which the
+web routes must do (web-dashboard package) to close the absolute-path escape.
 """
 import os
 import sys
@@ -115,3 +116,29 @@ def test_the_obs_fallback_builds_its_client_properly(monkeypatch, tmp_path):
         os.path.join(str(rec), "Marathon Sessions", "s1")
     assert made == {"host": "10.0.0.5", "port": 4456, "password": "",
                     "auto_start_replay_buffer": False}
+
+
+def test_strict_refuses_an_absolute_path(root, tmp_path, capsys):
+    """The dashboard routes feed request data in: a full path there would
+    resolve to any existing folder, so strict mode accepts names only."""
+    elsewhere = tmp_path / "victim"
+    elsewhere.mkdir()
+    assert main._resolve_session_dir({}, str(elsewhere), strict=True) == ""
+    assert main._resolve_session_dir({}, str(root / "2026-07-28_20-00-00"),
+                                     strict=True) == ""
+    assert "Refused a full path" in capsys.readouterr().out
+    assert main._resolve_session_dir({}, "2026-07-28_20-00-00", strict=True) == \
+        os.path.join(str(root), "2026-07-28_20-00-00")
+    assert main._resolve_session_dir({}, "latest", strict=True) == \
+        os.path.join(str(root), "2026-07-29_20-00-15")
+
+
+def test_rebuild_session_strict_never_touches_an_absolute_folder(root, tmp_path):
+    elsewhere = tmp_path / "victim"
+    elsewhere.mkdir()
+    (elsewhere / "001_down_20-00-00.mkv").write_bytes(b"x")
+    notes = []
+    main.rebuild_session({}, str(elsewhere), rc=lambda **kw: notes.append(kw),
+                         strict=True)
+    assert notes == [{"status": "error", "note": "couldn't find that session folder"}]
+    assert sorted(os.listdir(elsewhere)) == ["001_down_20-00-00.mkv"]
