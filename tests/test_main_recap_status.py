@@ -120,6 +120,24 @@ def test_a_montage_with_nothing_to_stitch_is_not_a_failure(monkeypatch, tmp_path
                                          []) == []
 
 
+def test_rebuilding_a_tidied_session_is_not_a_montage_failure(monkeypatch, tmp_path):
+    # tidy_session runs after every recap (failed ones too) and moves the clips
+    # into clips/. build_montage lists only the top level, so a resume or a
+    # 'Rebuild reels' of that session finds nothing to stitch. Counting clips/
+    # as "clips on disk" failed every such rebuild and wrote .recap_failed,
+    # which the attempt cap then made permanent. Real build_montage, no stub.
+    sdir = tmp_path / "Marathon Sessions" / "s1"
+    (sdir / "clips").mkdir(parents=True)
+    for c in ("001_down_20-05-00.mkv", "002_down+finisher_20-09-00.mkv"):
+        (sdir / "clips" / c).write_bytes(b"x")
+    monkeypatch.setattr(main, "_ffmpeg_available", lambda base, cfg: True)
+    assert main._session_clips_from_dir(str(sdir))      # the clips ARE there
+    assert main._build_session_artifacts(dict(QUIET, make_montage=True), str(sdir),
+                                         ["down", "down", "finisher"]) == []
+    assert not (sdir / ".recap_failed").exists()
+    assert (sdir / ".recap_done").exists()
+
+
 # --- auto-resume is capped -------------------------------------------------------
 
 def test_a_failed_recap_is_resumed_once_then_left_to_rebuild(monkeypatch, tmp_path):
