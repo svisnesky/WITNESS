@@ -574,11 +574,27 @@ class LiveState:
                     "alerts": sorted(self.alerts.values(),
                                      key=lambda a: a.get("since", 0)),
                     "tags": dict(self.tag_counts),
+                    "downs": _tile_downs(self.tag_counts),
                     "events": list(self.events),
                     "reels": [{"i": i, "label": r["label"], "time": r["time"]}
                               for i, r in enumerate(self.reels)],
                     "replays": [{"i": r["id"], "label": r["label"], "time": r["time"]}
                                 for r in reversed(self.replays)]}
+
+
+def _tile_downs(tag_counts) -> int:
+    """The DOWNS tile: exfil_stats.count_events' downs, the number the desktop
+    tiles and the recap show. It counts a +1 KILL press ('manual_kill') as a
+    down; the raw 'down' tag count did not, so the +1 button on this very page
+    never moved its own DOWNS tile. Downs do not depend on event order, so the
+    per-tag counts are enough."""
+    counts = dict(tag_counts or {})
+    try:
+        import exfil_stats
+        tags = [t for t, n in counts.items() for _ in range(int(n or 0))]
+        return int(exfil_stats.count_events(tags)[0])
+    except Exception:
+        return int(counts.get("down", 0) or 0) + int(counts.get("manual_kill", 0) or 0)
 
 
 def _esc(s):
@@ -2332,7 +2348,9 @@ PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
       if (d.count > lastCount && lastCount >= 0){ ding(); flashCount(); }
       lastCount = d.count;
       document.getElementById('count').textContent = d.count;
-      var tags = d.tags || {};
+      var tags = Object.assign({}, d.tags || {});
+      // DOWNS counts +1 presses too (server's count_events), like the desktop tiles
+      if (typeof d.downs === 'number') tags.down = d.downs;
       var maxTag = Math.max(1, tags.down||0, tags.precision||0, tags.finisher||0, tags.assist||0);
       ['down','precision','finisher','assist'].forEach(function(t){
         var v = tags[t] || 0;
