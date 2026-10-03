@@ -425,6 +425,17 @@ def test_a_moved_folder_still_runs_its_own_venv_python():
         assert _enclosing_opener("_env.bat", i) == ""       # top level, not a block
 
 
+def test_test_screenshot_strips_quotes_from_a_dragged_in_path():
+    """Dragging C:\\Users\\Bob Smith\\x.png into the prompt types it with
+    quotes; "%IMG%" then became ""C:\\Users\\Bob Smith\\x.png"", which the C
+    runtime splits in two and argparse rejects."""
+    lines = [ln.strip() for ln in _lines("2 - Test Screenshot.bat")]
+    prompt = [i for i, ln in enumerate(lines) if "set /p" in ln][0]
+    strip = lines.index('if defined IMG set "IMG=%IMG:"=%"')
+    run = [i for i, ln in enumerate(lines) if '--test-image "%IMG%"' in ln][0]
+    assert prompt < strip < run
+
+
 def test_python_version_check_accepts_only_64bit_310_to_312():
     snippet = re.search(r'-c "(import sys; raise SystemExit[^"]+)"',
                         _read("_env.bat")).group(1)
