@@ -56,3 +56,14 @@ def test_package_downloads_are_not_limited_to_first_time_setup():
     text = _flat(_readme())
     assert "First-time setup also downloads packages" not in text
     assert "any update that adds a package" in text
+
+
+def test_fps_answer_names_every_default_ocr_pass():
+    # main._check_clutch OCRs the full-frame squad panel every ~3 s while
+    # auto_sweat is on (shipped true), and _scan_feed_names reads the kill
+    # feed after each kill. "One small region" alone understates the load.
+    text = _flat(_readme())
+    start = text.index("**Will it cost me FPS?**")
+    answer = text[start:text.index("**", start + len("**Will it cost me FPS?**"))]
+    assert "auto_sweat" in answer
+    assert "kill-feed" in answer

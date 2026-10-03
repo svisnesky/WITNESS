@@ -24,7 +24,8 @@ can guarantee their policies. Use it at your own discretion. Lower-exposure
 setups are in the [Anti-cheat note](#anti-cheat-note).
 
 **Will it cost me FPS?** It OCRs one small screen region about 5 times a
-second, on the GPU when it can. Reels render at low priority after a match
+second, plus a squad-panel read every few seconds (`auto_sweat`) and a
+kill-feed read after each of your kills, on the GPU when it can. Reels render at low priority after a match
 or after you stop. Don't take our word for it: double-click
 `4 - Benchmark (will my PC handle it).bat` (or press **Benchmark** in the
 dashboard) for a number from your own PC. See [Performance](#performance-will-my-pc-handle-it).
