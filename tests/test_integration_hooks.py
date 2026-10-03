@@ -182,3 +182,18 @@ def test_gui_tiles_parse_the_lines_main_prints():
     gui.parse_console_line("KILL #3 [precision]: 'PRECISION DOWN +15 XP'", tags)
     gui.parse_console_line("(not a kill: assist) [assist]: 'RUNNER DOWN [ASSIST] +5'", tags)
     assert tags[-2:] == ["precision", "assist"]
+
+
+def test_gui_breaks_the_match_when_the_panel_could_not_be_read():
+    """main.py appends MATCH_BREAK at every exfil pass; with no readable panel
+    the pass prints exfil_stats.report({}, ...)'s 'couldn't read' line instead
+    of 'match stats'. The tiles must break there too, or the elim pending at
+    exfil folds the next match's first FINISHER."""
+    pytest.importorskip("tkinter")
+    import exfil_stats
+    import gui
+    tags = ["kill"]
+    gui.parse_console_line(exfil_stats.report({}, tags), tags)
+    gui.parse_console_line("KILL #2 [finisher]: 'FINISHER'", tags)
+    assert tags == ["kill", gui._match_break(), "finisher"]
+    assert exfil_stats.count_events(tags) == (0, 2)

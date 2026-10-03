@@ -334,6 +334,11 @@ def _set_attr(obj, name, value) -> None:
 _EVENT_RE = re.compile(r"^(?:KILL #\d+|\(not a kill: \w+\)) \[(\w+)\]")
 _RECON_RE = re.compile(
     r"\[reconcile\] game credited more (downs|runner elims) .*added (\d+)")
+# One of these prints at every exfil pass (exfil_stats.report):
+# main.py appends MATCH_BREAK on every pass, panel read or not, so the tiles
+# must break on both or a failed panel read lets a pending elim cross matches.
+_EXFIL_PASS_LINES = ("[exfil] match stats",
+                     "[exfil] summary screen seen but couldn't read")
 
 
 def _match_break() -> str:
@@ -369,7 +374,7 @@ def parse_console_line(line: str, tags: list) -> None:
         else:
             tags.extend(add)
         return
-    if "[exfil] match stats" in s:
+    if any(m in s for m in _EXFIL_PASS_LINES):
         tags.append(_match_break())
 
 
@@ -943,7 +948,7 @@ class ControlPanel:
             self._set_status(f"{self.DOT}  WATCHING", GREEN,
                              self._session_sub(0))
         if ((("KILL #" in s or "(not a kill:" in s) and "[" in s)
-                or "[reconcile]" in s or "[exfil] match stats" in s):
+                or "[reconcile]" in s or any(m in s for m in _EXFIL_PASS_LINES)):
             self._parse_kill(s)
 
 class SettingsWindow:
