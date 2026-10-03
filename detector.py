@@ -32,6 +32,24 @@ def _normalize(s: str) -> str:
     return s
 
 
+# EasyOCR reads the W in DOWN as IN on 67 of 69 real reads ('RUNNER DOIN').
+# Score with that exact token mapped back so the misread doesn't spend 9 of the
+# 15 points of fuzzy margin: one more slipped glyph anywhere and a real down
+# dropped under the 85 threshold. Whole token only: 'DOINED', 'JOIN', 'COIN' are
+# untouched, so the exfil row 'RUNNERS DOWNED' read as 'DOINED' gains nothing.
+# This is the ONLY fold that affects firing. A wider letter-fold table
+# (l/1/| -> i and friends) was measured and rejected: it made 'RUNNER KILL/WILL/
+# SHELL +XP' fire as an elim and nearly doubled false fires on negatives.
+# Scoring copy only; emitted raw/segment text keeps what OCR actually read.
+OCR_TOKEN_FIXES = {"doin": "down"}
+
+
+def fold_ocr_tokens(blob_norm: str) -> str:
+    """Map whole OCR tokens through OCR_TOKEN_FIXES ('runner doin' -> 'runner
+    down'). Expects _normalize()d text; for SCORING only, never for display."""
+    return " ".join(OCR_TOKEN_FIXES.get(t, t) for t in blob_norm.split())
+
+
 def phrase_matches(phrase_norm: str, blob_norm: str, threshold: int = 80) -> bool:
     """Guarded fuzzy match: does the (normalized) phrase appear in the blob?
 
@@ -45,6 +63,58 @@ def phrase_matches(phrase_norm: str, blob_norm: str, threshold: int = 80) -> boo
     if len(blob_norm) < max(5, 0.6 * len(phrase_norm)):
         return False
     return fuzz.partial_ratio(phrase_norm, blob_norm) >= threshold
+
+
+# --- Classification helpers (used ONLY by main.classify_event) ---------------
+# These never decide whether a popup fires: PopupDetector scores with the plain
+# normalized text plus the exact DOIN fold above. Folding glyphs into firing was
+# measured and rejected (see OCR_TOKEN_FIXES); for TAGGING an event that has
+# already fired, folding the usual EasyOCR swaps is safe and measurably better.
+# 'w' -> 'i' absorbs the systematic DOWN -> DOIN slip; 0/q->o, 1/l/|/!->i,
+# 5/$->s, 4->a are the usual digit/letter swaps (A55IST, EL1M, PRECISI0N).
+_SKEL = str.maketrans({"0": "o", "q": "o", "1": "i", "l": "i", "|": "i", "!": "i",
+                       "5": "s", "$": "s", "4": "a", "w": "i"})
+
+
+def _skel_token(tok: str) -> str:
+    low = tok.lower()
+    if not re.search(r"[a-z]", low):     # pure numbers ('15', '+1578') stay numbers
+        return re.sub(r"[^a-z0-9]", "", low)
+    return re.sub(r"[^a-z0-9]", "", low.replace("vv", "w").translate(_SKEL))
+
+
+def _tokens(text: str) -> list:
+    """[(norm, skel)] per OCR token. norm is exactly what _normalize gives, so
+    segments print as before; skel is used only for scoring. A bracket glued to
+    a word ('DOIN[ASSIST]') starts a new token."""
+    out = []
+    for tok in re.sub(r"(?<=\w)([\[(])", r" \1", str(text)).split():
+        norm = re.sub(r"[^a-z0-9]", "", tok.lower())
+        sk = _skel_token(tok)
+        if norm or sk:
+            out.append((norm, sk))
+    return out
+
+
+def skel_phrase(phrase: str) -> str:
+    return " ".join(_skel_token(t) for t in _normalize(phrase).split())
+
+
+def phrase_windows(toks, phrase_sk: str, threshold: float) -> list:
+    """(score, i, j) for every run of n-1..n+1 tokens matching the phrase with
+    spaces removed, so a merged 'RUNNERDOIN' or a split 'RUN NER DOIN' still
+    scores as one popup (the plain n-token window misses both)."""
+    n = max(1, len(phrase_sk.split()))
+    target = phrase_sk.replace(" ", "")
+    sks = [s for _, s in toks]
+    out = []
+    for i in range(len(sks)):
+        for span in (n - 1, n, n + 1):
+            if span >= 1 and i + span <= len(sks):
+                score = fuzz.ratio(target, "".join(sks[i:i + span]))
+                if score >= threshold:
+                    out.append((score, i, i + span))
+    return out
 
 
 class PopupDetector:
@@ -96,7 +166,7 @@ class PopupDetector:
         return ("xp" in t) or (re.search(r"\+\s*\d", t) is not None)
 
     def _matches(self, lines: Iterable[str]) -> Optional[str]:
-        blob = _normalize(" ".join(lines))
+        blob = fold_ocr_tokens(_normalize(" ".join(lines)))   # DOIN scores as DOWN
         if not blob:
             return None
         for ph in self.phrases:
@@ -114,11 +184,12 @@ class PopupDetector:
         toks = blob.split()
         if not toks:
             return 0, []
+        ftoks = [OCR_TOKEN_FIXES.get(t, t) for t in toks]   # score folded, slice original
         cands = []
         for ph in self.phrases:
             n = max(1, len(ph.split()))
             for i in range(0, len(toks) - n + 1):
-                score = fuzz.ratio(ph, " ".join(toks[i:i + n]))
+                score = fuzz.ratio(ph, " ".join(ftoks[i:i + n]))
                 if score >= max(self.threshold, 80):
                     cands.append((score, i, i + n))
         cands.sort(key=lambda c: -c[0])
