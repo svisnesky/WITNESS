@@ -855,8 +855,18 @@ class ControlPanel:
 
     def _show_phone_address(self, url):
         """This panel has no log pane, so the address main.py prints for the
-        phone/iPad used to be visible nowhere. Shown under the status."""
-        self._phone_addr = f"PHONE / IPAD (same Wi-Fi):  {url}"
+        phone/iPad used to be visible nowhere. Shown under the status.
+
+        main.py prints its LAN address whatever web_lan says, but with
+        web_lan: false it binds 127.0.0.1, so that address refuses the iPad.
+        self.cfg holds the value it bound with (web_lan is kept as launched
+        once the server is up)."""
+        cfg = getattr(self, "cfg", None) or {}
+        if cfg.get("web_lan", True):
+            self._phone_addr = f"PHONE / IPAD (same Wi-Fi):  {url}"
+        else:
+            self._phone_addr = ("PHONE / IPAD: off - this PC only "
+                                "(web_lan: false in config.yaml)")
         w = getattr(self, "addr_lbl", None)
         try:
             if w is not None and w.winfo_exists():

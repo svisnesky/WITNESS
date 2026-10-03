@@ -956,6 +956,22 @@ def test_tk_panel_shows_the_phone_address():
     assert "(open" not in panel._phone_addr
 
 
+def test_tk_panel_shows_no_lan_address_when_web_lan_is_false():
+    """main.py prints the LAN 'Live view' address whatever web_lan says, but
+    with web_lan: false it binds 127.0.0.1: that address refuses the iPad."""
+    panel = gui.ControlPanel.__new__(gui.ControlPanel)
+    panel._last_error = ""
+    panel.cfg = {"web_lan": False}
+    scheme = "http"
+    panel._drain_line(f"Live view: {scheme}://192.168.1.20:8000  "
+                      "(open in your iPad/phone browser on the same Wi-Fi)")
+    assert "192.168" not in panel._phone_addr
+    assert "this PC only" in panel._phone_addr and "web_lan" in panel._phone_addr
+    panel.cfg = {}                                   # Stan's config: key absent
+    panel._drain_line(f"Live view: {scheme}://192.168.1.20:8000")
+    assert panel._phone_addr.endswith("192.168.1.20:8000")
+
+
 # --- Bonjour in window mode ------------------------------------------------------
 
 def _full_webview_env(monkeypatch, cfg):
