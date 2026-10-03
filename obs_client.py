@@ -86,6 +86,10 @@ class OBSClient:
         self._bad_counter_format = False
         # Reentrant: _call may reconnect, which re-enters the lock on this thread.
         self._lock = threading.RLock()
+        # set_counter's hand-off when another thread holds _lock (see there).
+        self._counter_mu = threading.Lock()
+        self._counter_want = None
+        self._counter_worker = False
 
     def connect(self):
         with self._lock:
@@ -336,6 +340,64 @@ class OBSClient:
             default="", label="get record dir") or ""
 
     def set_counter(self, count: int) -> None:
+        """Show the running kill count in the OBS text source, without ever
+        waiting on another thread's OBS request.
+
+        The detection loop calls this on every kill. The housekeeping thread
+        runs the black-capture and Replay Buffer checks under the same lock
+        (one websocket, see the class docstring), and a slow or hung OBS holds
+        it for the 5 s request timeout, longer with a reconnect. Waiting for it
+        here froze OCR right after a kill, exactly when the follow-up popups
+        need reading. So when the lock is busy the newest count is handed to a
+        short-lived worker thread that applies it once the lock frees, and
+        this returns at once. Counts that arrive meanwhile only replace the
+        value waiting, so the source never goes back to an older number.
+        Uncontended (the usual case) it runs right here, as before.
+
+        save_replay() is NOT handed off: the clip has to be saved, and the
+        caller acts on the result. A kill during a slow OBS check can still
+        wait for that call."""
+        with self._counter_mu:
+            self._counter_want = count
+            if self._counter_worker:
+                return              # the worker applies the newest value
+            if not self._lock.acquire(blocking=False):
+                self._counter_worker = True
+                try:
+                    threading.Thread(target=self._counter_drain,
+                                     name="obs-counter", daemon=True).start()
+                    return
+                except Exception:
+                    self._counter_worker = False   # no thread: wait as before
+                    blocking = True
+            else:
+                blocking = False
+        if blocking:
+            self._set_counter_now(count)
+            return
+        try:
+            self._set_counter_now(count)
+        finally:
+            self._lock.release()
+
+    def _counter_drain(self) -> None:
+        """Apply the newest wanted count once the lock is free; repeat while
+        newer counts keep arriving."""
+        try:
+            while True:
+                with self._lock:
+                    with self._counter_mu:
+                        value = self._counter_want
+                    self._set_counter_now(value)
+                with self._counter_mu:
+                    if self._counter_want == value:
+                        self._counter_worker = False
+                        return
+        except Exception:
+            with self._counter_mu:
+                self._counter_worker = False
+
+    def _set_counter_now(self, count: int) -> None:
         """Show the running kill count in the OBS text source.
 
         The source is OPTIONAL (README), and most new users won't have one.

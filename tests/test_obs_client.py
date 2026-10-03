@@ -114,3 +114,78 @@ def test_dryrun_stub_matches_the_interface():
                  "replay_buffer_active", "recover_replay_buffer"):
         assert hasattr(d, name), name
     assert d.recover_replay_buffer() is False
+
+
+# --- set_counter never waits on another thread's request ---------------------
+
+class _CounterFake(_FakeReq):
+    def __init__(self):
+        super().__init__()
+        self.texts = []
+
+    def set_input_settings(self, **kw):
+        self.texts.append(kw["settings"]["text"])
+        return None
+
+
+def _hold_lock(c):
+    """Hold the client's request lock on another thread, as the housekeeping
+    thread does during a slow OBS black check. Returns a release function."""
+    held, release = threading.Event(), threading.Event()
+
+    def holder():
+        with c._lock:
+            held.set()
+            release.wait(5)
+    t = threading.Thread(target=holder, daemon=True)
+    t.start()
+    assert held.wait(2)
+
+    def done():
+        release.set()
+        t.join(2)
+    return done
+
+
+def _wait_for(pred, timeout=2.0):
+    end = time.monotonic() + timeout
+    while time.monotonic() < end:
+        if pred():
+            return True
+        time.sleep(0.005)
+    return pred()
+
+
+def test_set_counter_returns_at_once_while_obs_is_busy():
+    fake = _CounterFake()
+    c = _client(fake)
+    release = _hold_lock(c)
+    t0 = time.monotonic()
+    c.set_counter(1)
+    c.set_counter(2)
+    c.set_counter(3)
+    assert time.monotonic() - t0 < 0.5, "the detection thread waited on OBS"
+    assert fake.texts == []                 # nothing sent while the lock is held
+    release()
+    assert _wait_for(lambda: not c._counter_worker)
+    # Only the newest count is applied; the source never shows an older one.
+    assert fake.texts == ["Kills: 3"]
+
+
+def test_set_counter_uncontended_runs_inline():
+    fake = _CounterFake()
+    c = _client(fake)
+    c.set_counter(4)
+    assert fake.texts == ["Kills: 4"]       # synchronous, as before
+    assert c._counter_worker is False
+
+
+def test_set_counter_after_a_handoff_keeps_the_order():
+    fake = _CounterFake()
+    c = _client(fake)
+    release = _hold_lock(c)
+    c.set_counter(5)
+    release()
+    assert _wait_for(lambda: not c._counter_worker)
+    c.set_counter(6)
+    assert fake.texts == ["Kills: 5", "Kills: 6"]

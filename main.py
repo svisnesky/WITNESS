@@ -2731,7 +2731,14 @@ def _maybe_housekeeping(cfg, s, loop_start):
 
     Busy flag: when the previous run is still going, the due run is SKIPPED
     (and its period restarts), not queued behind it. Returns the thread
-    started, or None."""
+    started, or None.
+
+    The OBS half is only partly off the detection loop: OBSClient serializes
+    every request on one lock (one websocket), and the checks hold it for the
+    whole OBS reply, up to the 5 s timeout when OBS hangs. set_counter hands
+    off instead of waiting for it, but save_replay() still waits, so a kill
+    that lands during a slow check stalls OCR until OBS answers. The disk check
+    is fully off the loop."""
     do_rb_disk = loop_start - s.get("_last_rb_check", 0.0) > 60
     every = float(cfg.get("black_check_minutes", 5)) * 60
     do_black = every > 0 and (loop_start - s.get("_black_check_at", 0)) >= every
