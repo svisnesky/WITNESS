@@ -264,3 +264,49 @@ def test_start_web_publishes_the_label(tmp_path, monkeypatch):
     finally:
         srv.shutdown()
         srv.server_close()
+
+
+# --- Save clip / +1 Kill with no session --------------------------------------
+
+def _post_raw(port, path):
+    import http.client
+    import json
+    c = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+    try:
+        c.request("POST", path, body=b"{}",
+                  headers={"Content-Type": "application/json"})
+        r = c.getresponse()
+        return r.status, json.loads(r.read() or b"{}")
+    finally:
+        c.close()
+
+
+def test_clip_and_addkill_say_not_running_when_idle():
+    """They used to answer ok and flash green, while LiveState.reset() threw
+    the request away at the next START."""
+    st = _state()
+    srv = webserver.start_web(st, 0, os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))), "127.0.0.1")
+    port = srv.server_address[1]
+    try:
+        for path in ("/clip", "/addkill"):
+            code, body = _post_raw(port, path)
+            # 200, not 4xx: the iOS app treats any non-2xx as "PC didn't respond"
+            assert code == 200 and body == {"ok": False, "error": "not running"}
+        assert st.pop_clip_request() is False and st.pop_kill_request() is False
+        st.set_running(True)
+        assert _post_raw(port, "/clip") == (200, {"ok": True})
+        assert _post_raw(port, "/addkill") == (200, {"ok": True})
+        assert st.pop_clip_request() is True and st.pop_kill_request() is True
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+
+def test_the_live_page_disables_the_buttons_while_idle():
+    p = webserver.PAGE
+    assert "b.disabled = !d.running" in p and "'Press START first'" in p
+    assert "['clip', 'addk']" in p
+    # the reply decides what the button says
+    assert "'NOT RUNNING'" in p and "j.ok === false" in p
+    assert "pressAction('clip', '/clip'" in p and "pressAction('addk', '/addkill'" in p

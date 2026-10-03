@@ -113,6 +113,25 @@ def test_every_page_links_to_the_clip_viewer():
         assert "/clips" in pg
 
 
+def _nav(page):
+    import re
+    nav = re.search(r'<nav class="nav">(.*?)</nav>', page, re.S).group(1)
+    return re.findall(r'href="(/[a-z]*)"', nav), nav
+
+
+def test_all_four_pages_share_one_nav_order_with_no_duplicates():
+    """PAGE, Archive and Stats each had 'Reels' AND 'Archive' going to /archive,
+    and a different order from the Clips page."""
+    for pg in (webserver.PAGE, webserver.STATS_PAGE, webserver.ARCHIVE_PAGE,
+               webserver.CLIPS_PAGE):
+        hrefs, nav = _nav(pg)
+        assert ">Reels<" not in nav
+        pages = [h for i, h in enumerate(hrefs) if h not in hrefs[:i]]
+        assert pages == ["/", "/clips", "/stats", "/archive"], pages
+    # the Live page's entries are real links now, not onclick= navigations
+    assert "location.href='/" not in _nav(webserver.PAGE)[1]
+
+
 def test_the_viewer_page_has_the_promised_controls():
     p = webserver.CLIPS_PAGE
     for needed in ("Export reel", "Auto-trim to the action", "Only real kills",

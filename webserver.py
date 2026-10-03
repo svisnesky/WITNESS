@@ -1533,12 +1533,21 @@ def start_web(state, port, base_dir, host="0.0.0.0"):
             if self._refused(post=True):
                 return
             try:
-                if path == "/clip":
-                    state.request_clip()
-                    self._send(b'{"ok":true}', "application/json", cache=False)
-                elif path == "/addkill":
-                    state.request_kill()
-                    self._send(b'{"ok":true}', "application/json", cache=False)
+                if path in ("/clip", "/addkill"):
+                    # Only a running session consumes these; LiveState.reset()
+                    # throws an idle press away at the next START. So say so
+                    # (200 + ok:false: the iOS app's post() treats any non-2xx
+                    # as "the PC didn't respond"). The PC's global hotkeys
+                    # don't come through here and are unchanged.
+                    if not state.running:
+                        self._send(b'{"ok":false,"error":"not running"}',
+                                   "application/json", cache=False)
+                    else:
+                        if path == "/clip":
+                            state.request_clip()
+                        else:
+                            state.request_kill()
+                        self._send(b'{"ok":true}', "application/json", cache=False)
                 elif path == "/benchmark":
                     try:
                         import benchmark
@@ -1714,7 +1723,7 @@ ARCHIVE_PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
   .rb { margin-right:10px; }
 </style></head><body><div class="wrap">
   <div class="top"><img src="/skull.png" alt=""><span class="wm">WITNESS</span>
-    <nav class="nav"><a href="/">Live</a><a href="/clips">Clips</a><a href="/archive">Reels</a>
+    <nav class="nav"><a href="/">Live</a><a href="/clips">Clips</a>
       <a href="/stats">Stats</a><a class="on" href="/archive">Archive</a>
       <a href="/archive" title="Refresh — new reels finish rendering after you stop">&#8635; Refresh</a></nav></div>
   <div class="kick">Archive</div>
@@ -1819,7 +1828,7 @@ STATS_PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
     border:1px solid var(--sborder); border-radius:12px; padding:20px; }
 </style></head><body><div class="wrap">
   <div class="top"><img src="/skull.png" alt=""><span class="wm">WITNESS</span>
-    <nav class="nav"><a href="/">Live</a><a href="/clips">Clips</a><a href="/archive">Reels</a>
+    <nav class="nav"><a href="/">Live</a><a href="/clips">Clips</a>
       <a class="on" href="/stats">Stats</a><a href="/archive">Archive</a></nav></div>
   <div class="kick">Career</div>
   <h2>Career stats</h2>
@@ -1904,7 +1913,7 @@ PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
     box-shadow:0 0 10px var(--danger); }
   .nav { margin-left:14px; display:flex; gap:4px; flex-wrap:wrap; }
   .nav a { font:500 12.5px var(--ui); color:var(--muted); padding:6px 10px;
-    border-radius:7px; cursor:pointer; white-space:nowrap; }
+    border-radius:7px; cursor:pointer; white-space:nowrap; text-decoration:none; }
   .nav a:hover { color:var(--sec); }
   .nav a.on { color:var(--text); background:var(--surface); }
   .runbtn { margin-left:auto; background:transparent; border:1px solid rgba(255,75,66,.5);
@@ -1964,6 +1973,8 @@ PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
   .btn.ghost { background:transparent; color:var(--accent-light);
     border:1px solid var(--accent-deep); }
   .btn.fired { background:var(--green); color:#0b0f12; border-color:var(--green); }
+  .btn:disabled { opacity:.45; cursor:default; transform:none; filter:none; }
+  .btn.refused { color:var(--danger-br); border:1px solid var(--danger); background:transparent; }
 
   /* match timeline */
   .tl { margin-top:26px; }
@@ -2088,11 +2099,10 @@ PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
     <span class="wm">WITNESS</span>
     <span class="livepill" id="livepill"><i></i>LIVE</span>
     <nav class="nav">
-      <a class="on">Live</a>
-      <a onclick="location.href='/clips'">Clips</a>
-      <a onclick="location.href='/archive'">Reels</a>
-      <a onclick="location.href='/stats'">Stats</a>
-      <a onclick="location.href='/archive'">Archive</a>
+      <a class="on" href="/">Live</a>
+      <a href="/clips">Clips</a>
+      <a href="/stats">Stats</a>
+      <a href="/archive">Archive</a>
       <a onclick="openSettings()">Settings</a>
       <a onclick="openHelp()">How to use</a>
     </nav>
@@ -2274,6 +2284,13 @@ PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
       var ub = document.getElementById('upd');
       if (ub){ ub.disabled = !!d.updating;
                ub.textContent = d.updating ? 'Checking…' : 'Check for update'; }
+      // Save clip / +1 Kill do nothing without a session (the request is
+      // dropped at the next START), so they're off until one is running.
+      ['clip', 'addk'].forEach(function(id){
+        var b = document.getElementById(id);
+        b.disabled = !d.running;
+        b.title = d.running ? '' : 'Press START first';
+      });
       if (d.version){ document.getElementById('ver').textContent = 'WITNESS \\u00b7 ' + d.version; }
       if (d.running && d.detect && typeof d.detect.fps === 'number'){
         var v = d.detect;
@@ -2329,9 +2346,9 @@ PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
         if (pu.dataset.sig !== lanSig){       // rebuild only on change
           pu.dataset.sig = lanSig;
           pu.textContent = 'On your phone/iPad (same Wi-Fi): ';
-          var ub = document.createElement('b');
-          ub.textContent = lan[0];
-          pu.appendChild(ub);
+          var addr = document.createElement('b');
+          addr.textContent = lan[0];
+          pu.appendChild(addr);
           if (lan.length > 1){
             var also = document.createElement('span');
             also.className = 'also';
@@ -2583,13 +2600,21 @@ PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
     runBusy = false;
   }
 
-  async function saveClip(){
-    var btn = document.getElementById('clip');
-    btn.textContent = 'SAVING...';
-    btn.classList.add('fired');
-    try { await fetch('/clip', {method:'POST'}); } catch(e){}
-    setTimeout(function(){ btn.textContent='SAVE CLIP'; btn.classList.remove('fired'); }, 1500);
+  // Both buttons report what the server said: they used to flash green
+  // SAVING.../COUNTED with no session running, while the request was dropped.
+  async function pressAction(id, path, okText, idleText){
+    var btn = document.getElementById(id);
+    if (btn.disabled) return;
+    var said = okText, cls = 'fired';
+    try {
+      var j = await (await fetch(path, {method:'POST'})).json();
+      if (j && j.ok === false){ said = 'NOT RUNNING'; cls = 'refused'; }
+    } catch(e){ said = 'OFFLINE'; cls = 'refused'; }
+    btn.textContent = said;
+    btn.classList.add(cls);
+    setTimeout(function(){ btn.textContent = idleText; btn.classList.remove(cls); }, 1500);
   }
+  function saveClip(){ return pressAction('clip', '/clip', 'SAVING...', 'SAVE CLIP'); }
 
   async function runBench(){
     var btn = document.getElementById('benchbtn');
@@ -2622,13 +2647,7 @@ PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
     btn.disabled = false; btn.textContent = label;
   }
 
-  async function addKill(){
-    var btn = document.getElementById('addk');
-    btn.textContent = 'COUNTED';
-    btn.classList.add('fired');
-    try { await fetch('/addkill', {method:'POST'}); } catch(e){}
-    setTimeout(function(){ btn.textContent='+1 KILL'; btn.classList.remove('fired'); }, 1500);
-  }
+  function addKill(){ return pressAction('addk', '/addkill', 'COUNTED', '+1 KILL'); }
 
   function flashCount(){
     var el = document.getElementById('count');
