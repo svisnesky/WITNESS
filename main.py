@@ -2765,9 +2765,10 @@ def canary_report(s) -> str:
 
 
 def _end_session(cfg, tags, start_monotonic, start_wall, dry_run, obs=None,
-                 session_id=None, kills=None, web=None):
+                 session_id=None, kills=None, web=None, health_note=""):
     # kills = real kills (a down + its finisher counted once); tags = every
-    # detected event, for the type breakdown.
+    # detected event, for the type breakdown. health_note: the detection
+    # canary's verdict when it isn't 'ok', shown on the final recap.
     def _rc(**kw):   # push build status to the dashboard's recap panel
         if web is not None:
             try:
@@ -2788,8 +2789,16 @@ def _end_session(cfg, tags, start_monotonic, start_wall, dry_run, obs=None,
     print(f"Assists (clips only, not counted): {c.get('assist', 0)}")
     print(f"Duration: {dur_min:.1f} min  |  {total / dur_min:.2f} kills/min")
 
-    if total == 0 or dry_run:
-        _rc(status="ready", note="", report="", kills=total)
+    # The recap used to say "Everything built" for these too. No session
+    # marker is written: an assist-only session's clips still get their
+    # montage from the launch-time resume, as before.
+    if dry_run:
+        _rc(status="ready", note=_join_notes(health_note, DRY_RUN_NOTE),
+            report="", kills=total)
+        return
+    if total == 0:
+        _rc(status="ready", note=_join_notes(health_note, NO_KILLS_NOTE),
+            report="", kills=total)
         return
     _rc(status="building", note="building your highlights…", report="", kills=total)
     session = {
@@ -2833,7 +2842,11 @@ def _end_session(cfg, tags, start_monotonic, start_wall, dry_run, obs=None,
 
     session_dir = ""
     if obs is not None and session_id:
-        rec = obs.get_record_directory()
+        try:
+            rec = obs.get_record_directory()
+        except Exception as e:
+            print(f"(couldn't ask OBS for the clip folder: {e})")
+            rec = ""
         session_dir = os.path.join(rec, "Marathon Sessions", session_id) if rec else ""
 
     # WITNESS Report — the end-of-night dossier (written case file + spoken).
@@ -2878,9 +2891,54 @@ def _end_session(cfg, tags, start_monotonic, start_wall, dry_run, obs=None,
         except Exception as e:
             print(f"(witness report error: {e})")
 
-    _build_session_artifacts(cfg, session_dir, tags, rc=_rc,
-                             report_speech=report_speech)   # writes .recap_done
-    _rc(status="ready", note="")   # everything built — safe to close now
+    failures = _build_session_artifacts(cfg, session_dir, tags, rc=_rc,
+                                        report_speech=report_speech)
+    # 'ready' with an empty note is the only "Everything built"; a failed
+    # stage is 'error' with the reasons (the dashboard draws both).
+    status, note = _recap_verdict(session_dir, failures)
+    _rc(status=status, note=_join_notes(health_note, note))
+
+
+# Final recap notes (the dashboard shows them on the recap box).
+NO_KILLS_NOTE = "No kills this session - nothing to build"
+DRY_RUN_NOTE = "Dry run - nothing was saved"
+FFMPEG_SKIP_NOTE = "ffmpeg not found - clips saved, reels skipped (QUICKSTART step 3)"
+NO_FOLDER_NOTE = "OBS didn't report its recording folder - reels skipped"
+# Launch-time auto-resume of a FAILED recap stops after this many failed
+# attempts (the end-of-session build counts as the first). The Archive's
+# Rebuild button and "Rebuild Last Session.bat" still retry by hand.
+RECAP_AUTO_RESUME_MAX = 2
+
+
+def _join_notes(*notes) -> str:
+    return " | ".join(n for n in notes if n)
+
+
+def _recap_verdict(session_dir, failures) -> tuple:
+    """(status, note) for the final recap after _build_session_artifacts."""
+    failures = list(failures or [])
+    if failures:
+        return "error", (f"{len(failures)} stage(s) failed: "
+                         + "; ".join(str(f)[:160] for f in failures))
+    if not session_dir:
+        return "ready", NO_FOLDER_NOTE
+    if os.path.exists(os.path.join(session_dir, ".recap_skipped")):
+        return "ready", FFMPEG_SKIP_NOTE
+    return "ready", ""
+
+
+def _recap_attempts(session_dir) -> int:
+    """How many recap builds of this session have failed: the attempts=N in
+    .recap_failed (1 for a file from before the counter), 0 for none."""
+    import re
+    path = os.path.join(session_dir or "", ".recap_failed")
+    try:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            first = f.readline()
+    except OSError:
+        return 0
+    m = re.search(r"attempts=(\d+)", first)
+    return int(m.group(1)) if m else 1
 
 
 def _build_session_artifacts(cfg, session_dir, tags, rc=None, report_speech=""):
@@ -2900,14 +2958,31 @@ def _build_session_artifacts(cfg, session_dir, tags, rc=None, report_speech=""):
     # or rebuilt. A recap is only "done" if nothing failed.
     failures = []
 
+    # No ffmpeg: every render stage below would fail (and leave card PNGs
+    # behind). Skip them cleanly, still tidy, and mark the session SKIPPED so
+    # the launch-time resume doesn't retry it on every boot.
+    base = os.path.dirname(os.path.abspath(__file__))
+    renders_on = bool(session_dir) and any((
+        cfg.get("make_montage", True), cfg.get("play_of_the_night", True),
+        cfg.get("make_shorts", True), cfg.get("make_session_reel", True),
+        cfg.get("youtube_upload_session_reel", False)))
+    skip = renders_on and not _ffmpeg_available(base, cfg)
+    if skip:
+        print(f"  [recap] {FFMPEG_SKIP_NOTE}")
+        _rc(note=FFMPEG_SKIP_NOTE)
+
     # Highlight montage of this session's clips (needs ffmpeg + organized clips).
-    _rc(note="building session montage…")
-    if cfg.get("make_montage", True) and session_dir:
+    if not skip:
+        _rc(note="building session montage…")
+    if cfg.get("make_montage", True) and session_dir and not skip:
         try:
             import montage
-            base = os.path.dirname(os.path.abspath(__file__))
             made = montage.build_montage(session_dir,
                                          montage.find_ffmpeg(base, cfg))
+            # None with clips on disk is a failed montage, not "nothing to do"
+            # (build_montage prints why and returns None).
+            if made is None and _session_clips_from_dir(session_dir):
+                failures.append("montage: no montage was built")
             # The montage is the one Stan actually wants on YouTube ("mainly the
             # end montage"), and it was the only artifact with no upload flag.
             if made and cfg.get("youtube_upload_montage", False):
@@ -2924,12 +2999,12 @@ def _build_session_artifacts(cfg, session_dir, tags, rc=None, report_speech=""):
     # Play of the Night — the single best clip across the WHOLE session, cut
     # into its own reel. Scoring is the same pick as per-match POTG (most kills,
     # ties to the flashier tag, then latest), run over every session clip.
-    _rc(note="cutting Play of the Night…")
-    if cfg.get("play_of_the_night", True) and session_dir:
+    if not skip:
+        _rc(note="cutting Play of the Night…")
+    if cfg.get("play_of_the_night", True) and session_dir and not skip:
         try:
             import match_reel
             import montage
-            base = os.path.dirname(os.path.abspath(__file__))
             clips = _session_clips_from_dir(session_dir)
             if clips:
                 best = (match_reel.pick_potg(clips)
@@ -2955,12 +3030,12 @@ def _build_session_artifacts(cfg, session_dir, tags, rc=None, report_speech=""):
             failures.append(f"play of the night: {e}")
 
     # Vertical Shorts render of each clip (needs ffmpeg + organized clips).
-    _rc(note="rendering vertical Shorts…")
-    if cfg.get("make_shorts", True) and session_dir:
+    if not skip:
+        _rc(note="rendering vertical Shorts…")
+    if cfg.get("make_shorts", True) and session_dir and not skip:
         try:
             import montage
             import shorts
-            base = os.path.dirname(os.path.abspath(__file__))
             shorts.build_shorts(session_dir, montage.find_ffmpeg(base, cfg),
                                 with_labels=cfg.get("shorts_labels", True),
                                 theme=cfg.get("theme"),
@@ -2980,9 +3055,10 @@ def _build_session_artifacts(cfg, session_dir, tags, rc=None, report_speech=""):
 
     # Session highlight reel (all clips + title card + Play of the Game), and
     # optional unlisted YouTube upload of just that one video.
-    _rc(note="building the session reel (the big one)…")
-    if session_dir and (cfg.get("make_session_reel", True)
-                        or cfg.get("youtube_upload_session_reel", False)):
+    if not skip:
+        _rc(note="building the session reel (the big one)…")
+    if session_dir and not skip and (cfg.get("make_session_reel", True)
+                                     or cfg.get("youtube_upload_session_reel", False)):
         if not _build_session_reel_and_upload(cfg, session_dir, tags,
                                               report_speech=report_speech):
             failures.append("session reel")
@@ -2996,28 +3072,42 @@ def _build_session_artifacts(cfg, session_dir, tags, rc=None, report_speech=""):
         except Exception as e:
             print(f"  [tidy] skipped: {e}")
 
-    # Completion marker: tells the launch-time resume check this session's
-    # recap finished (covers configs where the session reel itself is off,
-    # and stops a failed reel build from re-rendering on every boot).
+    # Markers for the launch-time resume check (find_unfinished_session):
+    #   .recap_done     finished (covers configs where the session reel is off)
+    #   .recap_failed   a stage failed: NOT done, so the next launch resumes it.
+    #                   Line 1 counts the failed attempts; once it reaches
+    #                   RECAP_AUTO_RESUME_MAX the auto-resume stops (a stage
+    #                   that keeps failing used to re-render on every boot).
+    #                   The reasons follow, one per line.
+    #   .recap_skipped  no ffmpeg: nothing could be rendered, nothing to resume
     if session_dir:
         stamp = time.strftime("%Y-%m-%d %H:%M:%S")
         try:
             if failures:
-                # Do NOT mark it done. Leaving the marker off is what lets the
-                # launch-time resume check pick this session back up, and the
-                # reasons file says what to look at.
+                attempts = _recap_attempts(session_dir) + 1
                 with open(os.path.join(session_dir, ".recap_failed"), "w",
                           encoding="utf-8") as f:
-                    f.write(stamp + "\n" + "\n".join(failures) + "\n")
+                    f.write(f"{stamp} attempts={attempts}\n"
+                            + "\n".join(failures) + "\n")
                 print(f"  [recap] {len(failures)} stage(s) FAILED — not marking "
                       f"this session complete so it can be rebuilt:")
                 for why in failures:
                     print(f"          - {why}")
+            elif skip:
+                with open(os.path.join(session_dir, ".recap_skipped"), "w",
+                          encoding="utf-8") as f:
+                    f.write(f"{stamp}\n{FFMPEG_SKIP_NOTE}\n")
             else:
-                with open(os.path.join(session_dir, ".recap_done"), "w") as f:
+                with open(os.path.join(session_dir, ".recap_done"), "w",
+                          encoding="utf-8") as f:
                     f.write(stamp)
+                try:           # a resume that succeeded: the old failure is stale
+                    os.remove(os.path.join(session_dir, ".recap_failed"))
+                except OSError:
+                    pass
         except OSError:
             pass
+    return failures
 
 
 def find_unfinished_session(record_dir: str) -> str:
@@ -3041,8 +3131,11 @@ def find_unfinished_session(record_dir: str) -> str:
         if not clips:
             continue
         if (os.path.exists(os.path.join(sdir, ".recap_done"))
-                or os.path.exists(os.path.join(sdir, "session_reel.mp4"))):
+                or os.path.exists(os.path.join(sdir, "session_reel.mp4"))
+                or os.path.exists(os.path.join(sdir, ".recap_skipped"))):
             return ""          # newest session is complete — nothing to resume
+        if _recap_attempts(sdir) >= RECAP_AUTO_RESUME_MAX:
+            return ""          # failed again on resume: leave it to Rebuild
         return sdir
     return ""
 
@@ -3073,9 +3166,13 @@ def resume_unfinished_recap(web=None) -> bool:
         tags = []
         for c in _session_clips_from_dir(sdir):
             tags += [t for t in str(c.get("tag", "")).split("+") if t]
-        _build_session_artifacts(cfg, sdir, tags, rc=rc)   # writes .recap_done
-        rc(status="ready", note="")
-        print(f"  [resume] {name} recap finished")
+        failures = _build_session_artifacts(cfg, sdir, tags, rc=rc)
+        status, note = _recap_verdict(sdir, failures)
+        rc(status=status, note=note)
+        if status == "error":
+            print(f"  [resume] {name} recap still had problems: {note}")
+        else:
+            print(f"  [resume] {name} recap finished")
         return True
     except Exception as e:
         print(f"  [resume] error: {e}")
@@ -3370,8 +3467,9 @@ def rebuild_session(cfg, which: str = "latest", rc=None) -> None:
     downs, elims = _kill_counts(tags)
     print(f"  {len(clips)} clip(s) on disk -> {downs} downs, {elims} elims, "
           f"{_kill_count(tags)} kills")
-    # Clear the stale markers so this run's outcome is what counts.
-    for marker in (".recap_done", ".recap_failed"):
+    # Clear the stale markers so this run's outcome is what counts (and a
+    # manual rebuild starts the auto-resume attempt count over).
+    for marker in (".recap_done", ".recap_failed", ".recap_skipped"):
         try:
             os.remove(os.path.join(sdir, marker))
         except OSError:
@@ -3382,6 +3480,10 @@ def rebuild_session(cfg, which: str = "latest", rc=None) -> None:
         print("Rebuild complete.")
         if rc is not None:
             rc(status="ready", note=f"rebuilt {name}")
+    elif os.path.exists(os.path.join(sdir, ".recap_skipped")):
+        print(f"Rebuild skipped: {FFMPEG_SKIP_NOTE}")
+        if rc is not None:
+            rc(status="error", note=f"rebuild skipped: {FFMPEG_SKIP_NOTE}")
     else:
         why = ""
         try:
