@@ -61,6 +61,7 @@ def run(base_dir: str, do_upload: bool = False) -> int:
     try:
         import googleapiclient  # noqa: F401
         import google_auth_oauthlib  # noqa: F401
+        del googleapiclient, google_auth_oauthlib   # only checking they import
         _line(OK, "upload libraries installed")
     except ImportError:
         _line(BAD, "upload libraries missing. Run:")

@@ -192,7 +192,7 @@ def main():
         print("       - Use a free PREMADE voice: set elevenlabs_voice_id in")
         print("         config.yaml to a premade voice id. I can set a good")
         print("         ominous one for you.")
-        print(f"     Meanwhile the app auto-falls back to a premade voice, so")
+        print("     Meanwhile the app auto-falls back to a premade voice, so")
         print("     you'll still get an ElevenLabs voice (not Christopher).")
     elif code == 429:
         print("\n[!]  Rate-limited or out of credits (429). The key is fine —")

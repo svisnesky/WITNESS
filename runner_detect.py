@@ -53,7 +53,6 @@ def detect_runner(lines) -> str:
             t = "".join(c for c in tok.lower() if c.isalpha())
             if len(t) >= 3:
                 tokens.append(t)
-    blob = " ".join(tokens)
 
     candidates = []  # (specificity, runner)
     vocab = {**SHELL_TO_RUNNER, **{k: v for k, v in RUNNERS.items()}}

@@ -8,8 +8,9 @@ import loot_goblin  # noqa: E402
 
 pytest = None
 try:
-    import numpy as np
+    import numpy  # PIL needs it for these images
     from PIL import Image
+    del numpy
     HAVE_IMG = True
 except Exception:
     HAVE_IMG = False

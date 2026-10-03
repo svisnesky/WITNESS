@@ -6,7 +6,6 @@ run at full resolution: capping a 4K frame to 800px turns 34px UI text into
 silently broke those paths — this locks the split in place.
 """
 import os
-import re
 import sys
 
 import numpy as np

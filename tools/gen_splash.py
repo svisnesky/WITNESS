@@ -236,7 +236,7 @@ def render_frame(now, logo):
         ry = 426 * s
         rl = layer()
         rd = ImageDraw.Draw(rl)
-        x0, x1 = cx - wdt / 2, cx + wdt / 2
+        x0 = cx - wdt / 2
         # gradient rule: transparent->accent->accent-lt->transparent
         steps = max(2, int(wdt))
         for i in range(steps):

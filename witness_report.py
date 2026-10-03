@@ -40,7 +40,6 @@ def build_report(session: dict, victims=None, killers=None, player: str = "") ->
     prec = int(session.get("precision", 0) or 0)
     fin = int(session.get("finisher", 0) or 0)
     assist = int(session.get("assist", 0) or 0)
-    downs = int(session.get("down", 0) or 0)
     dur = float(session.get("duration_min", 0) or 0)
     kpm = float(session.get("kpm", 0) or 0)
     date = session.get("date", "")

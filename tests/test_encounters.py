@@ -86,7 +86,7 @@ def test_group_merges_ocr_spellings():
 
 
 def test_boards_session_filter(tmp_path):
-    import encounters, csv, os
+    import encounters, csv
     sdir = tmp_path / "stats"; sdir.mkdir()
     with open(sdir / "encounters.csv", "w", newline="") as f:
         w = csv.writer(f)
