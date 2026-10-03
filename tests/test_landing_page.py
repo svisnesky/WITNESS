@@ -192,6 +192,19 @@ def test_inline_script_keeps_boot_modes_and_reveal(page):
     assert "preventDefault" not in js
 
 
+def test_inline_script_survives_blocked_storage(page):
+    """With site data blocked, touching sessionStorage throws SecurityError. The
+    unguarded read on the script's first line stopped everything after it: the
+    boot overlay never left, the mode picker was dead and no .reveal section
+    ever showed. Every storage access must sit inside a try/catch."""
+    js = re.sub(r"(?m)^\s*//.*$", "", "\n".join(page.scripts))   # comment lines
+    assert "sessionStorage" in js, "boot splash no longer remembers it played; update this test"
+    guarded = re.compile(r"try\s*\{[^{}]*\}\s*catch\s*\([^)]*\)\s*\{[^{}]*\}")
+    bare = guarded.sub("", js)
+    for api in ("sessionStorage", "localStorage"):
+        assert api not in bare, f"{api} used outside a try/catch in the inline script"
+
+
 def test_page_still_renders_without_javascript(page):
     """Without JS the boot overlay must go and every .reveal section must show.
 

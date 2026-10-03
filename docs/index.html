@@ -408,14 +408,19 @@
 
 <script>
   (function(){
+    // sessionStorage throws when the browser blocks site data. Unguarded, that
+    // stopped this whole script on its first line: the boot overlay never left
+    // and every .reveal section stayed invisible.
+    var store={get:function(k){try{return sessionStorage.getItem(k);}catch(e){return null;}},
+               set:function(k,v){try{sessionStorage.setItem(k,v);}catch(e){}}};
     var boot=document.getElementById('boot');
     if(boot){
-      if(sessionStorage.getItem('witnessBooted')){ boot.remove(); }
+      if(store.get('witnessBooted')){ boot.remove(); }
       else{
         var dismiss=function(){
           if(!boot) return;
           boot.classList.add('gone');
-          sessionStorage.setItem('witnessBooted','1');
+          store.set('witnessBooted','1');
           setTimeout(function(){ if(boot){boot.remove(); boot=null;} },550);
         };
         boot.addEventListener('click',dismiss);
