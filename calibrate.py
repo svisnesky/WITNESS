@@ -301,8 +301,11 @@ def _countdown(game_name: str, seconds: int = COUNTDOWN_SECONDS):
 
 
 def _grab(eff: dict):
-    from capture import grab_full_screenshot, grab_full_virtualcam
-    source = eff.get("capture_source", "screen")
+    from capture import DEFAULT_SOURCE, grab_full_screenshot, grab_full_virtualcam
+    # The live loop's default, not "screen": with the key absent, calibrating
+    # on a desktop screenshot while detection reads the OBS Virtual Camera
+    # measures a different picture whenever the OBS canvas is not the monitor.
+    source = eff.get("capture_source", DEFAULT_SOURCE)
     if source == "obs_virtualcam":
         print("Grabbing a frame from the OBS Virtual Camera...")
         return grab_full_virtualcam(cam_index=eff.get("obs_virtualcam_index", 0))

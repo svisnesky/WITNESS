@@ -53,7 +53,7 @@ def main():
     import capture
 
     cfg = app.load_config()
-    src = cfg.get("capture_source", "obs_virtualcam")
+    src = cfg.get("capture_source", capture.DEFAULT_SOURCE)
     frac = cfg.get("detect_region_frac")
     region = cfg.get("detect_region") or cfg.get("feed_region")
 

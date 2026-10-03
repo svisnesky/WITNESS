@@ -19,6 +19,11 @@ from __future__ import annotations
 
 import numpy as np
 
+# capture_source when config has no key: what live detection has always used.
+# calibrate.py and diagnose.py read this too, so a config without the key is
+# calibrated, diagnosed and watched on the same picture.
+DEFAULT_SOURCE = "obs_virtualcam"
+
 
 def _resolve(region, region_frac, W, H) -> dict:
     """Return a pixel {x,y,w,h}. If region_frac (fractions 0-1) is given, it wins
@@ -112,7 +117,7 @@ class VirtualCamCapture:
 
 def make_capture(cfg: dict):
     """Factory: build the capture source named in config."""
-    src = cfg.get("capture_source", "obs_virtualcam")
+    src = cfg.get("capture_source", DEFAULT_SOURCE)
     region = cfg.get("detect_region") or cfg.get("feed_region")  # feed_region = legacy
     frac = cfg.get("detect_region_frac")  # fractions of the frame; wins if present
     if src == "screen":
