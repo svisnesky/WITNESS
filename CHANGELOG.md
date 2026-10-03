@@ -40,3 +40,14 @@ The first version meant for people other than its author.
   SECURITY.md lists every host the app and its libraries contact.
 - A version number, this changelog, a contributing guide and a bug-report
   form.
+
+**What an existing install will notice after updating**
+- The first launch after this update installs one small new component
+  (imageio-ffmpeg) and checks the OCR engine before the window appears. Launched
+  from the desktop shortcut this happens in a minimized window and can take a
+  minute or two. Give it time and don't launch a second copy meanwhile: two
+  installs at once can collide, and setup then simply runs again next launch.
+- The splash now waits for the update check to finish (at most 30 seconds, or
+  2 minutes while new components install), so a slow GitHub can hold it on
+  "Checking for updates...". When an update arrives, the app restarts on the
+  new version before opening, so the intro and its sound play twice.
