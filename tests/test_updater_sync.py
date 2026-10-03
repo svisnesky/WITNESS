@@ -480,6 +480,29 @@ def test_an_unwritable_file_does_not_strand_the_rest(tmp_path, monkeypatch):
     assert not os.path.exists(tmp_path / updater.VERSION_FILE)
 
 
+def test_an_unwritable_app_version_still_reports_the_change(tmp_path, monkeypatch):
+    """The files were written; only the bookmark failed. That used to raise out
+    of check_and_update, so the launcher never saw changed=True and ran the old
+    code in memory over the new files on disk."""
+    _fresh_zip(tmp_path)
+    monkeypatch.setattr(updater, "_get", FakeGitHub(_two_changes()))
+    real_open = open
+
+    def locked(path, mode="r", *a, **k):
+        if "w" in mode and str(path).endswith(updater.VERSION_FILE):
+            raise PermissionError(13, "Permission denied")
+        return real_open(path, mode, *a, **k)
+
+    monkeypatch.setattr("builtins.open", locked)
+    changed, msg = updater.check_and_update(str(tmp_path))
+    monkeypatch.undo()
+    assert changed is True
+    assert msg.startswith("Updated 2 file(s)")
+    assert "could not record the version" in msg
+    assert sorted(updater.LAST_CHANGED_FILES) == ["games/marathon.yaml", "main.py"]
+    assert _read(tmp_path, "main.py") == b"print('fixed')\n"
+
+
 # --------------------------------------------------------------------------
 # New dependencies install themselves
 

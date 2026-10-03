@@ -295,15 +295,24 @@ def _sync(base_dir: str, changed: list) -> tuple[bool, str]:
             msg += f" Updated {len(changed)} other file(s)."
         return bool(changed), msg + req_note
 
-    with open(ver_path, "w", encoding="utf-8") as f:
-        f.write(latest)
+    ver_note = ""
+    try:
+        with open(ver_path, "w", encoding="utf-8") as f:
+            f.write(latest)
+    except OSError as e:
+        # The files are already in place; only the bookmark failed (antivirus
+        # lock, read-only folder). Raising here used to hide changed=True from
+        # the launcher, so it ran old code over new files. The next launch
+        # re-checks by sha (two API calls) and finds nothing to fetch.
+        ver_note = (f"  (could not record the version in {VERSION_FILE}: "
+                    f"{e.strerror or type(e).__name__})")
 
     if not changed:
-        return False, f"Up to date ({latest[:7]})."
+        return False, f"Up to date ({latest[:7]}).{ver_note}"
     msg = f"Updated {len(changed)} file(s) to {latest[:7]}: {', '.join(changed[:6])}"
     if len(changed) > 6:
         msg += f" (+{len(changed) - 6} more)"
-    return True, msg + req_note
+    return True, msg + req_note + ver_note
 
 
 PIP_TIMEOUT = 900   # seconds; a new small dependency takes well under a minute
