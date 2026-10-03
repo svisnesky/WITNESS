@@ -541,10 +541,18 @@ def _in_venv(monkeypatch):
     monkeypatch.setattr(sys, "base_prefix", sys.prefix + "-base", raising=False)
 
 
+def _installed(monkeypatch, **versions):
+    """Pretend exactly these distributions are installed (name=version), so a
+    test reads the same on a Mac with no torch and on Stan's CUDA venv."""
+    monkeypatch.setattr(updater, "_installed_version",
+                        lambda name: versions.get(name), raising=False)
+
+
 def test_ensure_requirements_installs_missing_only(tmp_path, monkeypatch):
     import subprocess
     _write(tmp_path, "requirements.txt", b"PyYAML>=6.0\n")
     _in_venv(monkeypatch)
+    _installed(monkeypatch)                        # no torch: nothing to pin
     run = FakeRun(0)
     monkeypatch.setattr(subprocess, "run", run)
     ok, note = updater.ensure_requirements(str(tmp_path))
@@ -590,6 +598,198 @@ def test_ensure_requirements_never_touches_a_system_python(tmp_path, monkeypatch
     ok, note = updater.ensure_requirements(str(tmp_path))
     assert ok is False and run.calls == []
     assert "pip install -r requirements.txt" in note
+
+
+def test_ensure_requirements_pins_the_installed_torch_build(tmp_path, monkeypatch):
+    """No --upgrade does not mean "installed packages are left alone": pip
+    still REPLACES one whose version a requirement excludes (a raised bound,
+    or a new package that needs a newer one). For torch that is PyPI's
+    CPU-only wheel over the CUDA build, so the installed builds go in a -c
+    constraints file that pip must honour."""
+    import subprocess
+    _write(tmp_path, "requirements.txt", b"easyocr>=1.7\nzeroconf>=0.130\n")
+    _in_venv(monkeypatch)
+    _installed(monkeypatch, torch="2.7.1+cu128", torchvision="0.22.1+cu128")
+    seen = {}
+
+    def run(cmd, **kw):
+        i = cmd.index("-c")
+        with open(cmd[i + 1], encoding="utf-8") as f:
+            seen["pins"] = f.read().split()
+        seen["cmd"], seen["file"] = cmd, cmd[i + 1]
+        return subprocess.CompletedProcess(cmd, 0, b"", b"")
+
+    monkeypatch.setattr(subprocess, "run", run)
+    ok, note = updater.ensure_requirements(str(tmp_path))
+    assert ok is True, note
+    assert seen["cmd"][:6] == [sys.executable, "-m", "pip", "install",
+                               "-r", "requirements.txt"]
+    assert sorted(seen["pins"]) == ["torch==2.7.1+cu128",
+                                    "torchvision==0.22.1+cu128"]
+    assert not any("upgrade" in a for a in seen["cmd"])
+    assert not os.path.exists(seen["file"])        # temp file cleaned up
+
+
+def test_no_pin_file_means_pip_does_not_run(tmp_path, monkeypatch):
+    """Unpinned pip with torch installed is the thing being prevented, so a
+    temp folder that refuses the pin file stops the run instead."""
+    import subprocess
+    import tempfile
+    _write(tmp_path, "requirements.txt", b"zeroconf>=0.130\n")
+    _in_venv(monkeypatch)
+    _installed(monkeypatch, torch="2.7.1+cu128")
+
+    def no_temp(*a, **k):
+        raise PermissionError(13, "Permission denied")
+
+    monkeypatch.setattr(tempfile, "mkstemp", no_temp)
+    run = FakeRun(0)
+    monkeypatch.setattr(subprocess, "run", run)
+    ok, note = updater.ensure_requirements(str(tmp_path))
+    assert ok is False and run.calls == []
+    assert "did NOT install" in note
+
+
+# What pip prints when a pin holds: pip's own wording, with its help link cut
+# short (no URL literals in this repo's .py files).
+PIP_REFUSES_TORCH = b"""\
+ERROR: Cannot install -r requirements.txt (line 11) and -r requirements.txt (line 40) because these package versions have conflicting dependencies.
+
+The conflict is caused by:
+    easyocr 1.7.2 depends on torch
+    fastdetect 1.0 depends on torch>=2.9
+    The user requested (constraint) torch==2.7.1+cu128
+
+To fix this you could try to:
+1. loosen the range of package versions you've specified
+2. remove package versions to allow pip attempt to solve the dependency conflict
+
+ERROR: ResolutionImpossible: for help visit pip.pypa.io
+[notice] A new release of pip is available
+"""
+
+
+def test_a_refused_torch_change_says_what_wanted_it_and_what_was_kept(tmp_path, monkeypatch):
+    import subprocess
+    _write(tmp_path, "requirements.txt", b"fastdetect\n")
+    _in_venv(monkeypatch)
+    _installed(monkeypatch, torch="2.7.1+cu128")
+    monkeypatch.setattr(subprocess, "run", FakeRun(1, stderr=PIP_REFUSES_TORCH))
+    ok, note = updater.ensure_requirements(str(tmp_path))
+    assert ok is False
+    assert "fastdetect 1.0 depends on torch>=2.9" in note   # the bounded line
+    assert "torch 2.7.1+cu128" in note and "CPU-only" in note
+    assert "ResolutionImpossible" not in note and "notice" not in note
+    # The way out is a fresh setup (GPU torch first). Not "run the .bat
+    # again": an unpinned pip there would make exactly the swap refused here.
+    assert ".venv" in note and ".bat" not in note
+
+
+def test_an_unrelated_conflict_reports_pips_cause_not_its_help_link(tmp_path, monkeypatch):
+    import subprocess
+    _write(tmp_path, "requirements.txt", b"a\nb\n")
+    _in_venv(monkeypatch)
+    _installed(monkeypatch, torch="2.7.1+cu128")
+    err = (b"ERROR: Cannot install a==1 and b==1 because these package versions "
+           b"have conflicting dependencies.\n\nThe conflict is caused by:\n"
+           b"    a 1 depends on c<2\n    b 1 depends on c>=2\n\n"
+           b"ERROR: ResolutionImpossible: for help visit pip.pypa.io\n")
+    monkeypatch.setattr(subprocess, "run", FakeRun(1, stderr=err))
+    ok, note = updater.ensure_requirements(str(tmp_path))
+    assert ok is False
+    assert "Cannot install a==1 and b==1" in note
+    assert "ResolutionImpossible" not in note and "CPU-only" not in note
+    assert ".bat" in note                          # an ordinary retry is fine here
+
+
+def _wheel(dist_dir, name, version, requires=()):
+    """A minimal pure-Python wheel, built by hand: no network, no build
+    backend. Enough for pip to install it and resolve Requires-Dist."""
+    import base64
+    import zipfile
+    info = f"{name}-{version}.dist-info"
+    files = {
+        f"{name}/__init__.py": b"",
+        f"{info}/METADATA": (f"Metadata-Version: 2.1\nName: {name}\nVersion: {version}\n"
+                             + "".join(f"Requires-Dist: {r}\n" for r in requires)).encode(),
+        f"{info}/WHEEL": (b"Wheel-Version: 1.0\nGenerator: witness-tests\n"
+                          b"Root-Is-Purelib: true\nTag: py3-none-any\n"),
+    }
+    record = []
+    for p, b in files.items():
+        digest = base64.urlsafe_b64encode(hashlib.sha256(b).digest()).rstrip(b"=")
+        record.append(f"{p},sha256={digest.decode()},{len(b)}")
+    record.append(f"{info}/RECORD,,")
+    files[f"{info}/RECORD"] = ("\n".join(record) + "\n").encode()
+    with zipfile.ZipFile(os.path.join(str(dist_dir),
+                                      f"{name}-{version}-py3-none-any.whl"), "w") as z:
+        for p, b in files.items():
+            z.writestr(p, b)
+
+
+def test_real_pip_keeps_the_torch_build_and_still_adds_new_packages(tmp_path):
+    """Real pip, offline, in a throwaway venv. A stand-in "torch 1.0+cu128" is
+    installed and the local index also has torch 2.0. Checked by hand first:
+    plain `pip install -r` (no --upgrade) with a new package that needs
+    torch>=2.0 prints "Successfully uninstalled torch-1.0+cu128". Through
+    ensure_requirements the pin must hold, and a new package that needs
+    nothing different must still install."""
+    import subprocess
+    wheels = tmp_path / "wheels"
+    wheels.mkdir()
+    _wheel(wheels, "torch", "1.0+cu128")
+    _wheel(wheels, "torch", "2.0")
+    _wheel(wheels, "ocrlib", "1.0", ["torch"])
+    _wheel(wheels, "needsnewtorch", "1.0", ["torch>=2.0"])
+    _wheel(wheels, "plainpkg", "1.0")
+
+    venv = tmp_path / "venv"
+    made = subprocess.run([sys.executable, "-m", "venv", str(venv)],
+                          capture_output=True, timeout=300)
+    py = venv / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+    if made.returncode != 0 or not py.exists():
+        pytest.skip("cannot create a venv with pip here: "
+                    + made.stderr.decode("utf-8", "replace")[-200:])
+    env = {k: v for k, v in os.environ.items()
+           if not k.upper().startswith(("PIP_", "PYTHON"))}
+    env.update(PIP_NO_INDEX="1", PIP_FIND_LINKS=str(wheels), PIP_NO_CACHE_DIR="1",
+               PIP_DISABLE_PIP_VERSION_CHECK="1", PIP_CONFIG_FILE=os.devnull,
+               PYTHONNOUSERSITE="1")
+    subprocess.run([str(py), "-m", "pip", "install", "-q", "torch==1.0+cu128", "ocrlib"],
+                   env=env, check=True, capture_output=True, timeout=300)
+
+    repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    app = tmp_path / "app"
+    app.mkdir()
+    ensure = ("import json, sys; sys.path.insert(0, sys.argv[1]); import updater; "
+              "print(json.dumps(updater.ensure_requirements(sys.argv[2])))")
+    versions = ("import json; from importlib import metadata as m\n"
+                "def v(n):\n"
+                "    try:\n        return m.version(n)\n"
+                "    except m.PackageNotFoundError:\n        return None\n"
+                "print(json.dumps({n: v(n) for n in "
+                "('torch', 'needsnewtorch', 'plainpkg')}))")
+
+    def ensure_with(requirements):
+        _write(app, "requirements.txt", requirements)
+        out = subprocess.run([str(py), "-c", ensure, repo, str(app)], env=env,
+                             capture_output=True, timeout=300)
+        assert out.returncode == 0, out.stderr
+        ok, note = json.loads(out.stdout.decode().strip().splitlines()[-1])
+        got = subprocess.run([str(py), "-c", versions], env=env,
+                             capture_output=True, timeout=120)
+        assert got.returncode == 0, got.stderr
+        return ok, note, json.loads(got.stdout.decode())
+
+    ok, note, v = ensure_with(b"ocrlib\nneedsnewtorch\n")
+    assert v["torch"] == "1.0+cu128", note            # the build was not swapped
+    assert ok is False and v["needsnewtorch"] is None
+    assert "needsnewtorch 1.0 depends on torch>=2.0" in note
+    assert "torch 1.0+cu128" in note
+
+    ok, note, v = ensure_with(b"ocrlib\nplainpkg\n")
+    assert ok is True, note
+    assert v == {"torch": "1.0+cu128", "needsnewtorch": None, "plainpkg": "1.0"}
 
 
 def test_requirements_change_note_no_longer_asks_for_a_pip_command(tmp_path, monkeypatch):

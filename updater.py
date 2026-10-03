@@ -317,26 +317,108 @@ def _sync(base_dir: str, changed: list) -> tuple[bool, str]:
 
 PIP_TIMEOUT = 900   # seconds; a new small dependency takes well under a minute
 
+# Installed by _env.bat from PyTorch's CUDA index, not from PyPI, and pinned to
+# whatever build is installed whenever ensure_requirements runs pip. PyPI's
+# Windows torch wheels are CPU-only: if pip ever swapped one in, OCR would
+# quietly move off the GPU (Stan's RTX 5080 runs 2.x+cu128).
+GPU_PINNED = ("torch", "torchvision", "torchaudio")
+
+
+def _installed_version(name: str):
+    """Version of an installed distribution (e.g. '2.7.1+cu128'), or None."""
+    try:
+        from importlib import metadata
+        return (metadata.version(name) or "").strip() or None
+    except Exception:
+        return None
+
+
+def _gpu_pins() -> list:
+    """pip constraint lines, e.g. ['torch==2.7.1+cu128'], for each installed
+    GPU_PINNED distribution. `==` with the +cu128 label matches only that
+    exact build, so the installed one satisfies it and nothing else does."""
+    pins = []
+    for name in GPU_PINNED:
+        version = _installed_version(name)
+        if version:
+            pins.append(f"{name}=={version}")
+    return pins
+
+
+def _canon(name: str) -> str:
+    return name.lower().replace("_", "-").replace(".", "-")
+
+
+def _held_by_pin(lines: list, pins: list) -> str:
+    """When pip refused because a pin held, the line naming what wanted the
+    change ('easyocr 1.8 depends on torch>=2.9'), else ''. pip lists the pin
+    itself as 'The user requested (constraint) torch==...'."""
+    import re
+    pinned = {_canon(p.split("==", 1)[0]) for p in pins}
+    held = set()
+    for ln in lines:
+        m = re.search(r"\(constraint\)\s*([A-Za-z0-9_.\-]+)", ln)
+        if m and _canon(m.group(1)) in pinned:
+            held.add(_canon(m.group(1)))
+    if not held:
+        return ""
+    wants = []
+    for ln in lines:
+        m = re.search(r"depends on ([A-Za-z0-9_.\-]+)\s*([<>=!~]?)", ln)
+        if m and _canon(m.group(1)) in held:
+            # Best: a version bound from a package that is not itself pinned
+            # ('torchvision 0.22.1 depends on torch==2.7.1' is not the cause).
+            rank = (0 if m.group(2) else 2) + (1 if _canon(ln.split()[0]) in pinned else 0)
+            wants.append((rank, ln))
+    if wants:
+        return min(wants, key=lambda w: w[0])[1]
+    return f"a requirement needs a different {sorted(held)[0]}"
+
 
 def ensure_requirements(base_dir: str) -> tuple[bool, str]:
     """Install whatever requirements.txt lists that this venv is missing.
 
-    Plain `pip install -r requirements.txt`, never --upgrade: packages that are
-    already installed (torch with Stan's CUDA build, loaded .pyd files) are left
-    alone; only missing ones are added. Returns (ok, note) and never raises.
-    Refuses to run outside a virtualenv, so a dev box's system Python is never
-    touched. A failure here is retried by _env.bat on the next .bat launch."""
+    Plain `pip install -r requirements.txt`, never --upgrade. That alone does
+    NOT leave installed packages alone: pip still replaces one whose version a
+    requirement excludes (a raised lower bound, or a new package that needs a
+    newer version of it). For an ordinary package that is an upgrade from
+    PyPI, which is how a fix that needs a newer library arrives. For torch it
+    would be PyPI's CPU-only wheel over the CUDA build, so the installed
+    GPU_PINNED builds are pinned with `-c`: an update that needs a different
+    torch fails here with a note that says so, and the GPU build stays.
+
+    A raised bound on a package this process has already loaded (yaml,
+    rapidfuzz) can still fail on a locked .pyd on Windows; pip then exits with
+    an error and the note carries it.
+
+    The pin only lasts if _env.bat pins the same way: its `pip install -r`
+    after requirements.txt changes would otherwise make, on the next .bat
+    launch, the swap refused here.
+
+    Returns (ok, note) and never raises. Refuses to run outside a virtualenv,
+    so a dev box's system Python is never touched. Any other failure is
+    retried by _env.bat on the next .bat launch."""
     import subprocess
     import sys
+    import tempfile
     if not os.path.exists(os.path.join(base_dir, "requirements.txt")):
         return False, "requirements.txt not found; nothing installed."
     if getattr(sys, "base_prefix", sys.prefix) == sys.prefix:
         return False, ("New components were not installed (not running from "
                        "the .venv). Run: python -m pip install -r requirements.txt")
+    cmd = [sys.executable, "-m", "pip", "install", "-r", "requirements.txt"]
+    pins = _gpu_pins()
+    pin_file = None
     try:
+        if pins:
+            # If this cannot be written, the except below returns and pip
+            # does not run at all: never unpinned while torch is installed.
+            fd, pin_file = tempfile.mkstemp(prefix="witness-pins-", suffix=".txt")
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                f.write("\n".join(pins) + "\n")
+            cmd += ["-c", pin_file]
         r = subprocess.run(
-            [sys.executable, "-m", "pip", "install", "-r", "requirements.txt"],
-            cwd=base_dir, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+            cmd, cwd=base_dir, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
             stderr=subprocess.PIPE, timeout=PIP_TIMEOUT,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
     except subprocess.TimeoutExpired:
@@ -346,14 +428,31 @@ def ensure_requirements(base_dir: str) -> tuple[bool, str]:
     except Exception as e:
         return False, (f"New components did NOT install ({type(e).__name__}: "
                        f"{e}). Start WITNESS from its .bat launcher to retry.")
+    finally:
+        if pin_file:
+            try:
+                os.remove(pin_file)
+            except OSError:
+                pass
     if r.returncode == 0:
         return True, "New components installed."
     out = (r.stderr or b"") + b"\n" + (r.stdout or b"")
     lines = [ln.strip() for ln in out.decode("utf-8", "replace").splitlines()
              if ln.strip()]
-    # pip ends with "[notice] A new release of pip..." on stderr; the useful
-    # line is its last ERROR.
+    held = _held_by_pin(lines, pins)
+    if held:
+        kept = ", ".join(p.replace("==", " ") for p in pins)
+        return False, (f"New components did NOT install: {held[:160]}. WITNESS "
+                       f"keeps the installed {kept} rather than let pip swap "
+                       "it during a launch (PyPI's Windows torch is CPU-only, "
+                       "so GPU OCR would stop). To move to a newer one, "
+                       "delete the .venv folder and run START again (it "
+                       "re-downloads the OCR engine).")
+    # pip ends with "[notice] A new release of pip..." on stderr, and a
+    # dependency conflict ends with a bare "ResolutionImpossible: for help
+    # visit ..." line; the useful line is the last other ERROR.
     errs = [ln for ln in lines if ln.startswith("ERROR")]
+    errs = [ln for ln in errs if "ResolutionImpossible" not in ln] or errs
     why = (errs or lines or ["no output"])[-1]
     return False, (f"New components did NOT install (pip exit {r.returncode}: "
                    f"{why[:200]}). Start WITNESS from its .bat launcher to retry.")
