@@ -8,14 +8,25 @@ nonisolated struct WitnessClient: Sendable {
         case notWitness
         case http(Int)
         case badAddress
+        /// The PC answered 200 with {"ok": false, "error": ...}: it got the
+        /// request and said no (e.g. +1 KILL while no session is running).
+        case refused(String)
 
         var errorDescription: String? {
             switch self {
             case .notWitness: return "That address answered, but it isn't WITNESS."
             case .http(let code): return "The PC answered with an error (HTTP \(code))."
             case .badAddress: return "That doesn't look like an address. Try 192.168.1.20:8000."
+            case .refused(let why): return "The PC said no: \(why)"
             }
         }
+    }
+
+    /// The optional {ok, error} body a POST may answer with. Missing fields
+    /// (older servers send {"ok": true} or nothing) mean success.
+    private struct PostReply: Decodable {
+        let ok: Bool?
+        let error: String?
     }
 
     private static let session: URLSession = {
@@ -59,9 +70,15 @@ nonisolated struct WitnessClient: Sendable {
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.httpBody = Data("{}".utf8)
-        let (_, resp) = try await Self.session.data(for: req)
+        let (data, resp) = try await Self.session.data(for: req)
         if let http = resp as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
             throw ClientError.http(http.statusCode)
+        }
+        // The server answers a refused /clip or /addkill with 200 and
+        // {"ok": false}, so a 2xx alone is not success.
+        if let reply = try? JSONDecoder().decode(PostReply.self, from: data),
+           reply.ok == false {
+            throw ClientError.refused(reply.error ?? "refused")
         }
     }
 

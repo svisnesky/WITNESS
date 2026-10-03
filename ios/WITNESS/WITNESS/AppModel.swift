@@ -193,6 +193,9 @@ final class AppModel {
             UIImpactFeedbackGenerator(style: .medium).impactOccurred()
             show(action.done)
             await pollOnce()
+        } catch WitnessClient.ClientError.refused(let why) {
+            UINotificationFeedbackGenerator().notificationOccurred(.warning)
+            show(why == "not running" ? "Not recording - press START first" : "The PC said no: \(why)")
         } catch {
             UINotificationFeedbackGenerator().notificationOccurred(.error)
             show("The PC didn't respond")
