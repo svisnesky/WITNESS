@@ -37,8 +37,6 @@ def test_precision_is_a_modifier_on_a_down_not_its_own_kill():
 def test_handle_kill_headline_ignores_assists(tmp_path):
     """Driving _handle_kill directly: an assist event records the tag for the
     breakdown but does not bump s['count']."""
-    events = []
-
     class _Ev:
         def __init__(self, raw):
             self.raw_line = raw

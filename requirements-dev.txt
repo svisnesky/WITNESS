@@ -1,0 +1,29 @@
+# What the TEST SUITE needs, and nothing else. CI installs exactly this
+# (.github/workflows/tests.yml). The app itself never reads this file; to run
+# WITNESS, install requirements.txt.
+#
+#     python -m pip install -r requirements-dev.txt
+#     python -m pytest tests/ -q
+#
+# Deliberately not `-r requirements.txt`. That pulls easyocr + torch (gigabytes,
+# and no test needs a GPU) and edge-tts, which would let a test reach Microsoft's
+# TTS service over the network. Found by running the suite in an empty venv and
+# adding packages until it passed; Pillow went in although nothing failed
+# without it, because test_loot_goblin.py silently returns early when Pillow is
+# missing, which would pass while testing nothing.
+#
+# Lower bounds match requirements.txt, so CI tests the same versions a fresh
+# install gets.
+
+pytest>=7.0
+pyflakes>=3.0,<4                  # tests/test_undefined_names.py checks pyflakes' message classes by name
+PyYAML>=6.0
+rapidfuzz>=3.0
+numpy>=1.24
+opencv-python-headless>=4.8       # the same cv2, minus the GUI half that needs libGL (missing on the Linux runner)
+Pillow>=10.0
+zeroconf>=0.130                   # tests/test_discovery.py imports it directly
+
+# Not pip-installable but needed: ffmpeg on PATH. Without it
+# test_youtube_check.py::test_the_upload_test_is_private fails, and
+# test_ios_api.py::test_play_turns_mkv_into_a_ranged_mp4 skips. CI installs it.
