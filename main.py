@@ -613,11 +613,11 @@ def show_overlay(cfg: dict) -> None:
         script = os.path.join(base, "overlay.py")
         img_name = cfg.get("overlay_image", "witness_headshot.png")
         # soft upgrade: configs that still carry the old default get the
-        # WITNESS headshot skull (an explicit custom image is left alone)
+        # WITNESS headshot skull (an explicit custom image is left alone).
+        # A string comparison only: marathon_skull.png is Marathon game art
+        # and is no longer shipped, so this must not need that file.
         if img_name == "marathon_skull.png":
-            new = os.path.join(base, "witness_headshot.png")
-            if os.path.exists(new):
-                img_name = "witness_headshot.png"
+            img_name = "witness_headshot.png"
         image = os.path.join(base, img_name)
         if not (os.path.exists(script) and os.path.exists(image)):
             return
@@ -3629,14 +3629,15 @@ def _build_session_reel_and_upload(cfg, session_dir, tags, report_speech="") -> 
 
 
 def _tray_icon_image(base: str, cfg: dict):
-    """Build a square tray icon from the skull PNG (transparent, centered)."""
+    """Build a square tray icon from the WITNESS logo (transparent, centered)."""
     from PIL import Image
     size = 64
     canvas = Image.new("RGBA", (size, size), (0, 0, 0, 0))
     try:
         p = os.path.join(base, cfg.get("app_icon", "witness_logo.png"))
         if not os.path.exists(p):
-            p = os.path.join(base, "marathon_skull.png")
+            # our own logo, never the Marathon game art this used to fall back to
+            p = os.path.join(base, "witness_logo.png")
         im = Image.open(p).convert("RGBA")
         scale = min(size / im.width, size / im.height)
         nw, nh = max(1, round(im.width * scale)), max(1, round(im.height * scale))
