@@ -223,7 +223,9 @@ def parse_squad(frame, engine) -> list[dict]:
 
 
 # Hard ceiling (seconds, after the settle) on one exfil capture. A backstop:
-# the attempt counting below already bounds every path.
+# the attempt counting below already bounds every path. It can still end the
+# empty-panel wait early on a fast GPU when the header also misses (see the
+# note in capture_exfil_stats and tests/test_exfil_capture_loop.py).
 EXFIL_DEADLINE_S = 12.0
 
 
@@ -255,9 +257,18 @@ def capture_exfil_stats(cfg, engine, save_dir: str = "", retries: int = 3,
     squad_tried = False
     # This runs ON the detection thread: while it spins, nothing is detected,
     # no clip is saved and STOP can't land. Every exit below is bounded by
-    # `limit`, and this deadline backstops the lot (normal worst case after
-    # the settle: 7 grabs of ~5 one-off OCR passes each, plus 6 x 0.6 s waits;
-    # CPU OCR on an old card is what could push that past the deadline).
+    # `limit`, and this deadline backstops the lot. It is not only a CPU-OCR
+    # backstop: a one-off pass at 4K costs ~0.4-0.55 s even on an RTX 5080
+    # (2026-07-27 perf log: one capture blocked ~4.2 s of the 5 fps loop).
+    # - Panel empty, header read on spin 1: later spins are 1 pass + 0.6 s,
+    #   so all 7 empty_retries spins fit (~7-8 s).
+    # - Panel empty AND header missed: every spin is 5 passes (4 header bands
+    #   + the panel) + 0.6 s, ~2.6-3.4 s, so the deadline ends the wait after
+    #   4-5 of the 7 spins on a GPU. Kept at 12 s on purpose: the panel
+    #   animates in on the wall clock, and by then this case has waited longer
+    #   than the whole 7-spin wait above. ~21 s would keep all 7 spins but
+    #   only blocks detection and STOP for longer.
+    # CPU OCR (seconds a pass) hits the deadline after a spin or two.
     t0 = time.monotonic()
     while attempt < limit:
         if time.monotonic() - t0 > EXFIL_DEADLINE_S:

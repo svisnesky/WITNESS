@@ -15,6 +15,7 @@ import time as _real_time
 import types
 
 import numpy as np
+import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -138,3 +139,82 @@ def test_deadline_backstops_a_slow_loop_and_keeps_the_squad(monkeypatch, capsys)
     assert len(stats) == 6 and outc == ""
     assert len(squad) == 3
     assert "gave up waiting for the panel/header" in capsys.readouterr().out
+
+
+# --- What the deadline does on a fast GPU ------------------------------------
+# One one-off OCR pass at 4K costs ~0.4-0.55 s on an RTX 5080 (2026-07-27 perf
+# log: one exfil capture blocked ~4.2 s of the 5 fps loop for 6 passes and two
+# 0.6 s waits). So the 12 s deadline is not only a CPU-OCR backstop.
+
+class _TimedEngine:
+    """Every read_lines call costs `per_pass` seconds on the fake clock. The
+    stats panel is always empty; the header band reads ELIMINATED or nothing."""
+
+    def __init__(self, clock, per_pass, header_reads):
+        self.clock, self.per_pass, self.header_reads = clock, per_pass, header_reads
+        self.passes = 0
+
+    def read_lines(self, img, max_dim=None):
+        self.passes += 1
+        self.clock[0] += self.per_pass
+        if self.header_reads and img.shape[:2] == _HEADER_SHAPE:
+            return ["ELIMINATED"]
+        return []
+
+
+def _install_timed(monkeypatch):
+    """Like _install, but sleep() advances the fake clock too."""
+    clock = [0.0]
+    grabs = []
+
+    def sleep(s):
+        clock[0] += s
+
+    monkeypatch.setattr(exfil_stats, "time", types.SimpleNamespace(
+        sleep=sleep, monotonic=lambda: clock[0], strftime=_real_time.strftime))
+
+    def grab(cfg):
+        assert len(grabs) < 40, "capture loop still spinning after 40 grabs"
+        grabs.append(clock[0])
+        return np.zeros((H, W, 3), np.uint8)
+
+    monkeypatch.setattr(exfil_stats, "_grab_full", grab)
+    return grabs, clock
+
+
+
+@pytest.mark.parametrize("per_pass", [0.40, 0.55])
+def test_empty_panel_with_the_header_read_keeps_all_seven_spins(
+        monkeypatch, capsys, per_pass):
+    """The 07-27 empty-panel case: the header reads on spin 1, so later spins
+    are one pass + 0.6 s and the whole empty_retries wait fits the deadline."""
+    grabs, clock = _install_timed(monkeypatch)
+    eng = _TimedEngine(clock, per_pass, header_reads=True)
+    stats, _squad, outc = exfil_stats.capture_exfil_stats(
+        {"squad_stats": False}, eng)
+    assert (stats, outc) == ({}, "died")
+    assert len(grabs) == 7
+    assert "gave up waiting" not in capsys.readouterr().out
+    # settle + 8 passes (2 on spin 1, then 1 a spin) + 6 waits of 0.6 s
+    assert clock[0] == pytest.approx(0.8 + 8 * per_pass + 6 * 0.6)
+    assert clock[0] - 0.8 < exfil_stats.EXFIL_DEADLINE_S
+
+
+@pytest.mark.parametrize("per_pass, spins", [(0.40, 5), (0.55, 4)])
+def test_empty_panel_with_a_header_miss_is_cut_short_by_the_deadline(
+        monkeypatch, capsys, per_pass, spins):
+    """Header AND panel missing: each spin is 5 passes (4 header bands + the
+    panel) + 0.6 s, so on a GPU the deadline ends the wait after 4-5 of the 7
+    spins. Deliberate: the panel animates in on the wall clock, and this case
+    has already waited longer than the full 7-spin wait above."""
+    grabs, clock = _install_timed(monkeypatch)
+    eng = _TimedEngine(clock, per_pass, header_reads=False)
+    stats, _squad, outc = exfil_stats.capture_exfil_stats(
+        {"squad_stats": False}, eng)
+    assert (stats, outc) == ({}, "")
+    assert len(grabs) == spins
+    assert eng.passes == 5 * spins
+    assert "gave up waiting for the panel/header" in capsys.readouterr().out
+    # more wall time for the panel than the header-read case's whole wait
+    full_wait = 0.8 + 8 * per_pass + 6 * 0.6
+    assert clock[0] > full_wait
