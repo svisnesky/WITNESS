@@ -37,3 +37,13 @@ def test_readme_does_not_name_a_security_md_section():
     # name here goes stale silently. Link the file, not a heading.
     text = _flat(_readme())
     assert not re.search(r'"[^"]+" section of \[SECURITY\.md\]', text)
+
+
+def test_update_button_is_not_promised_while_auto_update_is_off():
+    # updater.check_and_update returns the "auto-update is off" message
+    # unless force=True, and the dashboard button calls it without force.
+    # Only Update WITNESS.bat (force) updates while auto_update is false.
+    text = _flat(_readme())
+    assert ("**Check for update** on the dashboard and `Update WITNESS.bat` "
+            "update on demand") not in text
+    assert "then only `Update WITNESS.bat` updates" in text

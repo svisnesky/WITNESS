@@ -382,8 +382,10 @@ app? See [`ios/`](ios/README.md).
 checks GitHub, downloads only the files that changed, installs any new
 packages, and relaunches on the fresh code. If the download finishes after
 the splash screen has closed, the dashboard says **RESTART WITNESS** to
-apply it instead. Turn it off with `auto_update: false`; **Check for update**
-on the dashboard and `Update WITNESS.bat` update on demand.
+apply it instead. With `auto_update` on, **Check for update** on the
+dashboard also updates on demand. Turn it off with `auto_update: false`; then
+only `Update WITNESS.bat` updates (the dashboard's **Check for update** just
+says auto-update is off).
 
 Test without OBS side effects:
 
