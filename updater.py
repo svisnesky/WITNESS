@@ -143,14 +143,63 @@ def _get(url: str, timeout: float = 10) -> bytes:
         return r.read()
 
 
-def _auto_update_enabled(base_dir: str) -> bool:
-    """Read auto_update from config.yaml without importing the app."""
+_OFF_WORDS = {"false", "no", "off", "0"}
+
+
+def _read_cfg_text(path: str) -> str:
+    """A user-editable YAML file's text, decoded the way main.load_config
+    decodes it: UTF-8 (with or without Notepad's BOM), else the locale's ANSI
+    code page. Raises OSError when it cannot be read; never a decode error."""
+    with open(path, "rb") as f:
+        raw = f.read()
+    try:
+        return raw.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        import locale
+        return raw.decode(locale.getpreferredencoding(False) or "utf-8",
+                          errors="replace")
+
+
+def _auto_update_value(text: str):
+    """auto_update from one file's text: True/False, or None when the file
+    does not set it. A file that will not parse is scanned line by line, so a
+    typo elsewhere in config.yaml cannot quietly undo the user's false."""
     try:
         import yaml
-        with open(os.path.join(base_dir, "config.yaml"), encoding="utf-8") as f:
-            return bool(yaml.safe_load(f).get("auto_update", True))
+        data = yaml.safe_load(text)
     except Exception:
-        return True
+        import re
+        m = re.search(r"(?m)^auto_update\s*:\s*['\"]?([A-Za-z0-9]+)", text)
+        if not m:
+            return None
+        return m.group(1).strip().lower() not in _OFF_WORDS
+    if not isinstance(data, dict) or "auto_update" not in data:
+        return None
+    v = data["auto_update"]
+    if isinstance(v, str):
+        return v.strip().lower() not in _OFF_WORDS
+    return bool(v)          # a bare `auto_update:` is None: off, as always
+
+
+def _auto_update_enabled(base_dir: str) -> bool:
+    """auto_update as main.load_config would see it, without importing the
+    app: config.yaml, then settings_override.yaml (which wins).
+
+    True only when no file turns it off. A missing file sets nothing. The
+    files are decoded the way main reads them: an ANSI-saved config.yaml
+    (Notepad, a typed accented name) used to fail a strict UTF-8 read here and
+    count as True, while the app itself loaded the same file fine, so updates
+    the user had turned off still ran, the dashboard's button included."""
+    value = True
+    for name in ("config.yaml", "settings_override.yaml"):
+        try:
+            text = _read_cfg_text(os.path.join(base_dir, name))
+        except OSError:
+            continue
+        v = _auto_update_value(text)
+        if v is not None:
+            value = v
+    return value
 
 
 AUTO_UPDATE_OFF_MSG = ("Auto-update is off (auto_update: false). Double-click "
