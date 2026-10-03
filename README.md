@@ -410,7 +410,7 @@ required step.
 | `4 - Benchmark (will my PC handle it).bat` | Times capture + OCR on your PC | Before you set anything else up |
 | `Diagnose Capture.bat` | Saves `diagnose_full.png` and `diagnose_region.png` and prints what OCR read | Kills missed, or the capture looks wrong |
 | `Teach a Game.bat` | The teach-a-game wizard, verify step included | Another game (experimental) |
-| `Check Voice.bat` | Says which announcer voice WITNESS will use, and why | A reel came out in the wrong voice |
+| `Check Voice.bat` | Checks your ElevenLabs key and voice | Your ElevenLabs voice isn't being used |
 | `Check YouTube.bat` | Checks the YouTube setup; `--upload` posts a 3-second PRIVATE test | After [YOUTUBE.md](YOUTUBE.md) |
 | `Rebuild Last Session.bat` | Re-renders reels, montage and Shorts from the saved clips | A session's recap failed |
 | `Update WITNESS.bat` | Updates now, even with `auto_update: false` | After reading the new commits |
@@ -482,8 +482,8 @@ publishing your Google OAuth app. Skip that step and uploads stop after 7 days.
 - **The logo shows, then nothing / setup was interrupted:** run START again.
   If it keeps failing, delete the `.venv` folder and run START again.
 - **Robotic announcer voice:** `tts_online: false`, no internet at render
-  time, or the neural voice failed. `Check Voice.bat` says which. Reels
-  still build.
+  time, or the neural voice failed. The session log (`logs/session_*.log`)
+  has an `[announcer]` line saying which. Reels still build.
 - **Dashboard silent:** tap the page once after opening (browser autoplay
   rule), check the SOUND toggle.
 - **Still stuck?** Open an issue at github.com/svisnesky/WITNESS/issues and
