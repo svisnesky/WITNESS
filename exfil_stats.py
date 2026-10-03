@@ -436,11 +436,21 @@ def log_match_stats(base_dir: str, session_id: str, stats: dict, detected_kills:
     return path
 
 
+def panel_read(stats) -> bool:
+    """Did the summary screen's stats panel give us anything? "outcome" is
+    read from the header, not the panel, so it alone does not count."""
+    return any(k != "outcome" for k in (stats or {}))
+
+
 def report(stats: dict, tags) -> str:
     """Console summary + like-for-like audit of what we detected this match
     vs what the game's summary screen says. `tags` is the match's ORDERED tag
-    list — count_events() needs the order to fold modifiers onto their event."""
-    if not stats:
+    list — count_events() needs the order to fold modifiers onto their event.
+
+    main.py adds "outcome" to the dict before calling this, so a panel that
+    could not be read arrives as {"outcome": ...}, not {}: that is unread too.
+    It used to print as a raw dict ("match stats: {'outcome': 'died'}")."""
+    if not panel_read(stats):
         return "  [exfil] summary screen seen but couldn't read the stats panel"
     bits = []
     if "runner_elims" in stats:

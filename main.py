@@ -2481,15 +2481,21 @@ def _maybe_capture_exfil(cfg, engine, lines, s, now):
         if mb:
             s["session_tags"].append(mb)
         if stats_d:
+            # stats_d always holds "outcome" by now, so it is never empty: an
+            # unread panel must not count as an audit (canary) or log a blank
+            # match_stats row. Squad and loot goblin below have their own data.
+            read = getattr(exfil_stats, "panel_read",
+                           lambda d: any(k != "outcome" for k in (d or {})))(stats_d)
             exfil_stats.accumulate_accuracy(s.setdefault("accuracy", {}),
                                             stats_d, match_tags)
-            if s.get("canary") is not None:
+            if read and s.get("canary") is not None:
                 od, oe = _kill_counts(match_tags)
                 s["canary"].note_audit(stats_d.get("runners_downed"),
                                        stats_d.get("runner_elims"), od, oe)
             base = os.path.dirname(os.path.abspath(__file__))
-            exfil_stats.log_match_stats(base, s["session_id"], stats_d,
-                                        len(match_tags))
+            if read:
+                exfil_stats.log_match_stats(base, s["session_id"], stats_d,
+                                            len(match_tags))
             if squad:
                 exfil_stats.log_squad_stats(base, s["session_id"], squad,
                                             your_runner=s.get("current_runner", ""))
