@@ -704,16 +704,64 @@ def run_test_lines(cfg: dict, lines):
             print(f"  [{verdict}] {ln!r} {extra}")
 
 
-def run_test_image(cfg: dict, image_path: str):
+def _test_image_region(cfg: dict, img, crop: bool = True):
+    """(image to OCR, what was done) for run_test_image: the live detect
+    region when `img` looks like a full screenshot, else `img` as given.
+
+    The live loop OCRs only the detect region. Reading a whole 4K screenshot
+    instead shrank it to the 800 px cap (about 0.21x, popup text ~7 px), so
+    real kill screenshots said 'no kill detected'. A small, already-cropped
+    image must NOT be cut again: detect_region_frac would take a tiny piece of
+    it. Same region order as capture.make_capture: frac first."""
+    from capture import _crop, _resolve
+    H, W = img.shape[:2]
+    if not crop:
+        return img, f"--no-crop: reading the whole {W}x{H} image as given"
+    region = cfg.get("detect_region") or cfg.get("feed_region")
+    frac = cfg.get("detect_region_frac")
+    if not (region or frac):
+        return img, (f"no detect_region in config.yaml: reading the whole "
+                     f"{W}x{H} image")
+    try:
+        r = _resolve(region, frac, W, H)
+    except Exception as e:
+        return img, f"detect region unusable ({e}): reading the whole image"
+    full_frame = max(W, H) >= 1280 and W > 1.5 * r["w"]
+    if not full_frame:
+        return img, (f"{W}x{H} looks already cropped: reading it as given "
+                     "(--no-crop forces this)")
+    if (r["w"] <= 0 or r["h"] <= 0 or r["x"] < 0 or r["y"] < 0
+            or r["x"] + r["w"] > W or r["y"] + r["h"] > H):
+        return img, (f"the detect region (x={r['x']}, y={r['y']}, w={r['w']}, "
+                     f"h={r['h']}) doesn't fit this {W}x{H} screenshot - run "
+                     "Calibrate; reading the whole image")
+    return _crop(img, r), (f"Cropped {W}x{H} screenshot to the detect region "
+                           f"x={r['x']}, y={r['y']}, w={r['w']}, h={r['h']} "
+                           "(same as live)")
+
+
+def run_test_image(cfg: dict, image_path: str, crop: bool = True):
     import cv2
     from ocr import OCREngine
 
     img = cv2.imread(image_path)
     if img is None:
         raise SystemExit(f"Could not read image: {image_path}")
+    region_img, how = _test_image_region(cfg, img, crop=crop)
+    print(how)
+    # Save exactly what gets read, so "what is WITNESS looking at?" has an
+    # answer you can open.
+    region_png = os.path.splitext(image_path)[0] + "_region.png"
+    try:
+        if cv2.imwrite(region_png, region_img):
+            print(f"Saved what WITNESS reads: {region_png}")
+        else:
+            region_png = ""
+    except Exception:
+        region_png = ""
     engine = OCREngine(cfg.get("ocr_engine", "easyocr"), cfg.get("ocr_upscale", 3), max_dim=cfg.get("ocr_max_dim", 800))
     print(f"OCR ({engine.engine_name}) on {image_path} ...")
-    lines = engine.read_lines(img)
+    lines = engine.read_lines(region_img)
     print(f"Read {len(lines)} line(s) from the region:")
     for ln in lines:
         print(f"   {ln!r}")
@@ -726,9 +774,11 @@ def run_test_image(cfg: dict, image_path: str):
         print(f"RESULT ({mode}): KILL detected -> {events[0].raw_line!r}")
     else:
         print(f"RESULT ({mode}): no kill detected in this frame.")
-        print("  If this frame SHOULD be a kill: check the region covers the "
-              "popup, add the exact phrase to popup_trigger_phrases, or lower "
-              "popup_match_threshold / ocr_upscale.")
+        shown = os.path.basename(region_png) if region_png else "<name>_region.png"
+        print(f"  If this frame SHOULD be a kill: open {shown}. If the popup "
+              "isn't inside it, run 1 - Calibrate (detect_region_frac wins over "
+              "detect_region). If it is, add the exact phrase to "
+              "popup_trigger_phrases or lower popup_match_threshold.")
 
 
 # --- live loop ---------------------------------------------------------------
@@ -3755,6 +3805,9 @@ def main():
                    help="live capture + detection, but log OBS actions instead of doing them")
     p.add_argument("--test-image", metavar="PATH",
                    help="OCR a saved screenshot and report detected kills (no OBS, no loop)")
+    p.add_argument("--no-crop", action="store_true",
+                   help="with --test-image: read the whole image instead of "
+                        "cropping a full screenshot to the detect region")
     p.add_argument("--test-lines", nargs="+", metavar="LINE",
                    help="run detection on literal feed lines (no OCR, no OBS)")
     p.add_argument("--teach", action="store_true",
@@ -3797,7 +3850,7 @@ def main():
     elif args.test_lines:
         run_test_lines(cfg, args.test_lines)
     elif args.test_image:
-        run_test_image(cfg, args.test_image)
+        run_test_image(cfg, args.test_image, crop=not args.no_crop)
     elif args.bench:
         run_bench(cfg)
     elif args.wrapped:
