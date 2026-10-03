@@ -296,3 +296,31 @@ def test_log_kill_writes_utf8(tmp_path):
     main.log_kill({"session_log": str(p)},
                   KillEvent(0.0, "RUNNER DOWN — ÆON", "", "ÆON", True), 1)
     assert "ÆON" in p.read_text(encoding="utf-8")
+
+
+# --- the session log says which build wrote it -----------------------------------
+
+def test_the_session_log_starts_with_the_build(tmp_path, monkeypatch):
+    import types
+    monkeypatch.setattr(main, "__file__", str(tmp_path / "main.py"))
+    (tmp_path / ".app_version").write_text("1bd0911abcdef\n", encoding="utf-8")
+    (tmp_path / "update_status.txt").write_text(
+        "2026-10-02 19:00:00\nUp to date (1bd0911)\n", encoding="utf-8")
+    fake = types.ModuleType("version")
+    fake.VERSION = "0.1.0"
+    monkeypatch.setitem(sys.modules, "version", fake)
+    monkeypatch.setattr(main, "_run_live_inner", lambda *a, **k: None)
+    main.run_live({})
+    log = next((tmp_path / "logs").glob("session_*.log")).read_text(encoding="utf-8")
+    head = log.splitlines()[1]
+    assert head.startswith("WITNESS 0.1.0 (1bd0911) | Python ")
+    assert head.endswith("| update: Up to date (1bd0911)")
+
+
+def test_no_version_file_and_no_sha_still_logs_a_build_line(tmp_path, monkeypatch):
+    monkeypatch.setattr(main, "__file__", str(tmp_path / "main.py"))
+    monkeypatch.setitem(sys.modules, "version", None)     # import fails
+    monkeypatch.setattr(main, "_run_live_inner", lambda *a, **k: None)
+    main.run_live({})
+    log = next((tmp_path / "logs").glob("session_*.log")).read_text(encoding="utf-8")
+    assert log.splitlines()[1].startswith("WITNESS ? (dev) | Python ")

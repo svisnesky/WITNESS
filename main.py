@@ -73,10 +73,44 @@ def _install_session_log():
         _log_prev_stdout = sys.stdout
         sys.stdout = _Tee(sys.stdout, _log_fh)
         print(f"Logging this session to: {_log_path}")
+        try:
+            print(_build_line(base))
+        except Exception:
+            pass            # a missing build line must never cost the log
         return _log_path
     except Exception as e:
         print(f"(could not open session log: {e})")
         return None
+
+
+def _build_line(base: str) -> str:
+    """'WITNESS 0.1.0 (abc1234) | Python 3.12.4 | Windows-11-...' plus the last
+    update check, for the top of every session log: these logs are what bug
+    reports attach, and they never said which build wrote them. The sha is the
+    updater's .app_version ('dev' without one). No torch import here: this
+    runs before the OCR engine exists."""
+    import platform
+    try:
+        from version import VERSION as ver
+    except Exception:
+        ver = "?"
+    sha = ""
+    try:
+        with open(os.path.join(base, ".app_version"), encoding="utf-8") as f:
+            sha = f.read().strip()[:7]
+    except OSError:
+        pass
+    line = (f"WITNESS {ver} ({sha or 'dev'}) | Python {platform.python_version()}"
+            f" | {platform.platform()}")
+    try:
+        with open(os.path.join(base, "update_status.txt"), encoding="utf-8",
+                  errors="replace") as f:
+            last = [ln.strip() for ln in f.read().splitlines() if ln.strip()]
+        if last:
+            line += f" | update: {last[-1]}"
+    except OSError:
+        pass
+    return line
 
 
 def _close_session_log():
