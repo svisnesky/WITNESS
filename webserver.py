@@ -945,17 +945,29 @@ def _archive_page(base_dir: str, record_dir: str) -> str:
                        if s.get("report") else "")
         # A session with clips but no reels had a failed recap. Say so, and offer
         # the fix right here — the clips are all that matter and they survived.
-        has_reels = any(_media_kind(r) in ("session_reel", "reel", "potn")
-                        for _l, r in s["media"])
+        # ANY rendered output counts (session reel, match reels, Shorts, the
+        # montage); replays and the spoken report don't. Counting only some
+        # kinds warned "the recap failed" at a night whose montage and Shorts
+        # built fine because match reels were switched off.
+        has_reels = any(rel == "session_reel.mp4"
+                        or rel.startswith(("reels/", "shorts/", "highlights"))
+                        for _l, rel in s["media"])
         warn = ("" if has_reels or not s["clips"] else
                 '<div class="rc none" style="color:var(--warn,#f5a623)">'
                 'This session has clips but no reels — the recap failed. '
                 'Rebuild it below.</div>')
+        # The clip viewer could only ever open the latest session; nothing led
+        # to an older one. Each session with clips now links to its own.
+        pick = ("" if not s["clips"] else
+                f'<div class="mrow"><span class="play">&#9986;</span>'
+                f'<a class="ml" href="/clips?s={_uparse.quote(s["id"])}">'
+                f'Pick clips / cut a reel</a><span class="meta">choose, trim '
+                f'and export your own reel from this session</span></div>')
         blocks.append(f"""<details><summary><b>{_esc(date)}</b>
           <span class="meta">{s['clips']} clip{'s' if s['clips'] != 1 else ''}
           &middot; {_fmt_size(s['size'])}</span></summary>
           <h4>Matches</h4>{rec_html}{warn}{report_html}
-          <h4>Watch / share</h4>{rows}
+          <h4>Watch / share</h4>{rows}{pick}
           <div class="mrow"><button class="mini rb"
             onclick="rebuild('{_esc(s['id'])}',this)">Rebuild reels</button>
             <span class="meta">re-renders the montage, reels and Shorts from the
@@ -2884,7 +2896,10 @@ CLIPS_PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
 </div></div>
 
 <script>
-var CLIPS = [], SESSION = "latest", curr = -1;
+// ?s=<session> comes from the Archive's "Pick clips" link; no ?s= = the latest.
+// The server checks the name (only a real session folder resolves).
+var CLIPS = [], curr = -1,
+    SESSION = new URLSearchParams(location.search).get('s') || 'latest';
 
 function esc(s){ return String(s==null?"":s).replace(/&/g,"&amp;")
   .replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;"); }
