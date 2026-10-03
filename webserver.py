@@ -984,9 +984,40 @@ def _archive_page(base_dir: str, record_dir: str) -> str:
     return ARCHIVE_PAGE.replace("%%BODY%%", body)
 
 
-def _stats_page(base_dir: str) -> str:
+def _gamertag(cfg):
+    """The gamertag the recorder will match, by the key-absent rule, or None
+    when no config is bound (unknown: say nothing about it).
+
+    A config with NO gamertag key predates the setting and keeps
+    encounters.DEFAULT_GAMERTAG; an explicit blank (or YAML's bare
+    `gamertag:`) means no tag. `cfg.get("gamertag") or DEFAULT` would turn a
+    deliberate blank back into the default. encounters.resolve_gamertag
+    (config-and-identity) is the one rule; the fallback here is the same rule
+    for a checkout that doesn't have it yet."""
+    if cfg is None:
+        return None
+    try:
+        import encounters
+    except Exception:
+        encounters = None
+    resolve = getattr(encounters, "resolve_gamertag", None)
+    if resolve is not None:
+        try:
+            return str(resolve(cfg) or "").strip()
+        except Exception:
+            pass
+    if "gamertag" not in cfg:
+        return str(getattr(encounters, "DEFAULT_GAMERTAG", "") or "").strip()
+    return str(cfg.get("gamertag") or "").strip()
+
+
+def _stats_page(base_dir: str, cfg=None) -> str:
     """Career + economy + squad leaderboard, built from stats/squad_stats.csv
-    (with match_stats.csv as the fallback for your own older rows)."""
+    (with match_stats.csv as the fallback for your own older rows).
+
+    cfg is the bound live config: with a blank gamertag the Menace Report can
+    never fill, so its empty state says how to turn it on rather than
+    promising names "as downs happen"."""
     import csv as _csv
 
     rows = []
@@ -1076,6 +1107,9 @@ def _stats_page(base_dir: str) -> str:
         if killers:
             menace_html += ('<h3>Downed you</h3>'
                             + names_table(killers, "nem", "NEMESIS", "Last time"))
+    elif _gamertag(cfg) == "":
+        menace_html = ('<h3>Menace report</h3><p class="empty2">Set gamertag in '
+                       'config.yaml (your exact in-game name) to turn this on.</p>')
     else:
         menace_html = ('<h3>Menace report</h3><p class="empty2">No names yet — '
                        'gamertags are read off the kill feed as downs happen.</p>')
@@ -1390,7 +1424,7 @@ def start_web(state, port, base_dir, host="0.0.0.0"):
                         "modes": MODES,
                     }).encode(), "application/json", cache=False)
                 elif path == "/stats":
-                    self._send(apply_theme(_stats_page(base_dir),
+                    self._send(apply_theme(_stats_page(base_dir, state._cfg),
                                            state._cfg).encode("utf-8"),
                                "text/html; charset=utf-8", cache=False)
                 elif path == "/api/play":

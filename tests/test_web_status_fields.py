@@ -310,3 +310,32 @@ def test_the_live_page_disables_the_buttons_while_idle():
     # the reply decides what the button says
     assert "'NOT RUNNING'" in p and "j.ok === false" in p
     assert "pressAction('clip', '/clip'" in p and "pressAction('addk', '/addkill'" in p
+
+
+# --- the Stats page and a blank gamertag --------------------------------------
+
+def test_stats_page_tells_a_blank_gamertag_how_to_turn_names_on(tmp_path):
+    """New installs ship gamertag: "" and the Menace Report can never fill.
+    It used to promise names 'as downs happen' forever."""
+    hint = "Set gamertag in config.yaml (your exact in-game name) to turn this on."
+    base = str(tmp_path)                        # no stats yet
+    assert hint in webserver._stats_page(base, {"gamertag": ""})
+    assert hint in webserver._stats_page(base, {"gamertag": "   "})
+    assert hint in webserver._stats_page(base, {"gamertag": None})  # bare `gamertag:`
+
+
+def test_stats_page_keeps_the_old_text_when_a_tag_applies(tmp_path):
+    base = str(tmp_path)
+    for cfg in ({"gamertag": "KRYPT KING05"},
+                {},           # key ABSENT: an old config keeps DEFAULT_GAMERTAG
+                None):        # nothing bound yet: unknown, say nothing new
+        page = webserver._stats_page(base, cfg)
+        assert "as downs happen" in page and "Set gamertag" not in page, cfg
+
+
+def test_the_gamertag_rule_is_key_absent_not_falsy():
+    import encounters
+    assert webserver._gamertag({}) == encounters.DEFAULT_GAMERTAG.strip()
+    assert webserver._gamertag({"gamertag": ""}) == ""
+    assert webserver._gamertag({"gamertag": " X "}) == "X"
+    assert webserver._gamertag(None) is None
