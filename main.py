@@ -2746,7 +2746,8 @@ def _run_live_inner(cfg: dict, dry_run: bool = False, stop_event=None, on_count=
         else:
             time.sleep(seconds)
 
-    loop = {"cap_fails": 0, "fails": 0, "tb_at": -1e9, "paused_at": None}
+    loop = {"cap_fails": 0, "fails": 0, "tb_at": -1e9, "paused_at": None,
+            "ocr_ok": False}
     cm = None
     try:
         try:
@@ -2789,8 +2790,16 @@ def _run_live_inner(cfg: dict, dry_run: bool = False, stop_event=None, on_count=
                     _release_vram(engine)
                     if _loop_failed(s, loop, "ocr", e):
                         break
+                    if not loop["ocr_ok"] and loop["fails"] >= OCR_STARTUP_TRIES:
+                        # OCR hasn't worked once this session (model won't
+                        # load, wrong CUDA build...): a setup problem. Fail
+                        # START with the reason instead of retrying for minutes.
+                        print("  [ocr] OCR has not worked once this session - "
+                              "stopping so the error reaches START")
+                        raise
                     _wait(min(2.0, 0.5 * loop["fails"]))
                     continue
+                loop["ocr_ok"] = True
 
                 try:
                     if debug_ocr and lines:
@@ -2871,6 +2880,7 @@ def _run_live_inner(cfg: dict, dry_run: bool = False, stop_event=None, on_count=
 CAPTURE_RETRY_SECONDS = 1.5    # backoff between failed grabs
 CAPTURE_REOPEN_AFTER = 5       # consecutive failed grabs before re-opening it
 LOOP_GIVE_UP_AFTER = 60        # consecutive OCR/detection failures, then stop
+OCR_STARTUP_TRIES = 3          # ...or this many before OCR has worked even once
 LOOP_TRACEBACK_EVERY = 30.0
 CAPTURE_NOTICE_EVERY = 60.0
 

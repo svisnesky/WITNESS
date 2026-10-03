@@ -231,13 +231,15 @@ def test_ocr_errors_release_vram_and_retry_then_give_up(monkeypatch):
 
     def oom(img):
         calls.append(1)
+        if len(calls) == 1:
+            return []                  # OCR worked once: a mid-session problem
         raise RuntimeError("CUDA out of memory")
 
     # no stop event: the loop must end by itself, and the backoff then goes
     # through time.sleep, which _FastTime skips
     made, ended = _drive(monkeypatch, s,
                          [_FlakyCap([0], [], threading.Event(), 10**6)], oom)
-    assert len(calls) == 4 and len(released) == 4
+    assert len(calls) == 5 and len(released) == 4
     assert "Detection stopped - kept failing, see log" in web.notices
     assert web.running == [False] and len(ended) == 1
 
@@ -324,3 +326,25 @@ def test_no_version_file_and_no_sha_still_logs_a_build_line(tmp_path, monkeypatc
     main.run_live({})
     log = next((tmp_path / "logs").glob("session_*.log")).read_text(encoding="utf-8")
     assert log.splitlines()[1].startswith("WITNESS ? (dev) | Python ")
+
+
+def test_ocr_that_never_worked_fails_start_quickly(monkeypatch):
+    """A model that won't load (or a CUDA build that doesn't fit the card)
+    fails START with the reason after a few tries, not after minutes, and the
+    session still ends cleanly."""
+    web = _Web()
+    s = _session(dict(QUIET_LOOP), web=web)
+    monkeypatch.setattr(main, "_release_vram", lambda engine: None)
+    monkeypatch.setattr(main, "time", _FastTime())
+    calls = []
+
+    def broken(img):
+        calls.append(1)
+        raise RuntimeError("CUDA error: no kernel image is available")
+
+    ended = []
+    with pytest.raises(RuntimeError):
+        _drive(monkeypatch, s, [_FlakyCap([0], [], threading.Event(), 10**6)],
+               broken, ended=ended)
+    assert len(calls) == main.OCR_STARTUP_TRIES
+    assert web.running == [False] and len(ended) == 1
