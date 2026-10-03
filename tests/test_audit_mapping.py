@@ -51,19 +51,10 @@ REAL_MATCHES = [
     ("0729 m7", ["down", "assist", "down", "kill", "finisher"], 2, 1),
 ]
 
-# Matches where our count is honestly LOWER than the game's. Listed rather than
-# quietly excluded, and they under-count, which is the safe direction.
-#
-# 0727 m6 (game 3 elims, we count 2): the cause is LIKELY, not confirmed (no
-# frames from that moment), an own RUNNER ELIM popup the detector never fired on
-# inside a continuous popup chain. It is NOT the 'RUNNER ELIM [ASSIST F10 Xp'
-# read in that match: a bracket-dropped '[ASSIST' is a real assist. _normalize
-# strips both brackets, so the bracket can't change the tag, and 0727 m5's
-# 'HAPA RUNNER DOIN [ASSIST 5 XP' is a real assist that a "dropped bracket = own
-# kill" rule would turn into a false down (measured: net 0 exact matches, downs
-# 12/13 -> 11/13). The narrower "bracket-dropped ELIM = own" rule fits only
-# because it was built from this one raw (n=1). Leave classify_event's bracket
-# handling alone.
+# Matches where our count is honestly LOWER than the game's, with a known cause.
+# 0727 m6's third elim popup OCR'd as 'RUNNER ELIM [ASSIST F10 Xp' — the garbled
+# bracket made it read as an assist, so it scored nothing. Listed rather than
+# quietly excluded, and it under-counts, which is the safe direction.
 KNOWN_UNDER = {"m6"}
 
 
