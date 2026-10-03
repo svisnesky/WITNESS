@@ -904,12 +904,26 @@ def test_reconciled_events_land_before_the_match_break():
 
 
 def test_parse_console_line_without_match_break_attr_does_not_raise(monkeypatch):
+    # Simulates an exfil_stats from before MATCH_BREAK existed. Only the gui
+    # guard is under test here: today's count_events reads MATCH_BREAK as a
+    # module global, so deleting it would break count_events itself, which an
+    # old exfil_stats (no MATCH_BREAK anywhere) never did.
     import exfil_stats
     monkeypatch.delattr(exfil_stats, "MATCH_BREAK", raising=False)
     tags = []
     gui.parse_console_line("  [exfil] match stats: 1 runner elims, 2 downs", tags)
     assert tags == ["exfil"]
+
+
+def test_gui_match_break_fallback_is_the_real_marker():
+    """The fallback in gui._match_break must equal exfil_stats.MATCH_BREAK, and
+    the tiles must count a break as nothing (it ends a pending elim)."""
+    import exfil_stats
+    assert gui._match_break() == exfil_stats.MATCH_BREAK == "exfil"
+    tags = []
+    gui.parse_console_line("  [exfil] match stats: 1 runner elims, 2 downs", tags)
     assert gui.tile_values(tags + ["down"])["downs"] == 1
+    assert exfil_stats.count_events(["kill", exfil_stats.MATCH_BREAK, "finisher"]) == (0, 2)
 
 
 # --- small fixes ----------------------------------------------------------------
