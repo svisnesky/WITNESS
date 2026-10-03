@@ -180,3 +180,29 @@ def test_kill_counts_treats_a_finisher_after_an_elim_as_a_modifier():
     assert main._kill_counts(["finisher"]) == (0, 1)
     assert main._kill_counts(["finisher", "kill"]) == (0, 2)
     assert main._kill_counts(["down", "precision", "manual_kill", "assist"]) == (2, 0)
+
+
+def test_taught_game_phrases_keep_the_keyword_tags():
+    # A teach.py profile has its own trigger text, so every event reaches the
+    # closest-phrase fallback. Scored against Marathon phrases these are noise
+    # (25-67), and picking the 'closest' one tagged them precision/finisher:
+    # 'precision' is a non-kill, so the kills stopped counting. Below the floor
+    # the pre-rewrite keyword read applies (the tags base 1bd0911 gave).
+    want = {"HEADSHOT KILL": "kill", "KNOCKOUT": "kill", "SPLAT": "kill",
+            "ENEMY DOWNED": "down", "Kill Confirmed": "kill",
+            "PLAYER DEFEATED": "kill"}
+    assert {s: main.classify_event(s) for s in want} == want
+
+
+def test_garbled_marathon_read_still_uses_the_closest_phrase():
+    # Real fallback cases from the garble fuzz: no phrase window passes, but
+    # the read clears the floor (95) and gets the closest phrase. (All 78
+    # fallback reads in the fuzz scored >= 85; taught-game text scores <= 67.)
+    from rapidfuzz import fuzz
+    raw = "RUNNER DOIH1+15 XP"
+    toks = detector._tokens(raw)
+    for p in ("runner down", "precision down", "runner elim", "finisher"):
+        assert not detector.phrase_windows(toks, detector.skel_phrase(p), 80)
+    blob = " ".join(sk for _, sk in toks)
+    assert fuzz.partial_ratio(detector.skel_phrase("runner down"), blob) >= main._CLOSEST_PHRASE_FLOOR
+    assert main.classify_event(raw) == "down"

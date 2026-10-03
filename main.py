@@ -535,7 +535,44 @@ def classify_event(raw_line: str) -> str:
     blob = " ".join(sks)
     if phrase_matches("assist", blob, 78):
         return "assist"
-    return max((fuzz.partial_ratio(skel_phrase(p), blob), tag) for p, tag in phrases)[1]
+    score, tag = max((fuzz.partial_ratio(skel_phrase(p), blob), tag) for p, tag in phrases)
+    if score >= _CLOSEST_PHRASE_FLOOR:
+        return tag
+    # Nothing here looks like a Marathon popup: it is a taught game's own
+    # trigger text ('HEADSHOT KILL', 'ENEMY DOWNED'). The closest-phrase pick
+    # used to tag those 'precision'/'finisher' (40-67 partial_ratio is just
+    # noise), and 'precision' is a non-kill, so taught-game kills stopped
+    # counting. Keep the old keyword read for them: down if it says down,
+    # else a kill.
+    return _classify_by_keywords(raw_line)
+
+
+# The closest-phrase fallback in classify_event only trusts a phrase this close.
+# Measured on the garble fuzz (12,000 garbled Marathon popups, 78 reached the
+# fallback): every one scored >= 85 and all 78 were tagged right. Taught-game
+# strings ('HEADSHOT KILL', 'ENEMY DOWNED', 'Kill Confirmed', ...) score 25-67.
+_CLOSEST_PHRASE_FLOOR = 80
+
+
+def _classify_by_keywords(raw_line: str) -> str:
+    """The pre-phrase-window classifier (keyword checks at 78), kept for text
+    that resembles no Marathon popup, i.e. a taught game's trigger phrases."""
+    from detector import _normalize, phrase_matches
+
+    b = _normalize(raw_line)
+
+    def has(p):
+        return phrase_matches(p, b, 78)
+
+    if has("assist"):
+        return "assist"
+    if has("precision"):
+        return "precision"
+    if has("finisher"):
+        return "finisher"
+    if has("down") or has("runner down"):
+        return "down"
+    return "kill"
 
 
 def rename_clip_async(obs, session_id: str, tag: str, count: int, on_done=None) -> None:
