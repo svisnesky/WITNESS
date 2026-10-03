@@ -1,5 +1,5 @@
-# Marathon Auto Kill Recorder — configuration
-# Edit these values; no code changes needed.
+# WITNESS — configuration
+# Edit these values; no code changes needed. Updates never overwrite this file.
 
 # Check GitHub for a newer version on every launch and update automatically
 # (then relaunch on the fresh code). No more manual downloads.
@@ -10,7 +10,10 @@ splash_sound: true
 
 # Which game to detect. "marathon" uses the settings in this file; any other
 # name loads games/<name>.yaml on top of them (made with the teach-a-game
-# wizard: python main.py --teach). Profiles are shareable — PR yours.
+# wizard: python main.py --teach). Profiles are shareable: PR yours. A profile
+# should hold detection, theme and feature-gate keys only. Before you use a
+# profile from someone else, read it like you would a config.yaml: look for
+# paths, an obs: block or upload settings in it.
 game: "marathon"
 
 # Each game profile can carry a theme: block (colors + display name) that
@@ -91,6 +94,11 @@ detect_region:
   w: 460
   h: 110
 
+# true = log every OCR read to the console and logs/session_*.log (use when
+# kills are missed, then set it back: it writes a line for every frame that
+# has text on it).
+debug_ocr: false
+
 # --- Timing / performance ---
 poll_fps: 5                 # frames/sec to capture + OCR. Higher = more chances to
                             # catch a fast popup with a clean read (matters on CPU
@@ -112,14 +120,13 @@ play_of_the_night: true     # at session end, cut the single best clip of the
 loot_goblin_decal: true     # stamp a LOOT GOBLIN decal over the match's top
                             # looter on a decorated copy of the exfil screenshot
 # Which encoder renders the reels/montage/Shorts.
-#   auto  - NVIDIA hardware (h264_nvenc) when your ffmpeg has it, else CPU
+#   auto  - uses an NVIDIA encoder (h264_nvenc) when present, otherwise CPU
 #   nvenc - force hardware; falls back to CPU if unavailable
 #   cpu   - always libx264
-# Hardware is the default because Marathon is CPU-heavy and CPU contention is
-# what demonstrably hurt frames here (the first frame-drop fix was lowering
-# render priority). NVENC is fixed-function silicon separate from the shader
-# cores the game uses, renders several times faster, and stops the fans ramping.
-# It costs a few hundred MB of VRAM; switch to cpu if VRAM ever gets tight.
+# Hardware keeps the render off the CPU the game is using: NVENC is a dedicated
+# encoder block on the GPU, separate from the shader cores the game uses, and
+# renders several times faster. It costs a few hundred MB of VRAM; set cpu if
+# VRAM is tight.
 # A failed hardware encode automatically retries on CPU — a reel is never lost.
 render_encoder: auto
 
@@ -167,10 +174,8 @@ reel_tight_cuts: true       # reels start ~8s before each clip's first kill
 reel_preroll_seconds: 8     # lead-in before the kill on a MULTIKILL clip (the
                             # action is the content — don't delay it)
 # Lead-in for a clip with a SINGLE ordinary kill. Longer on purpose: with one
-# kill the interesting part is the approach. Joe's review of a real reel — "for
-# a kill montage it's a bit chaotic, like someone telling you something with no
-# context... I like to watch the situation unfold if they're just normal kills."
-# The footage was always there; at 8s we discarded ~17s of every 33s clip.
+# kill the interesting part is the approach, and a reel of bare kills with no
+# setup reads as chaotic.
 # Capped by your OBS Replay Buffer length — you can't keep more than it saves.
 reel_context_preroll_seconds: 16
 reel_manual_preroll_seconds: 18  # lead-in for manual +1 kills (the button
@@ -202,7 +207,11 @@ kill_coalesce_seconds: 8.0  # after a kill, wait this long for more kills before
                             # saving one clip (groups down+finisher into one clip)
 
 # --- OCR ---
-# engine: "easyocr" (GPU, robust, heavier) or "tesseract" (light, needs install)
+# engine: "easyocr" (GPU, robust; the tested default) or "tesseract".
+# tesseract is EXPERIMENTAL: it needs the Tesseract program installed (if
+# WITNESS can't find it, add the Tesseract-OCR folder to PATH), and it does
+# not make the install smaller (setup installs EasyOCR and PyTorch either
+# way). It only saves GPU memory while running.
 ocr_engine: "easyocr"
 ocr_upscale: 3             # upscale the cropped region Nx before OCR (helps small fonts).
                           # Capped by ocr_max_dim so it never makes a giant, slow image.
@@ -214,8 +223,12 @@ ocr_max_dim: 800          # hard cap on the long side of the image fed to OCR. B
 obs:
   host: "localhost"
   port: 4455
-  password: "CHANGE_ME"       # from OBS: Tools -> WebSocket Server Settings
+  password: ""                # paste from OBS: Tools -> WebSocket Server Settings
+                              # -> Show Connect Info. Keep authentication ON:
+                              # OBS listens on your network, so without a
+                              # password anyone on your Wi-Fi can control it.
   counter_source: "KillCounter"  # name of the Text source in your OBS scene
+                                 # that shows the kill count; set to "" to disable
   counter_format: "Kills: {count}"  # {count} is replaced with the running total
   auto_start_replay_buffer: true    # start the Replay Buffer on launch if not running
   auto_launch: true                 # if OBS itself isn't running, launch it and wait
@@ -231,11 +244,11 @@ sound_file: ""      # optional path to a .wav to play instead of the beep, e.g.
 # --- On-screen event popup (needs the game in borderless windowed) ---
 show_overlays: true                 # flash an image for special events
 overlay_image: "witness_headshot.png"  # the image to flash (in this folder) —
-                                    # the WITNESS headshot skull. The old
-                                    # marathon_skull.png still works here too.
+                                    # the WITNESS headshot skull. Any PNG
+                                    # in this folder works here.
 overlay_size: 140                   # skull height in pixels. Try 90-200.
 # Position: a named spot, OR "custom:fx,fy" where fx,fy are fractions (0-1) of
-# the screen for the skull's CENTER. Default places it where you photoshopped it.
+# the screen for the skull's CENTER. Default: centered above the kill popup.
 #   named: top-left | top-right | top-center | bottom-left | bottom-right |
 #          bottom-center | center
 # Centered ABOVE the popup text — a fixed spot beside the popup collides with
@@ -271,7 +284,8 @@ team_wipe_size: 3      # deaths that make a wipe (2 for duos)
 # kills while solo, the announcer celebrates THEN — after the pressure, not
 # during it. Going down just ends it quietly.
 auto_sweat: true
-clutch_callout: "HOLY SHIT!"   # what the announcer yells after a confirmed clutch
+clutch_callout: "CLUTCH!"   # what the announcer yells after a confirmed clutch.
+                            # Any phrase works. Needs announcer_medals: true.
 
 # --- Clips + recap ---
 organize_clips: true   # rename each saved clip by event+time and sort into a
@@ -284,8 +298,10 @@ make_shorts: false     # at session end, render each clip as a 1080x1920 vertica
                        # (blurred background + centered gameplay) ready for
                        # YouTube Shorts/TikTok -> session folder /shorts/.
                        # Off by default: extra render time + disk per clip.
-shorts_labels: true    # bake "KILL #3 - FINISHER" text into each short
-ffmpeg_path: ""        # leave empty to auto-find ffmpeg.exe in this folder / PATH
+shorts_labels: true    # bake a label into each short: the event tag
+                       # (e.g. "DOWN + FINISHER") and the game name
+ffmpeg_path: ""        # empty = find ffmpeg automatically; an ffmpeg.exe in
+                       # this folder always wins. Or a full path to ffmpeg.exe.
 
 # --- Kill feed name tracking (the Menace Report) ---
 # Read gamertags off the kill feed: who you downed (scanned right after each
@@ -294,7 +310,8 @@ ffmpeg_path: ""        # leave empty to auto-find ffmpeg.exe in this folder / PA
 # opponents with "last downed", plus your nemeses. Set gamertag to your EXACT
 # in-game name so the feed lines can be matched.
 track_names: true
-gamertag: "MRVIZNASTY"
+gamertag: ""   # your EXACT in-game name; empty = Menace Report, kill-name
+               # chyrons and streamer alerts are off
 
 # Marathon prints MAP LOCATION names on screen (zone banners, objective text),
 # and they get read as gamertags: "ALGAE PONDS" and "QUARANTINE" are Dire Marsh
@@ -340,7 +357,7 @@ make_match_reels: true
 # That's it — every call-out and reel voiceover upgrades automatically, and
 # falls back to the built-in voice if the key is missing or out of credits.
 # Call-outs render once and cache, so the free tier is plenty.
-# Which ElevenLabs voice: empty = "Adam" (their classic deep American).
+# Which ElevenLabs voice: empty = "Callum" (deep, hoarse; a free premade voice).
 # Audition voices in their Text to Speech playground, then paste the winner's
 # voice ID here (from the voice's page).
 elevenlabs_voice_id: ""
@@ -350,10 +367,17 @@ elevenlabs_voice_id: ""
 # robotic voice without it). Try en-US-ChristopherNeural, en-GB-RyanNeural...
 # Full list: .venv\Scripts\python -m edge_tts --list-voices
 announcer_voice: "en-US-ChristopherNeural"
+# The neural voice is ONLINE: the text it speaks is sent to Microsoft's speech
+# service to be voiced. That text includes announcer_player_name below and, in
+# the WITNESS Report, other players' gamertags from the kill feed. false = use
+# the offline Windows voice instead (robotic, but the text stays on this PC).
+# ElevenLabs, if you added a key above, is separate and not affected by this.
+tts_online: true
 # Deepen any voice; "-18Hz" on Christopher = the deep broadcast voice.
 announcer_pitch: "-18Hz"
-# How the announcer says your name (phonetic). Empty = "our runner".
-announcer_player_name: "Mister Viz Nasty"
+# How the announcer says your name (spell it phonetically if it reads oddly).
+announcer_player_name: ""   # empty = "your runner" in match reels,
+                            # "the runner" in the WITNESS Report
 reel_music_volume: 0.08   # 0-1 loudness of the music bed under the game audio
                           # (0.08 = quiet background; 0 = off, 0.22 = old level)
 
@@ -361,14 +385,6 @@ reel_music_volume: 0.08   # 0-1 loudness of the music bed under the game audio
 # Play of the Game) -> <session>/session_reel.mp4
 make_session_reel: true
 
-# --- YouTube auto-upload (one-time setup required; see README) ---
-# When true, the session_reel is uploaded to YouTube at session end. Needs
-# client_secret.json in this folder (from Google Cloud) + the google upload
-# libraries installed. Leave false until you've done the setup.
-# Which things auto-upload at session end (all default off). Each is a
-# separate toggle — also in the dashboard Settings. NOTE: YouTube allows
-# ~6 uploads/day by default, so leave "shorts" off unless you post a lot
-# (a busy session makes many).
 # Tidy the session folder when the recap finishes: per-kill clips (and their
 # .json sidecars) move into clips/, exfil screenshots into exfil/. The montage,
 # session reel, dossier, reels/ and shorts/ stay where they are. Files are MOVED
@@ -376,15 +392,21 @@ make_session_reel: true
 # reversible by dragging them back. Readers handle either layout.
 tidy_session_folder: true
 
-# --- YouTube auto-upload ---
+# --- YouTube auto-upload (one-time setup required; see YOUTUBE.md) ---
 # Needs a one-time free setup: a Google Cloud project with "YouTube Data API v3"
 # enabled, an OAuth client (type: Desktop app) saved as client_secret.json in
 # this folder. No billing account or card required — the API is quota-limited
 # (~6 uploads/day), not billed. First upload opens a browser once.
 #
 # IMPORTANT: publish the OAuth consent screen (Google Auth Platform -> Audience
-# -> Publish app). While it sits in "Testing", Google expires the refresh token
-# after 7 DAYS, so uploads work for a week and then quietly stop.
+# -> Publish app), or uploads stop after 7 days: while it sits in "Testing",
+# Google expires the refresh token after 7 DAYS and uploads quietly stop.
+#
+# What auto-uploads at session end: four separate toggles below (also in the
+# dashboard Settings), all off by default. Leave them off until the setup is
+# done. With ~6 uploads/day, leave shorts off unless you post a lot (a busy
+# session makes many).
+
 # Title for uploaded videos. Placeholders: {date} {kind} {downs} {elims} {kills}
 # {game} {match}. {kind} is "Session Montage" / "Session Reel" / "Match 3".
 # YouTube caps titles at 100 characters; a typo here falls back to the default
@@ -398,7 +420,11 @@ youtube_upload_shorts: false         # every vertical Short (quota-heavy)
 youtube_privacy: "unlisted"   # unlisted | private | public
 
 # --- Live web dashboard (view on a phone/iPad browser over the LAN) ---
-web_dashboard: true    # serve a live kill feed page
+web_dashboard: true    # serve a live kill feed page. false = the console
+                       # launcher serves none; the window app always runs one
+                       # (the window IS the dashboard). To keep the dashboard
+                       # on this PC only, in either launcher, set
+                       # web_lan: false (below).
 web_port: 8000         # open http://<your-PC-IP>:8000 on the device
 web_lan: true          # true = reachable from devices on your Wi-Fi (the iPad).
                        # NOTE: the dashboard has no password — anyone on the same
@@ -412,5 +438,3 @@ bonjour_discovery: true
 
 # --- Logging ---
 session_log: "session_log.csv"
-
-# auto-update self-test marker (harmless) — 2026-07-17

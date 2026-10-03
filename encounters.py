@@ -25,7 +25,37 @@ import time
 
 from rapidfuzz import fuzz
 
+# Used ONLY when config has no gamertag key at all. Configs written before the
+# key existed (the author's own install among them: updates never overwrite
+# config.yaml) have no line for it and have always run on this value. A key that
+# is present but blank means "no tag", so a new install that hasn't set its name
+# yet never logs someone else's kills. Read it through resolve_gamertag(); a bare
+# cfg.get("gamertag") or DEFAULT_GAMERTAG turns a deliberate blank back into
+# this tag, which is the bug the rule exists to prevent.
 DEFAULT_GAMERTAG = "MRVIZNASTY"
+
+NO_TAG_HINT = ("  [names] gamertag is blank in config.yaml - set it to your exact "
+               "in-game name to turn on the Menace Report, kill-name chyrons and "
+               "streamer alerts")
+_hinted_no_tag = False
+
+
+def resolve_gamertag(cfg) -> str:
+    """Your gamertag by the key-absent rule: DEFAULT_GAMERTAG when the key is
+    missing from cfg, otherwise the configured value stripped ('' = no tag;
+    YAML's bare `gamertag:` is None, which also means no tag)."""
+    if not hasattr(cfg, "get") or "gamertag" not in cfg:   # None, or no key
+        return DEFAULT_GAMERTAG
+    return str(cfg.get("gamertag") or "").strip()
+
+
+def _hint_no_tag() -> None:
+    """One console line per run saying why name tracking is quiet."""
+    global _hinted_no_tag
+    if not _hinted_no_tag:
+        _hinted_no_tag = True
+        print(NO_TAG_HINT)
+
 
 # Streamer watchlist: feed names that trigger the big alert (banner + voiced
 # call-out, and a saved clip when one of them downs you). Overridden by
@@ -229,6 +259,10 @@ def extract(rows, gamertag: str, ignore=frozenset()) -> list[tuple[str, str]]:
     # one victim, so the extra rows are noise by definition — no blocklist
     # needed to know that. Keep the row whose gamertag match scored highest,
     # which is the best evidence of which line is actually yours.
+    # No tag, no matches. fuzz.ratio('', token) is already 0 (under the 82
+    # floor), so this only makes the rule explicit instead of incidental.
+    if not "".join(c for c in (gamertag or "") if c.isalnum()):
+        return []
     best = {}          # direction -> (score, name)
     for row in rows:
         toks = _tokens(row)
@@ -258,7 +292,15 @@ def extract(rows, gamertag: str, ignore=frozenset()) -> list[tuple[str, str]]:
 
 
 def capture(cfg, engine) -> list[tuple[str, str]]:
-    """One feed-region grab + OCR -> [(direction, name)]."""
+    """One feed-region grab + OCR -> [(direction, name)].
+
+    With a blank gamertag there is nothing to match the feed against, so this
+    returns [] BEFORE the grab: no full-frame capture and no OCR pass per kill,
+    and one console line (per run) says how to turn the feature on."""
+    tag = resolve_gamertag(cfg)
+    if not any(c.isalnum() for c in tag):
+        _hint_no_tag()
+        return []
     from exfil_stats import _grab_full
     frame = _grab_full(cfg)
     h, w = frame.shape[:2]
@@ -268,7 +310,7 @@ def capture(cfg, engine) -> list[tuple[str, str]]:
     rows = (engine.read_rows(crop, max_dim=0) if hasattr(engine, "read_rows")
             else engine.read_lines(crop, max_dim=0))
     ignore = frozenset(_name_key(x) for x in (cfg.get("name_ignore") or []))
-    return extract(rows, cfg.get("gamertag") or DEFAULT_GAMERTAG, ignore=ignore)
+    return extract(rows, tag, ignore=ignore)
 
 
 def watch_hit(name: str, watchlist) -> str:
