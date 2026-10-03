@@ -1377,18 +1377,34 @@ def _ffmpeg_available(base, cfg) -> bool:
     return bool(ff) and (os.path.isfile(ff) or shutil.which(ff) is not None)
 
 
+# START asks OBS for the buffer status right after connect() may have just
+# started it (obs_client: "Replay Buffer was off - started it"). In OBS 28+ that
+# start is queued to OBS's UI thread, so the status can still read inactive for
+# a moment. Poll this many times, this far apart, before calling it off.
+REPLAY_BUFFER_SETTLE_POLLS = 6
+REPLAY_BUFFER_SETTLE_STEP = 0.5
+
+
 def _replay_buffer_ok(obs) -> bool:
     """True only when OBS says its Replay Buffer is running. An unreadable
     status (None) is a disabled buffer in practice: every status request fails
     when it's switched off in Settings > Output. A client without the request
-    at all (a test fake) is assumed fine rather than cried wolf about."""
+    at all (a test fake) is assumed fine rather than cried wolf about.
+
+    Waits up to ~3 s for a buffer that WITNESS itself just started to report
+    active, so that start does not raise a false 'clips will NOT save'."""
     fn = getattr(obs, "replay_buffer_active", None)
     if not callable(fn):
         return True
-    try:
-        return fn() is True
-    except Exception:
-        return False
+    for i in range(REPLAY_BUFFER_SETTLE_POLLS + 1):
+        try:
+            if fn() is True:
+                return True
+        except Exception:
+            pass
+        if i < REPLAY_BUFFER_SETTLE_POLLS:
+            time.sleep(REPLAY_BUFFER_SETTLE_STEP)
+    return False
 
 
 CLIP_FAIL_NOTICE_EVERY = 60.0

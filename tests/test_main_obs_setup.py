@@ -275,10 +275,41 @@ def _setup_with(monkeypatch, client, web):
 
 def test_a_replay_buffer_that_is_off_is_reported_at_start(monkeypatch, capsys):
     web = _Web()
+    monkeypatch.setattr(main, "REPLAY_BUFFER_SETTLE_STEP", 0)
     _setup_with(monkeypatch, _Client(rb=None), web)
     assert "Replay Buffer OFF in OBS - clips will NOT save" in web.notices
     out = capsys.readouterr().out
     assert "Settings > Output > Replay Buffer" in out
+
+
+class _SlowStartClient(_Client):
+    """connect() just asked OBS to start the buffer; OBS 28+ runs that on its
+    UI thread, so the status reads inactive for the first couple of polls."""
+    def __init__(self, inactive_reads=2):
+        super().__init__(rb=False)
+        self.reads, self.inactive_reads = 0, inactive_reads
+
+    def replay_buffer_active(self):
+        self.reads += 1
+        return self.reads > self.inactive_reads
+
+
+def test_a_buffer_witness_just_started_is_not_reported_off(monkeypatch, capsys):
+    web = _Web()
+    slept = []
+    monkeypatch.setattr(main.time, "sleep", lambda n: slept.append(n))
+    client = _SlowStartClient(inactive_reads=2)
+    _setup_with(monkeypatch, client, web)
+    assert not any("Replay Buffer" in n for n in web.notices)
+    assert "clips will NOT save" not in capsys.readouterr().out
+    assert client.reads == 3 and sum(slept) <= 3.0
+
+
+def test_the_settle_wait_is_bounded_at_about_three_seconds(monkeypatch):
+    slept = []
+    monkeypatch.setattr(main.time, "sleep", lambda n: slept.append(n))
+    assert main._replay_buffer_ok(_Client(rb=False)) is False
+    assert 2.5 <= sum(slept) <= 3.5
 
 
 def test_a_running_replay_buffer_says_nothing(monkeypatch):
