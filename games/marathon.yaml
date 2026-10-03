@@ -3,10 +3,10 @@
 # Marathon is the app's home game: its settings live in config.yaml and this
 # file is NOT loaded (game: marathon is a passthrough). It exists as the
 # template for what a profile looks like — new games get one of these from
-# the teach-a-game wizard (python main.py --teach). A profile can only set
-# detection, theme and feature-gate keys; anything else in it is ignored
-# (paths, OBS, uploads and dashboard settings stay in your config.yaml).
-# PR yours to the repo and everyone gets that game.
+# the teach-a-game wizard (python main.py --teach). Keep a profile to
+# detection, theme and feature-gate keys like the ones below: it is applied
+# on top of config.yaml, so paths, OBS, upload and dashboard settings don't
+# belong in a file you share. PR yours to the repo and everyone gets that game.
 
 game_name: "Marathon"
 
