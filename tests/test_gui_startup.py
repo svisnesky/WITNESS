@@ -627,6 +627,58 @@ def test_late_result_reaches_the_dashboard():
     assert st.update_changed is True and st._updating is False
 
 
+def test_a_result_that_lands_after_the_splash_still_reaches_the_dashboard(monkeypatch):
+    """The cap fired, and the check finished during the fade or `import main`:
+    finish() had already read UPDATE_MSG, and the event is set by the time the
+    window opens, so no late thread starts either. Files were written under
+    the running app, so the dashboard must say RESTART WITNESS."""
+    fake_app, wv, calls, done = _full_webview_env(
+        monkeypatch, {"web_port": 8000, "web_lan": False})
+    monkeypatch.setattr(gui, "UPDATE_MSG", "")
+    b = gui._new_boot_state()
+    b.update(msg="Updated 3 file(s) to abc1234: main.py ...", changed=True,
+             done=True, aborted=True)
+    b["evt"].set()
+    assert gui._run_webview(b) is True
+    st = fake_app._web_state
+    assert st.update_msg.startswith("Updated 3 file(s)")
+    assert getattr(st, "update_changed", False) is True
+
+
+def test_a_failed_relaunch_still_says_restart(monkeypatch):
+    fake_app, wv, calls, done = _full_webview_env(
+        monkeypatch, {"web_port": 8000, "web_lan": False})
+    b = gui._new_boot_state()
+    b.update(msg="Updated 1 file(s)  (could not restart by itself: OSError: x)",
+             done=True, restart_needed=True)
+    b["evt"].set()
+    monkeypatch.setattr(gui, "UPDATE_MSG", b["msg"])
+    assert gui._run_webview(b) is True
+    st = fake_app._web_state
+    assert "could not restart by itself" in st.update_msg
+    assert st.update_changed is True
+
+
+def test_tk_fallback_shows_an_update_result_that_landed_late():
+    panel = gui.ControlPanel.__new__(gui.ControlPanel)
+    panel._last_error = ""
+    logged = []
+    panel._log = logged.append
+    b = gui._new_boot_state()
+    panel._boot = b
+    panel._poll_boot()
+    assert logged == []                             # still checking
+    b.update(msg="Updated 2 file(s) to abc1234: gui.py", changed=True, done=True)
+    b["evt"].set()
+    panel._poll_boot()
+    panel._poll_boot()                              # once only
+    assert len(logged) == 1
+    assert logged[0].startswith("Updated 2 file(s)")
+    assert "restart WITNESS" in logged[0]
+    assert gui._update_text({"msg": "Already up to date.", "changed": False}) \
+        == "Already up to date."
+
+
 # --- the tk panel's tiles come from the tally ------------------------------------
 
 # Event lines from a real session log (2026-08-08), in order. The game's

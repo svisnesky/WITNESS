@@ -400,8 +400,11 @@ class ControlPanel:
     """WITNESS command center — rail + live main stage."""
     DOT = "●"
 
-    def __init__(self, root):
+    def __init__(self, root, boot=None):
         self.root = root
+        # the launch update check (see check_updates); its result is shown
+        # once it lands, however late (_poll_boot)
+        self._boot = boot
         try:
             self.cfg = app.load_config()
         except Exception as e:
@@ -451,8 +454,22 @@ class ControlPanel:
         self.main.pack(side="left", fill="both", expand=True)
         self._build_rail(rail)
         self._show_idle()
-        if UPDATE_MSG:
+        if getattr(self, "_boot", None) is None and UPDATE_MSG:
             self._log(UPDATE_MSG)
+        self._poll_boot()
+
+    def _poll_boot(self):
+        """Show the launch update check's result once, when it has landed:
+        at build time, or later from _drain if it outlived the splash."""
+        boot = getattr(self, "_boot", None)
+        if boot is None or getattr(self, "_boot_shown", False):
+            return
+        if not boot["evt"].is_set():
+            return
+        self._boot_shown = True
+        text = _update_text(boot)
+        if text:
+            self._log(text)
 
     def _build_rail(self, rail):
         brand = tk.Frame(rail, bg=RAIL_BG)
@@ -833,6 +850,7 @@ class ControlPanel:
 
     def _drain(self):
         try:
+            self._poll_boot()
             while True:
                 kind, val = self.q.get_nowait()
                 if kind == "log":
@@ -1380,6 +1398,15 @@ def _late_update_msg(st, boot: dict, timeout: float = 600.0) -> None:
         _set_attr(st, "_updating", False)
 
 
+def _update_text(boot: dict) -> str:
+    """The launch check's result as one line for the tk panel, which has no
+    RESTART banner of its own."""
+    msg = str(boot.get("msg") or "")
+    if msg and (boot.get("changed") or boot.get("restart_needed")):
+        msg += "  - restart WITNESS to apply"
+    return msg
+
+
 def _splash_note(sp, text: str) -> None:
     """A small line along the bottom of the splash ('Checking for updates...')."""
     try:
@@ -1529,7 +1556,7 @@ def _boot():
     # The command center is the HTML dashboard in a native window (webview).
     # If that engine isn't available, fall back to the tk control panel.
     if not _run_webview(state):
-        _run_tk_fallback()
+        _run_tk_fallback(state)
 
 
 class _WebSession:
@@ -1672,7 +1699,15 @@ def _run_webview(boot=None):
         if boot is not None:
             if boot.get("restart_needed"):
                 st.update_changed = True
-            if not boot["evt"].is_set():       # the check outlived the splash
+            if boot["evt"].is_set():
+                # finish() read UPDATE_MSG before `import main`; a check that
+                # landed after the cap (during the fade or that import) is only
+                # in boot. Without this its 'changed' was dropped: files written
+                # under the running app, and no RESTART prompt.
+                st.update_msg = boot.get("msg") or UPDATE_MSG
+                if boot.get("changed"):
+                    st.update_changed = True
+            else:                              # the check outlived the splash
                 threading.Thread(target=_late_update_msg, args=(st, boot),
                                  daemon=True).start()
         try:                       # so Archive/Reels show past sessions on open
@@ -1699,11 +1734,11 @@ def _run_webview(boot=None):
         return False
 
 
-def _run_tk_fallback():
+def _run_tk_fallback(boot=None):
     r = tk.Tk()
     _claim_app_identity()
     r.report_callback_exception = _panel_callback_error(r)
-    ControlPanel(r)
+    ControlPanel(r, boot)
     r.mainloop()
 
 
