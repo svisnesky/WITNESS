@@ -47,3 +47,12 @@ def test_update_button_is_not_promised_while_auto_update_is_off():
     assert ("**Check for update** on the dashboard and `Update WITNESS.bat` "
             "update on demand") not in text
     assert "then only `Update WITNESS.bat` updates" in text
+
+
+def test_package_downloads_are_not_limited_to_first_time_setup():
+    # updater.ensure_requirements pip-installs from the launch path whenever
+    # an update changes requirements.txt, and _env.bat reinstalls when its
+    # stamp no longer matches. Downloads are not a first-setup-only event.
+    text = _flat(_readme())
+    assert "First-time setup also downloads packages" not in text
+    assert "any update that adds a package" in text

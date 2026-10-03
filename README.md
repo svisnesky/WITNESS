@@ -228,8 +228,9 @@ commands to check them yourself. The short version:
   - **YouTube**, only if you set up your own Google OAuth app and turn on an
     upload toggle.
 
-  First-time setup also downloads packages and the OCR model. No telemetry,
-  no accounts, no analytics.
+  Setup, and any update that adds a package, downloads packages (PyPI, and
+  the GPU build of PyTorch on NVIDIA PCs), plus the OCR model on first run.
+  No telemetry, no accounts, no analytics.
 - **Auto-update runs code from this repo.** That's what an auto-updater is:
   whatever lands on the `main` branch runs on your PC at next launch. If you
   don't want that trust relationship, set `auto_update: false`, read the new
