@@ -28,8 +28,21 @@ import match_reel as mr  # noqa: E402
 LISTED = " V....D h264_nvenc           NVIDIA NVENC H.264 encoder (codec h264)\n"
 NO_DRIVER = "[h264_nvenc @ 0x1] Cannot load nvcuda.dll\nError while opening encoder\n"
 NO_DEVICE = "[h264_nvenc @ 0x1] No NVENC capable devices found\n"
+# What ffmpeg REALLY prints when OBS holds every NVENC session: the open fails,
+# and the device loop then says "No capable devices found" as well. The second
+# line is the trap — on its own it reads like "no NVIDIA card".
 BUSY = ("[h264_nvenc @ 0x1] OpenEncodeSessionEx failed: incompatible client key"
-        " (21): (no details)\n")
+        " (21): (no details)\n"
+        "[h264_nvenc @ 0x1] No capable devices found\n")
+SESSIONS_FULL = ("[h264_nvenc @ 0x1] OpenEncodeSessionEx failed: out of memory (10):"
+                 " (no details)\n"
+                 "[h264_nvenc @ 0x1] No capable devices found\n"
+                 "Error while opening encoder - maybe incorrect parameters\n")
+VRAM_FULL = ("[h264_nvenc @ 0x1] cuCtxCreate(&ctx->cu_context_internal, 0, cu_device)"
+             " failed -> CUDA_ERROR_OUT_OF_MEMORY: out of memory\n"
+             "[h264_nvenc @ 0x1] No capable devices found\n")
+# A full reel log carries drawtext's fontconfig noise alongside the real error.
+FONTCONFIG = "Fontconfig error: Cannot load default config file: No such file: (null)\n"
 
 
 @pytest.fixture(autouse=True)
@@ -73,6 +86,37 @@ def test_an_unrelated_probe_error_keeps_nvenc(monkeypatch):
     assert mr.has_nvenc("FF") is True
     assert mr.video_encoder_args({"render_encoder": "auto"}, "FF")[:2] == [
         "-c:v", "h264_nvenc"]
+
+
+@pytest.mark.parametrize("err", [SESSIONS_FULL, VRAM_FULL],
+                         ids=["obs-holds-the-sessions", "game-filled-vram"])
+def test_no_capable_devices_after_a_failed_open_keeps_nvenc(monkeypatch, err):
+    """ffmpeg prints 'No capable devices found' after ANY failed device open,
+    including the two Stan hits mid-session. Caching that would put his reels
+    on libx264 for the night."""
+    _fake_ffmpeg(monkeypatch, probe=(1, err))
+    assert mr.has_nvenc("FF") is True
+
+
+@pytest.mark.parametrize("err,missing", [
+    (NO_DRIVER, True),
+    ("[h264_nvenc @ 0x1] Cannot load nvEncodeAPI64.dll\n", True),
+    ("[h264_nvenc @ 0x1] Cannot load libcuda.so.1\n", True),
+    (NO_DEVICE, True),
+    ("[h264_nvenc @ 0x1] No capable devices found\n", True),  # card w/o NVENC
+    (FONTCONFIG + NO_DRIVER, True),
+    (BUSY, False),
+    (SESSIONS_FULL, False),
+    (VRAM_FULL, False),
+    (FONTCONFIG + BUSY, False),
+    (FONTCONFIG + "Error while opening encoder for output stream #0:0\n", False),
+    ("[h264_nvenc @ 0x1] cuInit(0) failed -> CUDA_ERROR_UNKNOWN: unknown error\n",
+     False),
+    ("", False),
+])
+def test_only_missing_hardware_reads_as_missing(err, missing):
+    r = subprocess.CompletedProcess([], 1, "", err)
+    assert mr._nvenc_hardware_missing(r) is missing
 
 
 def test_a_probe_timeout_keeps_nvenc(monkeypatch):
@@ -179,6 +223,20 @@ def test_a_transient_nvenc_failure_is_reported_and_not_cached(tmp_path, monkeypa
     assert "falling back to CPU" in printed
     assert "NVIDIA encoder unavailable" not in printed
     assert [e for e, _p in runs][-1] == "libx264"
+    assert mr._ENCODER_CACHE["FF"] is True
+
+
+def test_full_sessions_with_chyron_noise_are_not_cached(tmp_path, monkeypatch, capsys):
+    """A real reel log: drawtext's fontconfig 'Cannot load ...' line plus OBS
+    holding the sessions, on both rungs. Neither may read as 'no NVIDIA'."""
+    _stub_reel(monkeypatch)
+    mr._ENCODER_CACHE["FF"] = True
+    _ladder(monkeypatch, FONTCONFIG + SESSIONS_FULL, FONTCONFIG + SESSIONS_FULL)
+    out = str(tmp_path / "reels" / "match_1.mp4")
+    assert mr.build_match_reel(_two_clips(tmp_path), out, "FF", "T", 2, [])
+    printed = capsys.readouterr().out
+    assert "NVIDIA encoder unavailable" not in printed
+    assert "falling back to CPU" in printed
     assert mr._ENCODER_CACHE["FF"] is True
 
 
@@ -304,3 +362,29 @@ def test_auto_reels_still_lead_with_play_of_the_game(tmp_path, monkeypatch):
 def test_potg_off_keeps_the_given_order(tmp_path, monkeypatch):
     assert _render_order(tmp_path, monkeypatch, potg_enabled=False) == [
         "001_down_20-01-00.mkv", "002_down+down_20-09-00.mkv"]
+
+
+# ---- Shorts share the verdict ----------------------------------------------
+
+@pytest.mark.parametrize("err,cached", [(NO_DRIVER, False), (SESSIONS_FULL, True),
+                                        (FONTCONFIG + BUSY, True)])
+def test_a_short_caches_only_missing_hardware(tmp_path, monkeypatch, err, cached):
+    import shorts
+    monkeypatch.setattr(shorts, "_find_font", lambda: "")
+    mr._ENCODER_CACHE["FF"] = True
+    encs = []
+
+    def run(cmd, **k):
+        enc = cmd[cmd.index("-c:v") + 1]
+        encs.append(enc)
+        if enc == "h264_nvenc":
+            return subprocess.CompletedProcess(cmd, 1, "", err)
+        with open(cmd[-1], "wb") as f:
+            f.write(b"mp4")
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+    monkeypatch.setattr(shorts.subprocess, "run", run)
+    src = tmp_path / "001_down_20-01-00.mkv"
+    src.write_bytes(b"x")
+    assert shorts.build_short(str(src), str(tmp_path / "s.mp4"), "FF")
+    assert encs == ["h264_nvenc", "libx264"]       # the Short is never lost
+    assert mr._ENCODER_CACHE["FF"] is cached

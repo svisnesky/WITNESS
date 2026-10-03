@@ -36,21 +36,49 @@ def _render_flags():
 _ENCODER_CACHE = {}
 
 # What ffmpeg prints when there is NO NVIDIA encoder on this PC at all: no
-# NVIDIA card or driver (nvcuda.dll / libcuda missing), or a card without NVENC.
-# Only these may switch a session to CPU. Every other NVENC failure — a driver
-# hiccup, all encoder sessions held by OBS, a timeout while the game loads the
-# GPU — is TRANSIENT, and caching it would silently move Stan's reels onto
-# libx264 for the rest of the night: the exact CPU contention that NVENC was
-# turned on to remove (his in-match frame drops).
-_NVENC_MISSING_SIGNS = ("nvcuda.dll", "no capable devices",
-                        "no nvenc capable devices", "cannot load",
-                        "cannot init cuda")
+# NVIDIA card or driver, or a card without NVENC. Only these may switch a
+# session to CPU. Every other NVENC failure — a driver hiccup, all encoder
+# sessions held by OBS, a timeout while the game loads the GPU — is TRANSIENT,
+# and caching it would silently move Stan's reels onto libx264 for the rest of
+# the night: the exact CPU contention that NVENC was turned on to remove (his
+# in-match frame drops).
+#
+# The driver libraries failed to load: "Cannot load nvcuda.dll",
+# "Cannot load nvEncodeAPI64.dll" (libcuda.so / libnvidia-encode.so elsewhere).
+# Only a "Cannot load" that names one of THESE counts: a reel's stderr is the
+# full ffmpeg log, which can also carry fontconfig's "Cannot load default config
+# file" from the chyron's drawtext.
+_NVENC_LIBS = ("nvcuda", "nvencodeapi", "libcuda", "libnvidia-encode")
+# No usable device. ("No NVENC capable devices" / "Cannot init CUDA" are the
+# older builds' wording.)
+_NVENC_NO_DEVICE = ("no capable devices", "no nvenc capable devices",
+                    "cannot init cuda")
+# ...but ffmpeg ALSO prints "No capable devices found" when a GPU that exists
+# fails to open: nvenc_check_device gives up on any cuCtxCreate or
+# OpenEncodeSessionEx error, and the device loop then reports no capable devices.
+# Those are precisely the transient cases: OBS holding the encoder sessions
+# ("OpenEncodeSessionEx failed: out of memory (10)", or "incompatible client
+# key (21)" on older drivers) and the game filling VRAM ("cuCtxCreate(...)
+# failed -> CUDA_ERROR_OUT_OF_MEMORY"). Getting as far as a CUDA call or an
+# encode session proves there IS an NVIDIA GPU, so any of these vetoes the
+# missing-hardware verdict.
+_NVENC_GPU_PRESENT = ("openencodesessionex", "cuda_error_", "out of memory",
+                      "incompatible client key")
 
 
 def _nvenc_hardware_missing(r) -> bool:
-    """True if a failed ffmpeg run says the NVIDIA hardware/driver isn't there."""
+    """True if a failed ffmpeg run says the NVIDIA hardware/driver isn't there.
+    When in doubt, False: a wrong False costs one more failed attempt on a PC
+    without NVIDIA, a wrong True costs Stan a night of CPU renders."""
     err = (getattr(r, "stderr", "") or "").lower()
-    return any(sign in err for sign in _NVENC_MISSING_SIGNS)
+    if any(s in err for s in _NVENC_GPU_PRESENT):
+        return False
+    for line in err.splitlines():
+        if "cannot load" in line and any(lib in line for lib in _NVENC_LIBS):
+            return True
+        if any(s in line for s in _NVENC_NO_DEVICE):
+            return True
+    return False
 
 
 def _nvenc_probe_says_missing(ffmpeg: str) -> bool:
@@ -78,7 +106,7 @@ def has_nvenc(ffmpeg: str) -> bool:
     Intel and GPU-less machines every reel used to fail twice on NVENC and print
     three alarming lines before rendering on CPU. So when it is listed, a
     one-frame probe asks the driver; only a clear missing-hardware answer turns
-    it off (see _NVENC_MISSING_SIGNS). Cached per ffmpeg path."""
+    it off (see _nvenc_hardware_missing). Cached per ffmpeg path."""
     if ffmpeg in _ENCODER_CACHE:
         return _ENCODER_CACHE[ffmpeg]
     ok = False
