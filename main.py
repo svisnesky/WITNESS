@@ -117,7 +117,8 @@ def _close_session_log():
     global _log_fh, _log_prev_stdout
     try:
         if _log_path:
-            print(f"Session log saved: {_log_path}  (send me this file)")
+            print(f"Session log saved: {_log_path}  (attach it to a bug report: "
+                  "github.com/svisnesky/WITNESS/issues)")
         if _log_prev_stdout is not None:
             sys.stdout = _log_prev_stdout
         if _log_fh is not None:
@@ -2548,27 +2549,28 @@ def _build_match_reel_async(cfg, s, session_dir, stats_d):
 
 
 def _check_manual_kill(cfg, s, on_count=None):
-    """If the iPad '+1 KILL' button was tapped, count a kill the detector
-    missed — full pipeline: counter, ding, clip, instant replay."""
+    """If the dashboard's '+1 KILL' button was tapped, count a kill the
+    detector missed — full pipeline: counter, ding, clip, instant replay.
+    The raw line must keep starting with 'MANUAL': classify_event keys on it."""
     web = s["web"]
     if web is not None and getattr(web, "pop_kill_request", None) and web.pop_kill_request():
         from detector import KillEvent
-        print("  [+1 kill added from iPad]")
+        print("  [+1 kill added from the dashboard]")
         ev = KillEvent(timestamp=time.monotonic(),
-                       raw_line="MANUAL +1 (added from iPad)",
+                       raw_line="MANUAL +1 (added from the dashboard)",
                        killer="", victim="", is_self_kill=True)
         _handle_kill(cfg, ev, s, on_count)
 
 
 def _check_manual_clip(s):
-    """If the iPad 'SAVE CLIP' button was tapped, save a replay now."""
+    """If the dashboard's 'SAVE CLIP' button was tapped, save a replay now."""
     web = s["web"]
     if web is not None and web.pop_clip_request():
         now = time.monotonic()
         if now - s["last_save"] >= s["min_save"]:
             if s["obs"].save_replay():
                 s["last_save"] = now
-                print("  [manual clip saved from iPad]")
+                print("  [manual clip saved from the dashboard]")
                 # Immediate, visible confirmation for the deliberate button press
                 # (the auto kill-clip chip is a quiet corner blip; this one you
                 # actually see). Fires the instant OBS confirms the save.
