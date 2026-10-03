@@ -2,12 +2,16 @@
 
 Uses the concat demuxer with stream copy (-c copy) so it's fast and lossless —
 the clips all come from the same OBS Replay Buffer, so they share a codec.
-Needs ffmpeg: either ffmpeg.exe in the app folder, an ffmpeg_path in config, or
-ffmpeg on PATH.
+Needs ffmpeg: either ffmpeg.exe in the app folder, an ffmpeg_path in config,
+ffmpeg on PATH, or (last resort) the binary bundled with the imageio-ffmpeg
+package. See find_ffmpeg for the order.
 """
 
 import os
+import shutil
 import subprocess
+
+import tidy
 
 VIDEO_EXTS = (".mkv", ".mp4", ".mov", ".flv", ".ts")
 
@@ -23,14 +27,71 @@ def _render_flags():
     return flags
 
 
+# imageio-ffmpeg's bundled binary: None = not looked up yet, "" = not available.
+_IMAGEIO_FFMPEG = None
+# has_ffmpeg() answers, keyed by the resolved ffmpeg path.
+_HAS_FFMPEG = {}
+
+
+def _imageio_ffmpeg() -> str:
+    """The ffmpeg that the imageio-ffmpeg package ships, or "".
+
+    GUARDED, and that is the whole point: the updater never runs pip, so an
+    auto-updated install (Stan's included) does not have this package even after
+    requirements.txt lists it. An unguarded import here would have taken down
+    every replay and reel on exactly the installs that were working. Looked up
+    once per process — this is reached on every kill for anyone without ffmpeg."""
+    global _IMAGEIO_FFMPEG
+    if _IMAGEIO_FFMPEG is None:
+        exe = ""
+        try:
+            import imageio_ffmpeg
+            exe = str(imageio_ffmpeg.get_ffmpeg_exe() or "")
+        except Exception:            # not installed, or no binary for this OS
+            exe = ""
+        _IMAGEIO_FFMPEG = exe if exe and os.path.isfile(exe) else ""
+    return _IMAGEIO_FFMPEG
+
+
 def find_ffmpeg(base_dir, cfg):
-    p = (cfg.get("ffmpeg_path") or "").strip()
+    """The ffmpeg to run. Order matters, and the first two are Stan's setup:
+
+      1. ffmpeg_path from config
+      2. ffmpeg.exe in the app folder
+      3. ffmpeg on PATH          -> the bare name "ffmpeg", exactly as before
+      4. imageio-ffmpeg's bundled binary, if that package is installed
+      5. the bare name "ffmpeg" anyway, so callers behave exactly as they always
+         have (and fail the way they always have) when there is no ffmpeg at all
+
+    The bundled binary comes LAST on purpose: it has no ffprobe (probe_duration
+    already falls back to `ffmpeg -i`) and may lack NVENC or drawtext, both of
+    which already degrade gracefully. Any ffmpeg the user installed wins."""
+    p = ((cfg or {}).get("ffmpeg_path") or "").strip()
     if p and os.path.exists(p):
         return p
     local = os.path.join(base_dir, "ffmpeg.exe")
     if os.path.exists(local):
         return local
-    return "ffmpeg"  # fall back to PATH
+    if shutil.which("ffmpeg"):
+        return "ffmpeg"  # on PATH
+    bundled = _imageio_ffmpeg()
+    if bundled:
+        return bundled
+    return "ffmpeg"  # nothing found; keep the old sentinel
+
+
+def has_ffmpeg(base_dir, cfg) -> bool:
+    """True if find_ffmpeg() resolves to something that can actually run.
+
+    The bare "ffmpeg" sentinel is checked with shutil.which, never
+    os.path.exists — a PATH install is not a file in the current folder, and
+    testing it that way would wrongly switch off replays for everyone with
+    ffmpeg on PATH. Cached per resolved path for the life of the process."""
+    ff = find_ffmpeg(base_dir, cfg)
+    if ff not in _HAS_FFMPEG:
+        _HAS_FFMPEG[ff] = bool(ff) and (os.path.isfile(ff)
+                                         or shutil.which(ff) is not None)
+    return _HAS_FFMPEG[ff]
 
 
 def build_montage(session_dir, ffmpeg):
@@ -39,19 +100,28 @@ def build_montage(session_dir, ffmpeg):
         print("  [montage] no session folder to stitch")
         return None
 
+    # Tidy-aware: clips live at the top level during a session and in clips/
+    # once the recap has tidied the folder. Listing only the top level made a
+    # Rebuild of a tidied session stitch session_reel.mp4 — the one video left
+    # there — into a "montage" of itself. iter_session_media also skips the
+    # session's own outputs (highlights*, session_reel*, witness_report*).
+    rel_of, seen = {}, set()
+    for rel, full in tidy.iter_session_media(session_dir, VIDEO_EXTS):
+        name = os.path.basename(rel).lower()
+        if name in seen:
+            continue    # tidy skipped a name collision: same clip in both places
+        seen.add(name)
+        rel_of[full] = rel
+
     # CHRONOLOGICAL, not alphabetical: the filename's leading number is the kill
     # count, which repeats now that assists don't bump it, so a plain sort cut
     # back to an earlier moment mid-montage.
-    names = [f for f in os.listdir(session_dir)
-             if f.lower().endswith(VIDEO_EXTS)
-             and not f.lower().startswith("highlights")]
     try:
         from match_reel import sort_chronologically
-        clips = [os.path.basename(p) for p in sort_chronologically(
-            [os.path.join(session_dir, f) for f in names])]
+        fulls = sort_chronologically(list(rel_of))
     except Exception:
-        clips = sorted(names)
-    if not clips:
+        fulls = sorted(rel_of, key=lambda f: os.path.basename(f))
+    if not fulls:
         print("  [montage] no clips in the session folder to stitch")
         return None
     # Drop clips whose Replay-Buffer footage is contained in the next save —
@@ -59,19 +129,18 @@ def build_montage(session_dir, ffmpeg):
     try:
         from match_reel import drop_overlapping
         deduped = drop_overlapping(
-            [{"path": os.path.join(session_dir, c), "kills": 1, "tag": ""}
-             for c in clips], ffmpeg)
-        clips = [os.path.basename(c["path"]) for c in deduped]
+            [{"path": f, "kills": 1, "tag": ""} for f in fulls], ffmpeg)
+        fulls = [c["path"] for c in deduped]
     except Exception:
         pass
+    # Paths RELATIVE to the session folder, forward slashes ("clips/001_...").
+    # The concat demuxer resolves them against the list file's own folder, which
+    # is session_dir. A bare basename would point at the top level, where a
+    # tidied clip no longer is.
+    clips = [rel_of[f] for f in fulls]
 
-    ext = os.path.splitext(clips[0])[1]
+    ext = os.path.splitext(os.path.basename(clips[0]))[1]
     list_path = os.path.join(session_dir, "_montage_list.txt")
-    with open(list_path, "w", encoding="utf-8") as f:
-        for c in clips:
-            # ffmpeg concat: escape single quotes in filenames
-            f.write("file '%s'\n" % c.replace("'", "'\\''"))
-
     out = os.path.join(session_dir, "highlights_%s%s" % (os.path.basename(session_dir), ext))
     # +genpts / make_zero: OBS Replay-Buffer files carry non-zero start
     # timestamps; naive stream-copy concat inherits them and players cut clips
@@ -80,20 +149,29 @@ def build_montage(session_dir, ffmpeg):
     cmd = [ffmpeg, "-y", "-fflags", "+genpts", "-f", "concat", "-safe", "0",
            "-i", list_path, "-c", "copy", "-avoid_negative_ts", "make_zero", out]
     try:
-        r = subprocess.run(cmd, cwd=session_dir, capture_output=True, text=True,
-                           creationflags=_render_flags())
-        if r.returncode == 0 and os.path.exists(out):
-            print("  [montage] highlight reel -> %s (%d clips)" % (out, len(clips)))
-            try:
-                os.remove(list_path)
-            except OSError:
-                pass
-            return out
-        tail = (r.stderr.strip().splitlines() or ["(no output)"])[-1]
-        print("  [montage] ffmpeg failed (%s): %s" % (r.returncode, tail))
-    except FileNotFoundError:
-        print("  [montage] ffmpeg not found — put ffmpeg.exe in the app folder "
-              "or set ffmpeg_path in config.yaml.")
-    except Exception as e:
-        print("  [montage] error: %s" % e)
+        with open(list_path, "w", encoding="utf-8") as f:
+            for c in clips:
+                # ffmpeg concat: escape single quotes in filenames
+                f.write("file '%s'\n" % c.replace("'", "'\\''"))
+        try:
+            r = subprocess.run(cmd, cwd=session_dir, capture_output=True,
+                               text=True, creationflags=_render_flags())
+            if r.returncode == 0 and os.path.exists(out):
+                print("  [montage] highlight reel -> %s (%d clips)" % (out, len(clips)))
+                return out
+            tail = ((r.stderr or "").strip().splitlines() or ["(no output)"])[-1]
+            print("  [montage] ffmpeg failed (%s): %s" % (r.returncode, tail))
+        except FileNotFoundError:
+            print("  [montage] ffmpeg not found — put ffmpeg.exe in the app folder "
+                  "or set ffmpeg_path in config.yaml.")
+        except Exception as e:
+            print("  [montage] error: %s" % e)
+    finally:
+        # Every exit, not just success: a failed render used to leave the list
+        # file behind in the session folder. A list file that can't be WRITTEN
+        # still raises to the caller, as before, so the recap records it.
+        try:
+            os.remove(list_path)
+        except OSError:
+            pass
     return None

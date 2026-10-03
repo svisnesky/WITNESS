@@ -15,9 +15,16 @@ import csv
 import os
 import time
 
+import clip_index
+import tidy
 from matchcard import _font, _text_w, BG, PANEL, LINE, TEXT, MUTED, ACCENT
 
-TAG_PRIORITY = ("finisher", "precision", "down", "kill", "assist", "manual")
+# Tie-break order for the best play. "manual_kill" is a +1 KILL press: a kill,
+# ranked with "kill" (match_reel._tag_rank already ranks it there). Before the
+# shared parser it was misread as "manual", a moment saved by hand; once it
+# parsed correctly it matched nothing here and fell below an assist.
+TAG_PRIORITY = ("finisher", "precision", "down", "kill", "manual_kill",
+                "assist", "manual")
 
 
 def _num(v):
@@ -47,7 +54,7 @@ def week_rows(base_dir: str, days: int = 7) -> list[dict]:
 
 def best_play(record_dir: str, days: int = 7):
     """Highest-kill clip of the week from clip filenames
-    (NNN_tag_HH-MM-SS.ext; kills = number of down/precision parts in the tag).
+    (NNN_tag_HH-MM-SS.ext; kills = number of down/precision/+1 parts in the tag).
     Returns (kills, tag, session) or None."""
     root = os.path.join(record_dir, "Marathon Sessions")
     if not os.path.isdir(root):
@@ -58,16 +65,19 @@ def best_play(record_dir: str, days: int = 7):
         sdir = os.path.join(root, sess)
         if not os.path.isdir(sdir) or os.path.getmtime(sdir) < cutoff:
             continue
-        for f in os.listdir(sdir):
-            if not f.lower().endswith((".mkv", ".mp4")) or f.startswith("highlights"):
+        # Tidy-aware: after a recap the clips live in clips/, and the old
+        # top-level-only listing found nothing there, so Wrapped never had a
+        # best play. iter_session_media also skips highlights/session_reel.
+        for rel, _full in tidy.iter_session_media(sdir, (".mkv", ".mp4")):
+            # The shared, end-anchored parser: a '+1 KILL' clip is tagged
+            # 'manual_kill', which a split on '_' cut down to 'manual'.
+            _n, tags, _clock = clip_index.parse_name(os.path.basename(rel))
+            if not tags:
                 continue
-            parts = f.split("_")
-            if len(parts) < 3:
-                continue
-            tag = parts[1]
-            kills = sum(1 for t in tag.split("+") if t in ("down", "precision"))
+            tag = "+".join(tags)
+            kills = sum(1 for t in tags if t in ("down", "precision", "manual_kill"))
             kills = max(1, kills)
-            rank = -TAG_PRIORITY.index(tag.split("+")[0]) if tag.split("+")[0] in TAG_PRIORITY else -99
+            rank = -TAG_PRIORITY.index(tags[0]) if tags[0] in TAG_PRIORITY else -99
             key = (kills, rank)
             if best is None or key > best[0]:
                 best = (key, kills, tag, sess)
@@ -149,7 +159,7 @@ def build_wrapped(base_dir: str, record_dir: str = "", days: int = 7):
     y += 28
     if bp:
         kills, tag, sess = bp
-        tag_txt = tag.replace("+", " + ").upper()
+        tag_txt = tag.replace("+", " + ").replace("_", " ").upper()
         d.text((pad, y), "BEST PLAY", font=_font("mono", 20), fill=MUTED)
         d.text((pad, y + 34), f"{kills} KILL{'S' if kills != 1 else ''} — {tag_txt}",
                font=_font("black", 44), fill=ACCENT)

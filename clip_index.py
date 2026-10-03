@@ -22,6 +22,7 @@ the viewer mark the exact second of each down instead of making you scrub.
 from __future__ import annotations
 
 import os
+import re
 
 # Human labels for the event tags that appear in clip filenames.
 TAG_LABELS = {
@@ -48,20 +49,26 @@ TAG_ROLE = {
 }
 
 
+# <count>_<tags>_<HH-MM-SS>, anchored at BOTH ends. The tag part may itself
+# contain '_': a +1 KILL press is tagged 'manual_kill'. Splitting on '_' read
+# '002_manual_kill_20-05-00' as tag 'manual' at clock 'kill' — a hand-credited
+# kill shown as a 0-kill 'SAVED' clip. The clock is the only fixed-shape part,
+# so it anchors the end and the tags take everything in between.
+_NAME_RE = re.compile(r"^(\d+)_(.+)_(\d{2}-\d{2}-\d{2})$")
+
+
 def parse_name(name: str) -> tuple:
     """'003_down+precision_21-36-32.mkv' -> (3, ['down','precision'], '21:36:32').
-    Returns (None, [], '') for anything that doesn't fit the pattern."""
+    '002_manual_kill_20-05-00.mkv' -> (2, ['manual_kill'], '20:05:00').
+    Returns exactly (None, [], '') for anything that doesn't fit the pattern
+    (OBS default names, highlights_*, hand-dropped files) — callers fall back
+    on that, so it must never be a partial guess."""
     stem = os.path.splitext(os.path.basename(name))[0]
-    parts = stem.split("_")
-    if len(parts) < 3:
+    m = _NAME_RE.match(stem)
+    if not m:
         return None, [], ""
-    try:
-        num = int(parts[0])
-    except ValueError:
-        num = None
-    tags = [t for t in parts[1].split("+") if t]
-    clock = parts[2].replace("-", ":")
-    return num, tags, clock
+    tags = [t for t in m.group(2).split("+") if t]
+    return int(m.group(1)), tags, m.group(3).replace("-", ":")
 
 
 def clip_events(dur, saved_epoch, kills) -> list:

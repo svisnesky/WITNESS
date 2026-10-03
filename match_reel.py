@@ -35,10 +35,99 @@ def _render_flags():
 
 _ENCODER_CACHE = {}
 
+# What ffmpeg prints when there is NO NVIDIA encoder on this PC at all: no
+# NVIDIA driver, or a CUDA card without NVENC (GT 1030, MX-series, 930M; see
+# _NVENC_NOT_SUPPORTED). Only these may switch a session to CPU. A PC with the
+# NVIDIA driver installed but no NVIDIA card (CUDA_ERROR_NO_DEVICE) is
+# deliberately NOT one of them: see _NVENC_GPU_PRESENT. Every other NVENC
+# failure — a driver hiccup, all encoder sessions held by OBS, a timeout while
+# the game loads the GPU — is TRANSIENT, and caching it would silently move
+# Stan's reels onto libx264 for the rest of the night: the exact CPU contention
+# that NVENC was turned on to remove (his in-match frame drops).
+#
+# The driver libraries failed to load: "Cannot load nvcuda.dll",
+# "Cannot load nvEncodeAPI64.dll" (libcuda.so / libnvidia-encode.so elsewhere).
+# Only a "Cannot load" that names one of THESE counts: a reel's stderr is the
+# full ffmpeg log, which can also carry fontconfig's "Cannot load default config
+# file" from the chyron's drawtext.
+_NVENC_LIBS = ("nvcuda", "nvencodeapi", "libcuda", "libnvidia-encode")
+# No usable device. ("No NVENC capable devices" / "Cannot init CUDA" are the
+# older builds' wording.)
+_NVENC_NO_DEVICE = ("no capable devices", "no nvenc capable devices",
+                    "cannot init cuda")
+# ...but ffmpeg ALSO prints "No capable devices found" when a GPU that exists
+# fails to open: nvenc_check_device gives up on any cuCtxCreate or
+# OpenEncodeSessionEx error, and the device loop then reports no capable devices.
+# Those are precisely the transient cases: OBS holding the encoder sessions
+# ("OpenEncodeSessionEx failed: out of memory (10)", or "incompatible client
+# key (21)" on older drivers) and the game filling VRAM ("cuCtxCreate(...)
+# failed -> CUDA_ERROR_OUT_OF_MEMORY"). Getting as far as a CUDA call or an
+# encode session proves there IS an NVIDIA GPU, so any of these vetoes the
+# missing-hardware verdict.
+# That includes CUDA_ERROR_NO_DEVICE: on a PC with the driver but no NVIDIA card
+# it is permanent, but a driver reset (TDR) after a game crash can report it for
+# a moment on Stan's card too, and the cost of guessing wrong is lopsided.
+_NVENC_GPU_PRESENT = ("openencodesessionex", "cuda_error_", "out of memory",
+                      "incompatible client key")
+# ...except when the encode session was refused because this GPU has no encoder.
+# A CUDA card without NVENC (GT 1030, MX150/MX250, 930M) passes ffmpeg's
+# compute-capability check, gets a CUDA context, and only then does the DRIVER
+# answer OpenEncodeSessionEx with NV_ENC_ERR_UNSUPPORTED_DEVICE ("unsupported
+# device (2)") or NV_ENC_ERR_NO_ENCODE_DEVICE ("no encode device (1)"). Those are
+# capability answers, not a session limit or full VRAM, so that line is exempt
+# from the veto above. ffmpeg's own "does not support NVENC" line is
+# AV_LOG_VERBOSE, so the probe's -loglevel error never shows it. The number is
+# part of the match: it is NVENC's status code, which pins the line to nvenc.c's
+# error table. Any OTHER veto line in the same log still wins (a second GPU that
+# has NVENC but whose sessions OBS holds is transient).
+_NVENC_NOT_SUPPORTED = ("unsupported device (2)", "no encode device (1)")
+
+
+def _nvenc_hardware_missing(r) -> bool:
+    """True if a failed ffmpeg run says the NVIDIA hardware/driver isn't there.
+    When in doubt, False: a wrong False costs one more failed attempt on a PC
+    without NVIDIA, a wrong True costs Stan a night of CPU renders."""
+    err = (getattr(r, "stderr", "") or "").lower()
+    missing = False
+    for line in err.splitlines():
+        if any(s in line for s in _NVENC_NOT_SUPPORTED):
+            missing = True
+            continue
+        if any(s in line for s in _NVENC_GPU_PRESENT):
+            return False
+        if "cannot load" in line and any(lib in line for lib in _NVENC_LIBS):
+            missing = True
+        elif any(s in line for s in _NVENC_NO_DEVICE):
+            missing = True
+    return missing
+
+
+def _nvenc_probe_says_missing(ffmpeg: str) -> bool:
+    """Encode ONE tiny frame with h264_nvenc. True only when that fails with a
+    missing-hardware message. A probe that times out, can't launch, or fails for
+    any other reason proves nothing, so it answers False (keep NVENC) and the
+    encode ladder in build_match_reel copes as it always has."""
+    try:
+        r = subprocess.run(
+            [ffmpeg, "-hide_banner", "-loglevel", "error",
+             "-f", "lavfi", "-i", "color=black:s=256x144:d=0.1",
+             "-frames:v", "1", "-c:v", "h264_nvenc", "-f", "null", "-"],
+            capture_output=True, text=True, timeout=20,
+            creationflags=_render_flags())
+    except Exception:
+        return False
+    return r.returncode != 0 and _nvenc_hardware_missing(r)
+
 
 def has_nvenc(ffmpeg: str) -> bool:
-    """True if this ffmpeg build has NVIDIA's hardware H.264 encoder.
-    Probed once per ffmpeg path — the answer can't change mid-session."""
+    """True if NVIDIA's hardware H.264 encoder is usable with this ffmpeg.
+
+    Two steps. `-encoders` only says the encoder was COMPILED IN — the gyan.dev
+    build the docs link lists h264_nvenc on every PC, NVIDIA or not, so on AMD,
+    Intel and GPU-less machines every reel used to fail twice on NVENC and print
+    three alarming lines before rendering on CPU. So when it is listed, a
+    one-frame probe asks the driver; only a clear missing-hardware answer turns
+    it off (see _nvenc_hardware_missing). Cached per ffmpeg path."""
     if ffmpeg in _ENCODER_CACHE:
         return _ENCODER_CACHE[ffmpeg]
     ok = False
@@ -48,6 +137,9 @@ def has_nvenc(ffmpeg: str) -> bool:
                            creationflags=_render_flags())
         ok = "h264_nvenc" in (r.stdout or "")
     except Exception:
+        ok = False
+    if ok and _nvenc_probe_says_missing(ffmpeg):
+        print("  [reel] no NVIDIA encoder on this PC - reels render on CPU")
         ok = False
     _ENCODER_CACHE[ffmpeg] = ok
     return ok
@@ -74,8 +166,8 @@ def video_encoder_args(cfg, ffmpeg: str) -> list:
         return ["-c:v", "h264_nvenc", "-preset", "p4", "-rc", "vbr",
                 "-cq", "21", "-b:v", "0"]
     if want == "nvenc":
-        print("  [reel] render_encoder: nvenc requested but this ffmpeg has no "
-              "h264_nvenc — falling back to CPU")
+        print("  [reel] render_encoder: nvenc requested but no NVIDIA encoder is "
+              "usable with this ffmpeg — falling back to CPU")
     return ["-c:v", "libx264", "-preset", "veryfast", "-crf", "21"]
 
 
@@ -125,6 +217,18 @@ def _lighten(c, f=0.45):
     return tuple(int(c[i] + (255 - c[i]) * f) for i in range(3))
 
 CARD_SECONDS = 2.8
+
+# Fit ANY frame shape into 1920x1080 without distorting it. A plain
+# scale=1920:1080 squashed ultrawide (21:9, 32:9) clips sideways in every match,
+# session and Play of the Night reel; this scales to fit and pads the rest
+# black. A 16:9 source (Stan's 4K, 1440p, 1080p) scales to exactly 1920x1080 and
+# the pad adds nothing, so every segment still ends at 1920x1080 — which xfade
+# and concat both require.
+# No force_divisible_by: that option needs ffmpeg 4.3+, and imageio-ffmpeg 0.4.x
+# ships 4.2.2, where it would fail EVERY reel. pad already snaps an odd scaled
+# size to the chroma grid (tested: 3456x2234 -> 1671x1080 -> padded 1920x1080).
+_FIT_1080 = ("scale=1920:1080:force_original_aspect_ratio=decrease,"
+             "pad=1920:1080:(ow-iw)/2:(oh-ih)/2:color=black")
 MUSIC_EXTS = (".mp3", ".wav", ".m4a", ".aac", ".ogg", ".flac")
 
 # flashier tags win Play of the Game ties
@@ -562,15 +666,24 @@ def build_match_reel(clips, out_path: str, ffmpeg: str,
                      preroll: float = 8.0, manual_preroll: float = 18.0,
                      context_preroll: float = 16.0,
                      render_encoder: str = "auto",
-                     dedupe: bool = True) -> bool:
+                     dedupe: bool = True,
+                     potg_enabled: bool = True) -> bool:
     """Title card [+ POTG card] + clips [+ music bed] -> one mp4.
 
     music_volume is 0-1 (0.08 = quiet bed under the game audio).
     music_tracks: pass the whole music library — the soundtrack starts at a
     random point in a random track, fades in/out, and long reels rotate
     through up to three tracks with crossfades. music_path (single file) is
-    the legacy fallback."""
-    clips = _normalize_clips(clips)
+    the legacy fallback.
+
+    potg_enabled=False keeps the clips in the order given: no Play of the Game
+    pick, no best-clip-first reorder, no POTG card or chyron label. That is what
+    a hand-picked export needs — the person chose the order."""
+    # The caller's list, untouched. The fallback re-renders below start again
+    # from THIS, not from the reordered list: handing them the POTG-first list
+    # let a tie pick a different "best" clip on retry and renumbered the kills.
+    clips_in = list(clips)
+    clips = _normalize_clips(clips_in)
     # dedupe=False for a hand-picked export: overlap-merging would silently DROP
     # a clip the user deliberately chose. Automatic reels still merge, because
     # there nobody picked anything and back-to-back buffer saves play as
@@ -584,229 +697,251 @@ def build_match_reel(clips, out_path: str, ffmpeg: str,
 
     for i, c in enumerate(clips):        # kill numbers in match order,
         c["n"] = i + 1                   # assigned before the POTG reorder
-    potg = pick_potg(clips)
+    potg = pick_potg(clips) if potg_enabled else None
     if potg is not None:
         clips = [potg] + [c for c in clips if c is not potg]
 
     stem = os.path.splitext(out_path)[0]
     cards = []  # (png_path, ok)
     title_png = stem + "_card.png"
-    if _build_card(title_png, title, kills, "KILLS", sub_lines, wordmark_path,
-                   theme=theme):
-        cards.append(title_png)
     potg_png = stem + "_potg.png"
-    have_potg_card = False
-    if potg is not None:
-        tag_txt = potg["tag"].replace("+", " + ").replace("_", " ").upper()
-        if _build_card(potg_png, "PLAY OF THE GAME", potg["kills"],
-                       "KILL" + ("S" if potg["kills"] != 1 else ""),
-                       [tag_txt], wordmark_path, theme=theme):
-            have_potg_card = True
-
-    n_cards = len(cards) + (1 if have_potg_card else 0)
-    if n_cards:
-        print(f"  [reel] {n_cards} title/POTG card(s) built")
-    else:
-        print("  [reel] NO cards built (Pillow missing?) — reel will be clips only. "
-              "Run: .venv\\Scripts\\python -m pip install pillow")
-
-    # End card ("GG") closes the reel.
     end_png = stem + "_end.png"
-    brand = str((theme or {}).get("display_name") or "WITNESS").upper()
-    have_end_card = _build_card(end_png, brand, "GG", "",
-                                ["WITNESSED."], wordmark_path,
-                                theme=theme)
-    END_SECONDS = 2.4
+    # Everything from the first card PNG to the last encode attempt is inside
+    # try/finally. The cleanup used to sit after the encode, so a raised _run
+    # (no ffmpeg: WinError 2) left _card/_potg/_end PNGs in the session and
+    # reels folders on every failed recap.
+    try:
+        if _build_card(title_png, title, kills, "KILLS", sub_lines, wordmark_path,
+                       theme=theme):
+            cards.append(title_png)
+        have_potg_card = False
+        if potg is not None:
+            tag_txt = potg["tag"].replace("+", " + ").replace("_", " ").upper()
+            if _build_card(potg_png, "PLAY OF THE GAME", potg["kills"],
+                           "KILL" + ("S" if potg["kills"] != 1 else ""),
+                           [tag_txt], wordmark_path, theme=theme):
+                have_potg_card = True
 
-    # Segment order: title card -> (POTG card -> POTG clip) -> clips -> end card.
-    segments = []  # {kind, path, dur, label}
-    if cards:
-        segments.append({"kind": "card", "path": title_png, "dur": CARD_SECONDS})
-    if potg is not None and have_potg_card:
-        segments.append({"kind": "card", "path": potg_png, "dur": CARD_SECONDS})
-    for c in clips:
-        tag_txt = c["tag"].replace("+", " + ").replace("_", " ").upper()
-        label = (f"PLAY OF THE GAME - {tag_txt}" if c is potg
-                 else f"KILL {c.get('n', '?')} - {tag_txt}")
-        dur = probe_duration(c["path"], ffmpeg)
-        if "ss" in c or "to" in c:
-            # EXPLICIT trim points, from the clip editor — a person chose these,
-            # so they override the automatic tight cut entirely. Handled here
-            # rather than in the filter graph: `dur` is what every xfade offset
-            # below is computed from, so setting it correctly is all that's
-            # needed and the fragile parts stay untouched.
-            ss = max(0.0, float(c.get("ss") or 0.0))
-            if dur:
-                end = float(c["to"]) if c.get("to") else float(dur)
-                end = max(ss + 1.0, min(end, float(dur)))   # never invert or overrun
-                ss = min(ss, end - 1.0)
-                dur = end - ss
-                print(f"  [reel] manual cut: {os.path.basename(c['path'])} "
-                      f"{ss:.1f}s -> {end:.1f}s")
-            ss = round(ss, 3)
+        n_cards = len(cards) + (1 if have_potg_card else 0)
+        if n_cards:
+            print(f"  [reel] {n_cards} title/POTG card(s) built")
         else:
-            # Tight cuts: start ~preroll before the earliest kill instead of
-            # playing the whole 30s buffer (kill timing from the clip's sidecar).
-            ss = (clip_trim_start(c, dur, ffmpeg, preroll, manual_preroll,
-                                  context_preroll)
-                  if tight_cuts else 0.0)
-        if ss and dur and "ss" not in c and "to" not in c:
-            print(f"  [reel] tight cut: {os.path.basename(c['path'])} "
-                  f"starts at {ss:.0f}s (was {dur:.0f}s long)")
-            dur = dur - ss
-        segments.append({"kind": "clip", "path": c["path"], "ss": ss,
-                         "dur": dur, "label": label})
-    if have_end_card:
-        segments.append({"kind": "card", "path": end_png, "dur": END_SECONDS})
+            print("  [reel] NO cards built (Pillow missing?) — reel will be clips only. "
+                  "Run: .venv\\Scripts\\python -m pip install pillow")
 
-    # Broadcast chyron ("KILL 3 - PRECISION") on each clip, if this ffmpeg
-    # build has drawtext.
-    import shorts as _shorts
-    font = _shorts._find_font()
-    use_chyrons = bool(chyrons and font and _shorts._has_drawtext(ffmpeg))
+        # End card ("GG") closes the reel.
+        brand = str((theme or {}).get("display_name") or "WITNESS").upper()
+        have_end_card = _build_card(end_png, brand, "GG", "",
+                                    ["WITNESSED."], wordmark_path,
+                                    theme=theme)
+        END_SECONDS = 2.4
 
-    # Eased alpha, not linear. The old ramp was a piecewise-linear if() chain,
-    # which is what Joe meant by "text is a bit choppy" — a straight-line fade
-    # reads as mechanical. smoothstep (p*p*(3-2p)) starts and ends gently.
-    def _ease(t0: float, t1: float, hold: float, fade: float) -> str:
-        pin = f"((t-{t0})/{fade})"
-        pout = f"(({t1}-t)/{fade})"
-        return (f"'if(lt(t,{t0}),0,"
-                f"if(lt(t,{t0 + fade}),{pin}*{pin}*(3-2*{pin}),"
-                f"if(lt(t,{hold}),1,"
-                f"if(lt(t,{t1}),{pout}*{pout}*(3-2*{pout}),0))))'")
-
-    _A = _ease(0.35, 4.9, 4.2, 0.55)
-
-    def _chyron(label: str) -> str:
-        """Lower-third naming WHO you downed.
-
-        Two drawtext filters, no extra inputs — the plate is drawn by the name's
-        own box=1, so it shares the animated alpha and fades with the text. A
-        drawbox would have had to hard-cut, which is the choppiness we're fixing.
-
-        `label` is a gamertag. It used to be "KILL #3 - PRECISION", which the
-        title card three seconds earlier already said; the name is the one thing
-        a viewer can't get any other way. No name read -> no chyron at all,
-        rather than falling back to bookkeeping."""
-        ff = font.replace(":", r"\:")
-        name = label.replace("'", "").replace(":", r"\:").replace("%", "")
-        accent = _hex_to_ff(ACCENT_LIGHT)
-        # Name + its plate. boxborderw pads the plate around the glyphs; the
-        # mockup sat the name low, so the top pad is larger than the bottom.
-        out = (f",drawtext=fontfile='{ff}':text='{name}':fontsize=62:"
-               f"fontcolor=white:box=1:boxcolor=0x0a0a10@0.78:boxborderw=26:"
-               f"x=76:y=h-150:alpha={_A}")
-        # Small accent label above it, tying the reel to the dashboard palette.
-        out += (f",drawtext=fontfile='{ff}':text='DOWNED':fontsize=26:"
-                f"fontcolor={accent}:box=1:boxcolor=0x0a0a10@0.78:boxborderw=12:"
-                f"x=78:y=h-192:alpha={_A}")
-        return out
-
-    cmd = [ffmpeg, "-y"]
-    for seg in segments:
-        if seg["kind"] == "card":
-            cmd += ["-loop", "1", "-framerate", "60", "-t", str(seg["dur"]), "-i", seg["path"],
-                    "-f", "lavfi", "-t", str(seg["dur"]), "-i", "anullsrc=r=48000:cl=stereo"]
-        elif seg.get("ss"):
-            # -t pins the segment to EXACTLY the duration the xfade offsets
-            # below were computed from (full - ss). Without it, input seeking
-            # can land a little off that mark and every later transition drifts,
-            # which reads as clips cutting early / jumping.
-            trim = ["-ss", f"{seg['ss']:.3f}"]
-            if seg.get("dur"):
-                trim += ["-t", f"{seg['dur']:.3f}"]
-            cmd += trim + ["-i", seg["path"]]
-        else:
-            cmd += ["-i", seg["path"]]
-
-    # Cards consume two inputs each (image + silence); clips consume one.
-    n_seg = len(segments)
-    use_xfade = bool(transitions) and all(s["dur"] is not None for s in segments) and n_seg > 1
-    in_i = 0
-    chains = []
-    for si, seg in enumerate(segments):
-        if seg["kind"] == "card":
-            # In xfade mode the transitions handle the blend; only the very
-            # first fade-in stays.
-            if use_xfade:
-                fade = ",fade=t=in:d=0.4" if si == 0 else ""
+        # Segment order: title card -> (POTG card -> POTG clip) -> clips -> end card.
+        segments = []  # {kind, path, dur, label}
+        if cards:
+            segments.append({"kind": "card", "path": title_png, "dur": CARD_SECONDS})
+        if potg is not None and have_potg_card:
+            segments.append({"kind": "card", "path": potg_png, "dur": CARD_SECONDS})
+        for c in clips:
+            tag_txt = c["tag"].replace("+", " + ").replace("_", " ").upper()
+            label = (f"PLAY OF THE GAME - {tag_txt}" if c is potg
+                     else f"KILL {c.get('n', '?')} - {tag_txt}")
+            dur = probe_duration(c["path"], ffmpeg)
+            if "ss" in c or "to" in c:
+                # EXPLICIT trim points, from the clip editor — a person chose these,
+                # so they override the automatic tight cut entirely. Handled here
+                # rather than in the filter graph: `dur` is what every xfade offset
+                # below is computed from, so setting it correctly is all that's
+                # needed and the fragile parts stay untouched.
+                ss = max(0.0, float(c.get("ss") or 0.0))
+                if dur:
+                    end = float(c["to"]) if c.get("to") else float(dur)
+                    end = max(ss + 1.0, min(end, float(dur)))   # never invert or overrun
+                    ss = min(ss, end - 1.0)
+                    dur = end - ss
+                    print(f"  [reel] manual cut: {os.path.basename(c['path'])} "
+                          f"{ss:.1f}s -> {end:.1f}s")
+                ss = round(ss, 3)
             else:
-                fade = f",fade=t=in:d=0.4,fade=t=out:st={seg['dur'] - 0.4}:d=0.4"
-            chains.append(f"[{in_i}:v]scale=1920:1080,setsar=1,fps=60,format=yuv420p{fade}[v{si}];"
-                          f"[{in_i + 1}:a]anull[a{si}]")
-            in_i += 2
-        else:
-            # The gamertag from this clip's sidecar. No name read -> NO chyron,
-            # rather than falling back to "KILL #3" bookkeeping.
-            who = sidecar_victim(seg["path"]) if use_chyrons else ""
-            dt = _chyron(who) if who else ""
-            chains.append(f"[{in_i}:v]scale=1920:1080,setsar=1,fps=60,format=yuv420p{dt}[v{si}];"
-                          f"[{in_i}:a]aformat=sample_rates=48000:channel_layouts=stereo[a{si}]")
-            in_i += 1
+                # Tight cuts: start ~preroll before the earliest kill instead of
+                # playing the whole 30s buffer (kill timing from the clip's sidecar).
+                ss = (clip_trim_start(c, dur, ffmpeg, preroll, manual_preroll,
+                                      context_preroll)
+                      if tight_cuts else 0.0)
+            if ss and dur and "ss" not in c and "to" not in c:
+                print(f"  [reel] tight cut: {os.path.basename(c['path'])} "
+                      f"starts at {ss:.0f}s (was {dur:.0f}s long)")
+                dur = dur - ss
+            segments.append({"kind": "clip", "path": c["path"], "ss": ss,
+                             "dur": dur, "label": label})
+        if have_end_card:
+            segments.append({"kind": "card", "path": end_png, "dur": END_SECONDS})
 
-    if use_xfade:
-        XF = 0.5
-        prev_v, prev_a, acc = "[v0]", "[a0]", segments[0]["dur"]
-        for k in range(1, n_seg):
-            nv, na = f"[vx{k}]", f"[ax{k}]"
-            chains.append(f"{prev_v}[v{k}]xfade=transition=fade:duration={XF}:"
-                          f"offset={acc - XF:.3f}{nv}")
-            chains.append(f"{prev_a}[a{k}]acrossfade=d={XF}{na}")
-            prev_v, prev_a = nv, na
-            acc += segments[k]["dur"] - XF
-        total = acc
-        chains.append(f"{prev_v}fade=t=out:st={max(0.0, total - 0.7):.3f}:d=0.7[v]")
-        chains.append(f"{prev_a}anull[cat]")
-    else:
-        pairs = "".join(f"[v{i}][a{i}]" for i in range(n_seg))
-        chains.append(f"{pairs}concat=n={n_seg}:v=1:a=1[v][cat]")
-        durs = [s["dur"] for s in segments]
-        total = sum(durs) if all(d is not None for d in durs) else None
+        # Broadcast chyron ("KILL 3 - PRECISION") on each clip, if this ffmpeg
+        # build has drawtext.
+        import shorts as _shorts
+        font = _shorts._find_font()
+        use_chyrons = bool(chyrons and font and _shorts._has_drawtext(ffmpeg))
 
-    a_out = "[cat]"
-    tracks = [t for t in (music_tracks or ([music_path] if music_path else []))
-              if t and os.path.exists(t)]
-    if tracks:
-        vol = max(0.0, min(1.0, float(music_volume)))
-        if total is not None:
-            m_args, m_chains = _music_inputs_and_chain(tracks, total, vol, ffmpeg, in_i)
-            cmd += m_args
-            chains += m_chains
-        else:
-            cmd += ["-stream_loop", "-1", "-i", tracks[0]]
-            chains.append(f"[{in_i}:a]aformat=sample_rates=48000:channel_layouts=stereo,"
-                          f"volume={vol},afade=t=in:d=1.5[mus]")
-        chains.append("[cat][mus]amix=inputs=2:duration=first:normalize=0[mixed]")
-        a_out = "[mixed]"
+        # Eased alpha, not linear. The old ramp was a piecewise-linear if() chain,
+        # which is what Joe meant by "text is a bit choppy" — a straight-line fade
+        # reads as mechanical. smoothstep (p*p*(3-2p)) starts and ends gently.
+        def _ease(t0: float, t1: float, hold: float, fade: float) -> str:
+            pin = f"((t-{t0})/{fade})"
+            pout = f"(({t1}-t)/{fade})"
+            return (f"'if(lt(t,{t0}),0,"
+                    f"if(lt(t,{t0 + fade}),{pin}*{pin}*(3-2*{pin}),"
+                    f"if(lt(t,{hold}),1,"
+                    f"if(lt(t,{t1}),{pout}*{pout}*(3-2*{pout}),0))))'")
 
-    enc = video_encoder_args({"render_encoder": render_encoder}, ffmpeg)
-    tail_args = ["-c:a", "aac", "-b:a", "160k", "-movflags", "+faststart", out_path]
-    cmd += ["-filter_complex", ";".join(chains), "-map", "[v]", "-map", a_out]
-    r = _run(cmd + enc + tail_args)
-    if r.returncode != 0 and enc[1] != "libx264":
-        # Hardware encoding can fail for reasons that have nothing to do with the
-        # reel: a driver hiccup, or every NVENC session already in use by OBS. A
-        # lost reel is much worse than a warm CPU, so retry in software.
-        print(f"  [reel] hardware encode failed: {_why_encode_failed(r)}")
-        # Try the older NVENC argument names before giving up on the GPU — a
-        # pre-SDK-10 build rejects p1..p7 presets but encodes fine with -preset hq.
-        r2 = _run(cmd + nvenc_legacy_args() + tail_args)
-        if r2.returncode == 0:
-            print("  [reel] ...succeeded with legacy NVENC settings")
-            r = r2
+        _A = _ease(0.35, 4.9, 4.2, 0.55)
+
+        def _chyron(label: str) -> str:
+            """Lower-third naming WHO you downed.
+
+            Two drawtext filters, no extra inputs — the plate is drawn by the name's
+            own box=1, so it shares the animated alpha and fades with the text. A
+            drawbox would have had to hard-cut, which is the choppiness we're fixing.
+
+            `label` is a gamertag. It used to be "KILL #3 - PRECISION", which the
+            title card three seconds earlier already said; the name is the one thing
+            a viewer can't get any other way. No name read -> no chyron at all,
+            rather than falling back to bookkeeping."""
+            ff = font.replace(":", r"\:")
+            name = label.replace("'", "").replace(":", r"\:").replace("%", "")
+            accent = _hex_to_ff(ACCENT_LIGHT)
+            # Name + its plate. boxborderw pads the plate around the glyphs; the
+            # mockup sat the name low, so the top pad is larger than the bottom.
+            out = (f",drawtext=fontfile='{ff}':text='{name}':fontsize=62:"
+                   f"fontcolor=white:box=1:boxcolor=0x0a0a10@0.78:boxborderw=26:"
+                   f"x=76:y=h-150:alpha={_A}")
+            # Small accent label above it, tying the reel to the dashboard palette.
+            out += (f",drawtext=fontfile='{ff}':text='DOWNED':fontsize=26:"
+                    f"fontcolor={accent}:box=1:boxcolor=0x0a0a10@0.78:boxborderw=12:"
+                    f"x=78:y=h-192:alpha={_A}")
+            return out
+
+        cmd = [ffmpeg, "-y"]
+        for seg in segments:
+            if seg["kind"] == "card":
+                cmd += ["-loop", "1", "-framerate", "60", "-t", str(seg["dur"]), "-i", seg["path"],
+                        "-f", "lavfi", "-t", str(seg["dur"]), "-i", "anullsrc=r=48000:cl=stereo"]
+            elif seg.get("ss"):
+                # -t pins the segment to EXACTLY the duration the xfade offsets
+                # below were computed from (full - ss). Without it, input seeking
+                # can land a little off that mark and every later transition drifts,
+                # which reads as clips cutting early / jumping.
+                trim = ["-ss", f"{seg['ss']:.3f}"]
+                if seg.get("dur"):
+                    trim += ["-t", f"{seg['dur']:.3f}"]
+                cmd += trim + ["-i", seg["path"]]
+            else:
+                cmd += ["-i", seg["path"]]
+
+        # Cards consume two inputs each (image + silence); clips consume one.
+        n_seg = len(segments)
+        use_xfade = bool(transitions) and all(s["dur"] is not None for s in segments) and n_seg > 1
+        in_i = 0
+        chains = []
+        for si, seg in enumerate(segments):
+            if seg["kind"] == "card":
+                # In xfade mode the transitions handle the blend; only the very
+                # first fade-in stays.
+                if use_xfade:
+                    fade = ",fade=t=in:d=0.4" if si == 0 else ""
+                else:
+                    fade = f",fade=t=in:d=0.4,fade=t=out:st={seg['dur'] - 0.4}:d=0.4"
+                chains.append(f"[{in_i}:v]{_FIT_1080},setsar=1,fps=60,format=yuv420p{fade}[v{si}];"
+                              f"[{in_i + 1}:a]anull[a{si}]")
+                in_i += 2
+            else:
+                # The gamertag from this clip's sidecar. No name read -> NO chyron,
+                # rather than falling back to "KILL #3" bookkeeping.
+                who = sidecar_victim(seg["path"]) if use_chyrons else ""
+                dt = _chyron(who) if who else ""
+                chains.append(f"[{in_i}:v]{_FIT_1080},setsar=1,fps=60,format=yuv420p{dt}[v{si}];"
+                              f"[{in_i}:a]aformat=sample_rates=48000:channel_layouts=stereo[a{si}]")
+                in_i += 1
+
+        if use_xfade:
+            XF = 0.5
+            prev_v, prev_a, acc = "[v0]", "[a0]", segments[0]["dur"]
+            for k in range(1, n_seg):
+                nv, na = f"[vx{k}]", f"[ax{k}]"
+                chains.append(f"{prev_v}[v{k}]xfade=transition=fade:duration={XF}:"
+                              f"offset={acc - XF:.3f}{nv}")
+                chains.append(f"{prev_a}[a{k}]acrossfade=d={XF}{na}")
+                prev_v, prev_a = nv, na
+                acc += segments[k]["dur"] - XF
+            total = acc
+            chains.append(f"{prev_v}fade=t=out:st={max(0.0, total - 0.7):.3f}:d=0.7[v]")
+            chains.append(f"{prev_a}anull[cat]")
         else:
-            print(f"  [reel] legacy NVENC also failed: {_why_encode_failed(r2)}")
-            print("  [reel] falling back to CPU")
-            r = _run(cmd + cpu_encoder_args() + tail_args)
-    for png in (title_png, potg_png, end_png):
-        try:
-            os.remove(png)
-        except OSError:
-            pass
+            pairs = "".join(f"[v{i}][a{i}]" for i in range(n_seg))
+            chains.append(f"{pairs}concat=n={n_seg}:v=1:a=1[v][cat]")
+            durs = [s["dur"] for s in segments]
+            total = sum(durs) if all(d is not None for d in durs) else None
+
+        a_out = "[cat]"
+        tracks = [t for t in (music_tracks or ([music_path] if music_path else []))
+                  if t and os.path.exists(t)]
+        if tracks:
+            vol = max(0.0, min(1.0, float(music_volume)))
+            if total is not None:
+                m_args, m_chains = _music_inputs_and_chain(tracks, total, vol, ffmpeg, in_i)
+                cmd += m_args
+                chains += m_chains
+            else:
+                cmd += ["-stream_loop", "-1", "-i", tracks[0]]
+                chains.append(f"[{in_i}:a]aformat=sample_rates=48000:channel_layouts=stereo,"
+                              f"volume={vol},afade=t=in:d=1.5[mus]")
+            chains.append("[cat][mus]amix=inputs=2:duration=first:normalize=0[mixed]")
+            a_out = "[mixed]"
+
+        enc = video_encoder_args({"render_encoder": render_encoder}, ffmpeg)
+        tail_args = ["-c:a", "aac", "-b:a", "160k", "-movflags", "+faststart", out_path]
+        cmd += ["-filter_complex", ";".join(chains), "-map", "[v]", "-map", a_out]
+        r = _run(cmd + enc + tail_args)
+        if r.returncode != 0 and enc[1] != "libx264":
+            # Hardware encoding can fail for reasons that have nothing to do with the
+            # reel: a driver hiccup, or every NVENC session already in use by OBS. A
+            # lost reel is much worse than a warm CPU, so retry in software.
+            hw_missing = _nvenc_hardware_missing(r)
+            if not hw_missing:
+                print(f"  [reel] hardware encode failed: {_why_encode_failed(r)}")
+            # Try the older NVENC argument names before giving up on the GPU — a
+            # pre-SDK-10 build rejects p1..p7 presets but encodes fine with -preset hq.
+            r2 = _run(cmd + nvenc_legacy_args() + tail_args)
+            if r2.returncode == 0:
+                if hw_missing:
+                    print(f"  [reel] hardware encode failed: {_why_encode_failed(r)}")
+                print("  [reel] ...succeeded with legacy NVENC settings")
+                r = r2
+            elif hw_missing and _nvenc_hardware_missing(r2):
+                # Both rungs say there is no NVIDIA encoder on this PC at all.
+                # Remember it, so the re-renders below, the next reel and the Shorts
+                # go straight to CPU instead of failing twice each, and say so ONCE
+                # — three "failed" lines read like a broken install.
+                _ENCODER_CACHE[ffmpeg] = False
+                print("  [reel] NVIDIA encoder unavailable - rendering on CPU")
+                r = _run(cmd + cpu_encoder_args() + tail_args)
+            else:
+                # Anything else is treated as transient and NOT cached: the next
+                # reel tries the GPU again.
+                if hw_missing:
+                    print(f"  [reel] hardware encode failed: {_why_encode_failed(r)}")
+                print(f"  [reel] legacy NVENC also failed: {_why_encode_failed(r2)}")
+                print("  [reel] falling back to CPU")
+                r = _run(cmd + cpu_encoder_args() + tail_args)
+    finally:
+        for png in (title_png, potg_png, end_png):
+            try:
+                os.remove(png)
+            except OSError:
+                pass
     if r.returncode == 0 and os.path.exists(out_path):
         return True
-    tail = (r.stderr.strip().splitlines() or ["(no output)"])[-1]
+    tail = ((r.stderr or "").strip().splitlines() or ["(no output)"])[-1]
     print(f"  [reel] ffmpeg failed: {tail}")
     # Degrade gracefully rather than produce nothing: drop the TEXT first
     # (drawtext is the flakiest thing across ffmpeg builds), then transitions.
@@ -817,18 +952,22 @@ def build_match_reel(clips, out_path: str, ffmpeg: str,
     # transitions/chyrons, so a fallback render silently reverted theme and the
     # cut settings to their defaults too — losing the 16s context preroll on top
     # of the text. A failsafe must drop ONE thing, not quietly change others.
+    # dedupe and potg_enabled were the two still missing: a failed hand-picked
+    # export retried WITH overlap-merging (dropping clips the user chose) and
+    # with the POTG reorder it had just been told not to do.
     keep = dict(theme=theme, tight_cuts=tight_cuts, preroll=preroll,
                 manual_preroll=manual_preroll, context_preroll=context_preroll,
-                render_encoder=render_encoder)
+                render_encoder=render_encoder, dedupe=dedupe,
+                potg_enabled=potg_enabled)
     if use_chyrons:
         print("  [reel] text failed to render — building this reel without it")
-        return build_match_reel(clips, out_path, ffmpeg, title, kills, sub_lines,
+        return build_match_reel(clips_in, out_path, ffmpeg, title, kills, sub_lines,
                                 wordmark_path, music_path, music_volume,
                                 music_tracks, transitions=transitions,
                                 chyrons=False, **keep)
     if use_xfade:
         print("  [reel] retrying without transitions...")
-        return build_match_reel(clips, out_path, ffmpeg, title, kills, sub_lines,
+        return build_match_reel(clips_in, out_path, ffmpeg, title, kills, sub_lines,
                                 wordmark_path, music_path, music_volume,
                                 music_tracks, transitions=False, chyrons=False,
                                 **keep)

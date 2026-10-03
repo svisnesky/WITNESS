@@ -106,6 +106,7 @@ def build_short(src: str, dest: str, ffmpeg: str, tag: str = "",
         "[fg]scale=1080:-2[fgs];"
         + overlay_chain + "[v]"
     )
+    import match_reel
     from match_reel import cpu_encoder_args, video_encoder_args
     head = [ffmpeg, "-y", "-i", src,
             "-filter_complex", filt, "-map", "[v]", "-map", "0:a?"]
@@ -114,13 +115,19 @@ def build_short(src: str, dest: str, ffmpeg: str, tag: str = "",
     r = subprocess.run(head + enc + tail_args, capture_output=True, text=True,
                        creationflags=_render_flags())
     if r.returncode != 0 and enc[1] != "libx264":
+        # No NVIDIA encoder on this PC at all (not a transient failure): stop
+        # trying it for the rest of the session's Shorts, one doomed ffmpeg
+        # run each. Same signatures the reel ladder trusts; anything else is
+        # left uncached so a GPU hiccup doesn't move the night onto the CPU.
+        if match_reel._nvenc_hardware_missing(r):
+            match_reel._ENCODER_CACHE[ffmpeg] = False
         # A lost Short is worse than a warm CPU — retry in software.
         r = subprocess.run(head + cpu_encoder_args() + tail_args,
                            capture_output=True, text=True,
                            creationflags=_render_flags())
     if r.returncode == 0 and os.path.exists(dest):
         return True
-    tail = (r.stderr.strip().splitlines() or ["(no output)"])[-1]
+    tail = ((r.stderr or "").strip().splitlines() or ["(no output)"])[-1]
     print(f"  [shorts] ffmpeg failed on {os.path.basename(src)}: {tail}")
     return False
 
@@ -130,10 +137,18 @@ def build_shorts(session_dir: str, ffmpeg: str, with_labels: bool = True,
     """Render a vertical short for every clip in the session folder."""
     if not session_dir or not os.path.isdir(session_dir):
         return
-    clips = sorted(
-        f for f in os.listdir(session_dir)
-        if f.lower().endswith(VIDEO_EXTS) and not f.lower().startswith("highlights")
-    )
+    # Tidy-aware, like the montage: clips sit in clips/ once a recap has tidied
+    # the folder. Listing only the top level made a Rebuild render
+    # session_reel.mp4 — a 10-minute reel — as a vertical "Short", which Creator
+    # mode then uploaded. iter_session_media skips the session's own outputs.
+    import tidy
+    by_name = {}
+    for _rel, full in tidy.iter_session_media(session_dir, VIDEO_EXTS):
+        # tidy can leave a same-named copy at the top level; one Short per clip
+        by_name.setdefault(os.path.basename(full), full)
+    # Name order, as before (the leading kill number), so drop_overlapping
+    # still sees neighbours side by side whichever folder each one is in.
+    clips = [by_name[n] for n in sorted(by_name)]
     if not clips:
         return
     # Overlapping Replay-Buffer saves would render near-identical Shorts —
@@ -141,9 +156,8 @@ def build_shorts(session_dir: str, ffmpeg: str, with_labels: bool = True,
     try:
         from match_reel import drop_overlapping
         deduped = drop_overlapping(
-            [{"path": os.path.join(session_dir, c), "kills": 1, "tag": ""}
-             for c in clips], ffmpeg)
-        clips = [os.path.basename(c["path"]) for c in deduped]
+            [{"path": c, "kills": 1, "tag": ""} for c in clips], ffmpeg)
+        clips = [c["path"] for c in deduped]
     except Exception:
         pass
     out_dir = os.path.join(session_dir, "shorts")
@@ -155,7 +169,11 @@ def build_shorts(session_dir: str, ffmpeg: str, with_labels: bool = True,
     accent = _ff_color(th.get("accent"))
     brand = str(th.get("display_name") or "MARATHON").upper()
     done = 0
-    for c in clips:
+    for src in clips:
+        # Output named by the clip's BASENAME, wherever the clip lives: shorts/
+        # already holds files named that way, and this skip-if-exists check is
+        # what stops a Rebuild re-rendering every one of them.
+        c = os.path.basename(src)
         dest = os.path.join(out_dir, os.path.splitext(c)[0] + ".mp4")
         if os.path.exists(dest):
             done += 1
@@ -164,7 +182,7 @@ def build_shorts(session_dir: str, ffmpeg: str, with_labels: bool = True,
         if with_labels:
             _num, tag = _parse_name(c)
             sub = brand              # just the game name — no "KILL #N"
-        if build_short(os.path.join(session_dir, c), dest, ffmpeg,
+        if build_short(src, dest, ffmpeg,
                        tag=tag, sub=sub, accent=accent,
                        render_encoder=render_encoder):
             done += 1
