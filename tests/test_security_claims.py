@@ -140,11 +140,16 @@ def test_library_traffic_is_disclosed():
     net = _network_section()
     reqs = _requirements()
     expect = {
-        "easyocr": "github.com",                    # first-run model download
-        "google-api-python-client": "www.googleapis.com",
+        # first-run model download. easyocr's config.py lists github.com
+        # release URLs only, but github.com answers with a 302 and the bytes
+        # come from release-assets.githubusercontent.com. "Every host" has to
+        # include the one the data actually arrives from.
+        "easyocr": ("github.com", "release-assets.githubusercontent.com"),
+        "google-api-python-client": ("www.googleapis.com",),
     }
-    missing = [f"{pkg} -> {host}" for pkg, host in expect.items()
-               if pkg in reqs and not _mentions_host(net, host)]
+    missing = [f"{pkg} -> {host}" for pkg, hosts in expect.items()
+               if pkg in reqs for host in hosts
+               if not _mentions_host(net, host)]
     assert not missing, f"undisclosed library traffic: {missing}"
 
 
