@@ -134,6 +134,13 @@ if not exist ".venv\Scripts\activate.bat" (
     exit /b 1
 )
 call ".venv\Scripts\activate.bat"
+REM activate.bat holds the absolute path the venv was created at. After the
+REM WITNESS folder is moved, for example from Downloads to C:\Games\ as the
+REM QUICKSTART suggests, it points PATH at a .venv that is gone, and "python"
+REM in every console launcher becomes the system Python or the Store alias.
+REM Point both at this folder's .venv, whatever activate.bat said.
+set "VIRTUAL_ENV=%~dp0.venv"
+set "PATH=%~dp0.venv\Scripts;%PATH%"
 
 REM ===== Install or repair, only when requirements.txt differs from the copy
 REM ===== saved after the last fully good install. fc returns 1 when the files

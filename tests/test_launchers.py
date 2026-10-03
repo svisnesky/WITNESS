@@ -411,6 +411,20 @@ def test_cuda_check_rides_on_the_import_check():
     assert "NOSTAMP" not in text
 
 
+def test_a_moved_folder_still_runs_its_own_venv_python():
+    """A venv's activate.bat hardcodes the folder it was created in. After the
+    app folder is moved, PATH must still lead to THIS folder's .venv, or the
+    console launchers' plain `python` runs the system one."""
+    lines = _lines("_env.bat")
+    act = [i for i, ln in enumerate(lines) if ln.strip() == 'call ".venv\\Scripts\\activate.bat"']
+    assert len(act) == 1
+    after = [ln.strip() for ln in lines[act[0] + 1:] if ln.strip() and not _is_rem(ln)]
+    assert after[0] == 'set "VIRTUAL_ENV=%~dp0.venv"'
+    assert after[1] == 'set "PATH=%~dp0.venv\\Scripts;%PATH%"'
+    for i in (act[0],):
+        assert _enclosing_opener("_env.bat", i) == ""       # top level, not a block
+
+
 def test_python_version_check_accepts_only_64bit_310_to_312():
     snippet = re.search(r'-c "(import sys; raise SystemExit[^"]+)"',
                         _read("_env.bat")).group(1)
