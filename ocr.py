@@ -196,9 +196,11 @@ class OCREngine:
                 self._reader = easyocr.Reader(self.languages, gpu=True)
                 if self._reader_device() == "cuda":
                     # One-time warm-up on a tiny blank: a card with no
-                    # kernels fails HERE, at load, instead of on the first
-                    # frame of the session. Milliseconds, negligible VRAM,
-                    # and it bypasses preprocess, so the caps don't apply.
+                    # kernels fails HERE, at engine load (the first OCR call),
+                    # where it can be caught and moved to the CPU, instead of
+                    # inside the first real readtext, where nothing caught it.
+                    # Milliseconds, negligible VRAM, and it bypasses
+                    # preprocess, so the caps don't apply.
                     self._reader.readtext(np.zeros((32, 32), np.uint8))
             except Exception as e:       # torch 2.8+ raises AcceleratorError
                 if not _is_kernel_incompat(e):
@@ -232,8 +234,10 @@ class OCREngine:
     def _load_tesseract(self):
         import pytesseract
 
-        # Fail at load with a fix-it message, not with TesseractNotFoundError
-        # on the first frame of the session.
+        # Fail at engine load (the first OCR call) with a fix-it message, not
+        # with a bare TesseractNotFoundError traceback. Load is lazy, so this
+        # still lands on a session's first frame unless the caller runs
+        # _ensure_loaded() before its capture loop (main.py doesn't, yet).
         cmd = _find_tesseract()
         if cmd:
             pytesseract.pytesseract.tesseract_cmd = cmd

@@ -17,6 +17,7 @@ import os
 import sys
 import types
 
+import numpy as np
 import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -283,3 +284,45 @@ def test_an_odd_tesseract_version_string_does_not_end_the_session(monkeypatch):
     eng = ocr.OCREngine("tesseract")
     eng._ensure_loaded()
     assert eng._loaded and eng.device == "cpu"
+
+
+# --- When "at load" happens: the first OCR call ------------------------------
+# OCREngine loads lazily. main.py builds the engine before its capture loop but
+# the first load is the loop's first read_lines, so these checks land on frame
+# one unless the caller runs _ensure_loaded() first (a main.py change, F60).
+
+FRAME = np.zeros((40, 200, 3), np.uint8)
+
+
+def test_building_the_engine_loads_nothing(monkeypatch):
+    """Construction never touches the backend, so it can't fail: a missing
+    tesseract.exe is only found by _ensure_loaded() or the first OCR call."""
+    _fake_pytesseract(monkeypatch, version_error=_NotFound())
+    _no_tesseract_anywhere(monkeypatch)
+    eng = ocr.OCREngine("tesseract")
+    assert eng._loaded is False and eng.device is None
+
+
+def test_missing_tesseract_surfaces_on_the_first_ocr_call(monkeypatch):
+    """Without a preload, the friendly error (not TesseractNotFoundError) is
+    what the first read_lines raises."""
+    _fake_pytesseract(monkeypatch, version_error=_NotFound())
+    _no_tesseract_anywhere(monkeypatch)
+    eng = ocr.OCREngine("tesseract")
+    with pytest.raises(RuntimeError) as ei:
+        eng.read_lines(FRAME)
+    assert not isinstance(ei.value, _NotFound)
+    assert "tesseract.exe was not found" in str(ei.value)
+
+
+def test_unsupported_card_falls_back_before_the_first_real_read(monkeypatch):
+    """The warm-up runs inside the first read_lines' load, so a card with no
+    kernels is on the CPU before the real frame is read: no exception."""
+    rig = _Rig(cap=(6, 1), archs=CU126, warmup_error=NO_KERNEL).install(monkeypatch)
+    eng = ocr.OCREngine("easyocr")
+    assert rig.readers == []                     # nothing built yet
+    assert eng.read_lines(FRAME) == []
+    assert rig.readers == [True, False]
+    assert rig.readtexts[0] == ("cuda", (32, 32))   # the warm-up
+    assert [d for d, _shape in rig.readtexts[1:]] == ["cpu"]
+    assert eng.device == "cpu"
