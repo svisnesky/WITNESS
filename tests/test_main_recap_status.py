@@ -120,22 +120,53 @@ def test_a_montage_with_nothing_to_stitch_is_not_a_failure(monkeypatch, tmp_path
                                          []) == []
 
 
-def test_rebuilding_a_tidied_session_is_not_a_montage_failure(monkeypatch, tmp_path):
+def _real_clip(path):
+    import shutil
+    import subprocess
+    import pytest
+    if not shutil.which("ffmpeg"):
+        pytest.skip("needs a real ffmpeg on PATH")
+    r = subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i",
+                        "color=black:s=64x36:r=10:d=0.5", "-c:v", "mpeg4",
+                        str(path)], capture_output=True)
+    if r.returncode != 0:
+        pytest.skip("ffmpeg could not make a test clip")
+
+
+def test_rebuilding_a_tidied_session_stitches_its_clips(monkeypatch, tmp_path):
     # tidy_session runs after every recap (failed ones too) and moves the clips
-    # into clips/. build_montage lists only the top level, so a resume or a
-    # 'Rebuild reels' of that session finds nothing to stitch. Counting clips/
-    # as "clips on disk" failed every such rebuild and wrote .recap_failed,
-    # which the attempt cap then made permanent. Real build_montage, no stub.
+    # into clips/. build_montage used to list only the top level, so a resume
+    # or 'Rebuild reels' of that session found nothing to stitch, and the
+    # failure check had to ignore clips/ (counting them failed every such
+    # rebuild). build_montage is tidy-aware now: the rebuild really stitches
+    # clips/ and succeeds. Real build_montage and real ffmpeg, no stub.
     sdir = tmp_path / "Marathon Sessions" / "s1"
     (sdir / "clips").mkdir(parents=True)
     for c in ("001_down_20-05-00.mkv", "002_down+finisher_20-09-00.mkv"):
-        (sdir / "clips" / c).write_bytes(b"x")
+        _real_clip(sdir / "clips" / c)
     monkeypatch.setattr(main, "_ffmpeg_available", lambda base, cfg: True)
     assert main._session_clips_from_dir(str(sdir))      # the clips ARE there
     assert main._build_session_artifacts(dict(QUIET, make_montage=True), str(sdir),
                                          ["down", "down", "finisher"]) == []
+    assert (sdir / "highlights_s1.mkv").exists()
     assert not (sdir / ".recap_failed").exists()
     assert (sdir / ".recap_done").exists()
+
+
+def test_a_failed_montage_of_a_tidied_session_is_reported(monkeypatch, tmp_path):
+    # The other half: with clips only in clips/, a montage that fails is a
+    # failure, not a silent "ready" (the check now lists what build_montage
+    # stitches, clips/ included).
+    import montage
+    sdir = tmp_path / "Marathon Sessions" / "s1"
+    (sdir / "clips").mkdir(parents=True)
+    (sdir / "clips" / "001_down_20-05-00.mkv").write_bytes(b"x")
+    monkeypatch.setattr(main, "_ffmpeg_available", lambda base, cfg: True)
+    monkeypatch.setattr(montage, "build_montage", lambda d, ff: None)
+    failures = main._build_session_artifacts(dict(QUIET, make_montage=True),
+                                             str(sdir), ["down"])
+    assert failures == ["montage: no montage was built"]
+    assert (sdir / ".recap_failed").exists()
 
 
 # --- auto-resume is capped -------------------------------------------------------
