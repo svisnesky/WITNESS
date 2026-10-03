@@ -29,18 +29,18 @@ def _render_flags():
 
 # imageio-ffmpeg's bundled binary: None = not looked up yet, "" = not available.
 _IMAGEIO_FFMPEG = None
-# has_ffmpeg() answers, keyed by the resolved ffmpeg path.
-_HAS_FFMPEG = {}
 
 
 def _imageio_ffmpeg() -> str:
     """The ffmpeg that the imageio-ffmpeg package ships, or "".
 
-    GUARDED, and that is the whole point: the updater never runs pip, so an
-    auto-updated install (Stan's included) does not have this package even after
-    requirements.txt lists it. An unguarded import here would have taken down
-    every replay and reel on exactly the installs that were working. Looked up
-    once per process — this is reached on every kill for anyone without ffmpeg."""
+    GUARDED, and that is the whole point: an install can run code that lists
+    this package before pip has installed it. The updater swaps files first and
+    installs new requirements afterwards (updater.ensure_requirements, or
+    _env.bat on the next .bat launch), and that install can fail or be offline.
+    An unguarded import here would take down every replay and reel on exactly
+    the installs that were working. Looked up once per process: this is
+    reached on every kill for anyone without ffmpeg."""
     global _IMAGEIO_FFMPEG
     if _IMAGEIO_FFMPEG is None:
         exe = ""
@@ -86,12 +86,11 @@ def has_ffmpeg(base_dir, cfg) -> bool:
     The bare "ffmpeg" sentinel is checked with shutil.which, never
     os.path.exists — a PATH install is not a file in the current folder, and
     testing it that way would wrongly switch off replays for everyone with
-    ffmpeg on PATH. Cached per resolved path for the life of the process."""
+    ffmpeg on PATH. Not cached: the window app runs for days, and an ffmpeg
+    installed meanwhile must count at the next START. main._ffmpeg_available
+    is this, guarded."""
     ff = find_ffmpeg(base_dir, cfg)
-    if ff not in _HAS_FFMPEG:
-        _HAS_FFMPEG[ff] = bool(ff) and (os.path.isfile(ff)
-                                         or shutil.which(ff) is not None)
-    return _HAS_FFMPEG[ff]
+    return bool(ff) and (os.path.isfile(ff) or shutil.which(ff) is not None)
 
 
 def build_montage(session_dir, ffmpeg):

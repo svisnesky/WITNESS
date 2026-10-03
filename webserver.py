@@ -616,11 +616,13 @@ def _web_session_dir(state, which) -> str:
     """The session folder a DASHBOARD request names, or '' if it names anything
     else.
 
-    main._resolve_session_dir is built for the --rebuild CLI and accepts any
-    existing folder, so '/Users/me/Pictures' or '../..' in a request used to be
+    main._resolve_session_dir is built for the --rebuild CLI, which accepts a
+    full path, so '/Users/me/Pictures' or '../..' in a request used to be
     tidied (images moved into exfil/, videos into clips/), rendered into and
     thumbnailed. A web request may only name a session: 'latest', or one bare
-    folder name directly inside a 'Marathon Sessions' folder.
+    folder name directly inside a 'Marathon Sessions' folder. The name is
+    checked here AND passed with strict=True, which refuses a full path, so
+    either check alone still holds.
 
     Finding the root is left to main._resolve_session_dir (cached record dir,
     then asking OBS) so the Archive and the clip viewer keep working right after
@@ -633,11 +635,11 @@ def _web_session_dir(state, which) -> str:
     cfg = getattr(state, "_cfg", None) or {}
     nc = os.path.normcase
     if which in ("", "latest"):
-        sdir = main._resolve_session_dir(cfg, "latest")
+        sdir = main._resolve_session_dir(cfg, "latest", strict=True)
         return os.path.abspath(sdir) if sdir and os.path.isdir(sdir) else ""
     if not _SAFE_PART.match(which) or which in (".", ".."):
         return ""
-    sdir = main._resolve_session_dir(cfg, which)
+    sdir = main._resolve_session_dir(cfg, which, strict=True)
     # Relative = it came from the CLI's "existing folder" branch, i.e. a folder
     # in the current directory that merely shares the name. A real session is
     # always <record dir>/Marathon Sessions/<name>, an absolute path.

@@ -1,9 +1,9 @@
 """Where ffmpeg comes from, in order — and the imageio-ffmpeg fallback that must
 never get in the way of an ffmpeg the user installed.
 
-The updater does not run pip, so auto-updated installs (Stan's included) will
-NOT have imageio-ffmpeg even after requirements.txt lists it. The import is
-guarded, and the bundled binary is used only when nothing else exists.
+An install can run code that lists imageio-ffmpeg before pip has installed it
+(the updater swaps files first; the install can fail or be offline). The import
+is guarded, and the bundled binary is used only when nothing else exists.
 """
 
 import os
@@ -20,7 +20,6 @@ import montage  # noqa: E402
 @pytest.fixture(autouse=True)
 def fresh(monkeypatch):
     monkeypatch.setattr(montage, "_IMAGEIO_FFMPEG", None)
-    monkeypatch.setattr(montage, "_HAS_FFMPEG", {})
 
 
 def _imageio(monkeypatch, exe=None, raises=None, calls=None):
@@ -143,16 +142,26 @@ def test_has_ffmpeg_true_for_the_imageio_binary(tmp_path, monkeypatch):
     assert montage.has_ffmpeg(str(tmp_path / "app"), {}) is True
 
 
-def test_has_ffmpeg_is_cached(tmp_path, monkeypatch):
+def test_has_ffmpeg_sees_an_ffmpeg_installed_while_the_app_runs(tmp_path, monkeypatch):
+    """The window app runs for days: no stale cached False."""
     _imageio(monkeypatch)
-    hits = []
-    monkeypatch.setattr(montage.shutil, "which",
-                        lambda name: hits.append(name) or "/usr/bin/ffmpeg")
-    montage.has_ffmpeg(str(tmp_path), {})
-    n = len(hits)
-    montage.has_ffmpeg(str(tmp_path), {})
-    # find_ffmpeg still looks at PATH each call; the existence check is cached
-    assert len(hits) == n + 1
+    _which(monkeypatch, False)
+    assert montage.has_ffmpeg(str(tmp_path), {}) is False
+    (tmp_path / "ffmpeg.exe").write_bytes(b"x")
+    assert montage.has_ffmpeg(str(tmp_path), {}) is True
+
+
+def test_main_asks_montage(tmp_path, monkeypatch):
+    import main
+    monkeypatch.setattr(montage, "has_ffmpeg", lambda base, cfg: False)
+    assert main._ffmpeg_available(str(tmp_path), {}) is False
+    monkeypatch.setattr(montage, "has_ffmpeg", lambda base, cfg: True)
+    assert main._ffmpeg_available(str(tmp_path), {}) is True
+
+    def boom(base, cfg):
+        raise RuntimeError("x")
+    monkeypatch.setattr(montage, "has_ffmpeg", boom)
+    assert main._ffmpeg_available(str(tmp_path), {}) is True
 
 
 def test_the_real_import_is_guarded():

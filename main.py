@@ -1367,17 +1367,13 @@ def _setup_session(cfg, dry_run):
 
 def _ffmpeg_available(base, cfg) -> bool:
     """Does the ffmpeg that montage.find_ffmpeg picks actually exist?
-
-    find_ffmpeg falls back to the bare name 'ffmpeg' (PATH), so that one is
-    checked with shutil.which, never os.path.exists: a PATH install is not a
-    file in the current folder, and testing it that way would switch off
-    replays for everyone who has ffmpeg on PATH. True when it can't tell."""
+    montage.has_ffmpeg answers (a PATH install is checked with shutil.which,
+    never os.path.exists). True when it can't tell."""
     try:
         import montage
-        ff = montage.find_ffmpeg(base, cfg)
+        return bool(montage.has_ffmpeg(base, cfg))
     except Exception:
         return True
-    return bool(ff) and (os.path.isfile(ff) or shutil.which(ff) is not None)
 
 
 # START asks OBS for the buffer status right after connect() may have just
@@ -2125,9 +2121,15 @@ def _fire_heat(cfg, s, ev, delay: float = 0.0):
         threading.Thread(target=speak, daemon=True).start()
 
 
-NO_TAG_LINE = ("  [names] gamertag is blank in config.yaml - set it to your exact "
-               "in-game name to enable the Menace Report, kill-name chyrons and "
-               "streamer alerts")
+def _no_tag_line() -> str:
+    """The one 'gamertag is blank' console line: encounters.NO_TAG_HINT, so
+    there is a single wording. encounters prints it too when called with a
+    blank tag, but main skips that call, so this is the line users see."""
+    try:
+        import encounters
+        return str(encounters.NO_TAG_HINT)
+    except Exception:            # name tracking is unavailable anyway
+        return "  [names] gamertag is blank in config.yaml"
 
 
 def _gamertag(cfg) -> str:
@@ -2165,7 +2167,7 @@ def _scan_feed_names(cfg, engine, s, expect):
         # and OCR entirely, and say once per session how to turn it on.
         if not s.setdefault("_warned_no_tag", False):
             s["_warned_no_tag"] = True
-            print(NO_TAG_LINE)
+            print(_no_tag_line())
             if s.get("web") is not None:
                 try:
                     s["web"].notice("Set gamertag in config.yaml for name tracking",

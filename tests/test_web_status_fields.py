@@ -100,7 +100,7 @@ def test_recap_kind_defaults_to_recap_and_is_reset_by_every_write():
 
 
 def test_export_failures_are_tagged_as_exports(tmp_path, monkeypatch):
-    monkeypatch.setattr(main, "_resolve_session_dir", lambda cfg, w: "")
+    monkeypatch.setattr(main, "_resolve_session_dir", lambda cfg, w, **k: "")
     st = _state()
     assert st.request_export(str(tmp_path), "nope", [])["ok"] is True
     for _ in range(200):

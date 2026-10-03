@@ -101,7 +101,7 @@ def test_a_malformed_export_body_does_not_crash_the_server(server):
 
 def test_clipdata_reports_a_missing_session_instead_of_500(server, monkeypatch):
     st = server[0]
-    monkeypatch.setattr(main, "_resolve_session_dir", lambda cfg, w: "")
+    monkeypatch.setattr(main, "_resolve_session_dir", lambda cfg, w, **k: "")
     d = webserver._clip_data(st, "latest")
     assert d["clips"] == [] and "error" in d
 
