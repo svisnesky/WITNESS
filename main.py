@@ -3415,12 +3415,11 @@ def _build_session_artifacts(cfg, session_dir, tags, rc=None, report_speech=""):
             made = montage.build_montage(session_dir,
                                          montage.find_ffmpeg(base, cfg))
             # None with clips build_montage could see is a failed montage, not
-            # "nothing to do" (it prints why and returns None). Only the TOP
-            # level counts: build_montage lists that alone, and tidy_session
-            # (run after every recap, failed ones too) moves clips into clips/.
-            # Checking _session_clips_from_dir here (which reads clips/ too)
-            # failed every resume / 'Rebuild reels' of a tidied session and
-            # marked it .recap_failed until the attempt cap stopped retries.
+            # "nothing to do" (it prints why and returns None).
+            # _montage_inputs lists exactly what build_montage stitches: the
+            # top level and, since build_montage became tidy-aware, clips/.
+            # (When it read only the top level, so did this check; a resume or
+            # 'Rebuild reels' of a tidied session then failed silently.)
             if made is None and _montage_inputs(session_dir):
                 failures.append("montage: no montage was built")
             # The montage is the one Stan actually wants on YouTube ("mainly the
@@ -3645,19 +3644,18 @@ def _clip_tags_from_name(fname: str) -> list:
 
 
 def _montage_inputs(session_dir: str):
-    """The clips montage.build_montage can stitch: video files at the TOP level
-    of session_dir (not highlights_*), the same listing build_montage makes.
-    A tidied session keeps its clips in clips/, which build_montage does not
-    read, so this is empty for it."""
+    """The clips montage.build_montage can stitch, from the same listing it
+    makes: tidy.iter_session_media over VIDEO_EXTS, so the top level AND a
+    tidied session's clips/, without the session's own outputs (highlights*,
+    session_reel*). Relative paths. When this is non-empty and build_montage
+    returns None, the montage failed."""
     import montage
+    import tidy
     try:
-        names = os.listdir(session_dir)
+        return [rel for rel, _full in
+                tidy.iter_session_media(session_dir, montage.VIDEO_EXTS)]
     except OSError:
         return []
-    return [f for f in names
-            if f.lower().endswith(montage.VIDEO_EXTS)
-            and not f.lower().startswith("highlights")
-            and os.path.isfile(os.path.join(session_dir, f))]
 
 
 def _session_clips_from_dir(session_dir: str):
