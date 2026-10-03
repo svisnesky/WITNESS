@@ -17,6 +17,7 @@ needs an exception with a .code, so the stand-ins below take the library's
 place; only the two tests that drive the real library skip without it.
 """
 
+import json
 import logging
 import os
 import re
@@ -438,6 +439,160 @@ def test_a_refused_scene_lookup_is_none_without_reconnecting():
     assert c.reconnects == 0
 
 
+def test_a_nested_scene_with_no_item_list_counts_as_unknown():
+    """OBS answered, just without a list: the reply was read, the socket is
+    in step, so no reconnect."""
+    c = _client(_Scenes({"Main": [_item(name="Odd", scene=True),
+                                  _item("game_capture")],
+                         "Odd": None}))
+    assert c.get_scene_input_kinds() == ["unknown", "game_capture"]
+    assert c.reconnects == 0
+
+
+class _Stalls(_Scenes):
+    """Like _Scenes, but the item-list request for one scene or group times
+    out `stalls` times first (a negative number: every time)."""
+
+    def __init__(self, *a, stall="Gameplay", stalls=1, **kw):
+        super().__init__(*a, **kw)
+        self.stall = stall
+        self.stalls = stalls
+        self.timeouts = 0
+
+    def _maybe_stall(self, name):
+        if name == self.stall and self.stalls != 0:
+            self.stalls -= 1
+            self.timeouts += 1
+            raise Timeout("Timeout while trying to send the request")
+
+    def get_scene_item_list(self, name):
+        self._maybe_stall(name)
+        return super().get_scene_item_list(name)
+
+    def get_group_scene_item_list(self, name):
+        self._maybe_stall(name)
+        return super().get_group_scene_item_list(name)
+
+
+@pytest.mark.parametrize("group", [False, True], ids=["scene", "group"])
+def test_a_nested_timeout_reconnects_once_and_retries(group):
+    """A timeout inside a NESTED lookup used to be swallowed as 'unknown'.
+    obsws-python never matches a reply to its request, so OBS's late answer
+    stayed queued and every later request (save_replay, the clip workers'
+    get_last_replay_path) read the reply meant for the one before it, for
+    the rest of the session. A timeout must reach _call, which reconnects
+    (a fresh socket has no stale reply) and retries the whole lookup."""
+    scenes = {"Main": [_item(name="Gameplay", scene=True, group=group),
+                       _item("text_gdiplus_v3", "KillCounter")]}
+    groups = {}
+    (groups if group else scenes)["Gameplay"] = [_item("monitor_capture")]
+    fake = _Stalls(scenes, groups=groups)
+    c = _client(fake)
+    assert c.get_scene_input_kinds() == ["monitor_capture", "text_gdiplus_v3"]
+    assert fake.timeouts == 1
+    assert c.reconnects == 1, "a nested timeout must reconnect, exactly once"
+
+
+def test_a_nested_timeout_that_persists_is_none_after_one_reconnect(capsys):
+    fake = _Stalls({"Main": [_item(name="Gameplay", scene=True),
+                             _item("game_capture")],
+                    "Gameplay": [_item("monitor_capture")]}, stalls=-1)
+    c = _client(fake)
+    assert c.get_scene_input_kinds() is None, \
+        "can't tell is None, never a guessed 'unknown' list"
+    assert c.reconnects == 1 and fake.timeouts == 2
+    lines = capsys.readouterr().out.strip().splitlines()
+    assert len(lines) == 1 and lines[0].startswith("OBS scene sources failed")
+
+
+def test_a_nested_timeout_does_not_cross_later_replies(caplog):
+    """End to end through the real obsws-python request path, on a fake
+    socket that answers in order and delivers one reply after its timeout.
+    Before the fix: kinds ['unknown', ...] with no reconnect, then
+    get_last_replay_path() read SaveReplayBuffer's reply ('') and the next
+    one read the previous poll's path."""
+    obsws_python = pytest.importorskip("obsws_python")
+    from obsws_python.baseclient import ObsClient
+    from websocket import WebSocketTimeoutException
+
+    scenes = {"Main": [_item(name="Gameplay", scene=True),
+                       _item("text_gdiplus_v3", "KillCounter")],
+              "Gameplay": [_item("monitor_capture")]}
+
+    class _Sock:
+        """Replies in send order. A stalled request's recv() times out and
+        its reply arrives late, i.e. stays queued for the next recv()."""
+
+        def __init__(self, stall=None):
+            self.stall = stall
+            self.queue = []
+            self.timeout_next = False
+            self.closed = False
+            self.saves = 0
+
+        def send(self, raw):
+            d = json.loads(raw)["d"]
+            kind, data = d["requestType"], d.get("requestData") or {}
+            reply = {"requestType": kind, "requestId": d["requestId"],
+                     "requestStatus": {"result": True, "code": 100}}
+            if kind == "GetCurrentProgramScene":
+                reply["responseData"] = {"currentProgramSceneName": "Main"}
+            elif kind == "GetSceneItemList":
+                reply["responseData"] = {"sceneItems": scenes[data["sceneName"]]}
+                if data["sceneName"] == self.stall:
+                    self.stall = None
+                    self.timeout_next = True
+            elif kind == "SaveReplayBuffer":
+                self.saves += 1
+            elif kind == "GetLastReplayBufferReplay":
+                reply["responseData"] = {
+                    "savedReplayPath": "Replay %d.mkv" % self.saves}
+            self.queue.append(json.dumps({"op": 7, "d": reply}))
+
+        def recv(self):
+            if self.timeout_next:
+                self.timeout_next = False
+                raise WebSocketTimeoutException("timed out")
+            return self.queue.pop(0)
+
+        def shutdown(self):
+            self.closed = True
+
+    def req_client(ws):
+        base = ObsClient.__new__(ObsClient)
+        base.logger = logging.getLogger("obsws_python.baseclient.ObsClient")
+        base.ws = ws
+        rc = obsws_python.ReqClient.__new__(obsws_python.ReqClient)
+        rc.logger = logging.getLogger("obsws_python.reqs.ReqClient")
+        rc.base_client = base
+        return rc
+
+    lib = logging.getLogger("obsws_python")
+    before = lib.level
+    try:
+        obs_client._quiet_obsws_logger()      # what _connect_client does
+        first = _Sock(stall="Gameplay")
+        c = obs_client.OBSClient(auto_start_replay_buffer=False)
+        c._client = req_client(first)
+        socks = []
+
+        def fresh():
+            socks.append(_Sock())
+            c._client = req_client(socks[-1])
+        c._connect_client = fresh
+
+        assert c.get_scene_input_kinds() == ["monitor_capture", "text_gdiplus_v3"]
+        assert len(socks) == 1, "the nested timeout must reconnect, once"
+        assert first.closed, "the socket holding the late reply was not dropped"
+        assert c.save_replay() is True
+        assert c.get_last_replay_path() == "Replay 1.mkv"
+        assert c.save_replay() is True
+        assert c.get_last_replay_path() == "Replay 2.mkv"
+        assert socks[-1].queue == [], "a reply is still queued: requests are crossed"
+    finally:
+        lib.setLevel(before)
+
+
 def test_dryrun_stub_has_the_new_interface():
     d = obs_client.DryRunOBS()
     assert d.get_scene_input_kinds() is None
@@ -464,7 +619,7 @@ sys.exit(pytest.main(sys.argv[1:]))
 """
 
 # The tests that drive the real library, and so may skip without it.
-_NEEDS_THE_LIBRARY = 2
+_NEEDS_THE_LIBRARY = 3
 
 
 def test_the_file_runs_without_obsws_python():

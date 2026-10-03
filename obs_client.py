@@ -264,8 +264,11 @@ class OBSClient:
 
         Nested scenes and groups are opened up (up to 3 levels), because their
         sources draw into this scene too. An item whose type can't be read
-        counts as 'unknown', which never qualifies for the softer verdicts.
-        Hidden items are left out: they draw nothing.
+        (including a nested scene OBS refuses to list) counts as 'unknown',
+        which never qualifies for the softer verdicts. A nested lookup that
+        times out is a connection problem, handled like any other: reconnect,
+        retry the whole lookup once, else None. Hidden items are left out:
+        they draw nothing.
 
         None when it can't tell: no connection, a refused request, or a client
         (old library, test fake) without the scene-item requests. A missing
@@ -310,10 +313,16 @@ class OBSClient:
             # `parents` is this branch's chain of scenes: a scene that (via
             # another) contains itself stops here instead of looping.
             if nested and src and src not in parents and depth < _SCENE_NEST_LIMIT:
+                # Only an ANSWERED failure (OBS refused, or replied without a
+                # list) counts as 'unknown'. A timeout or a dropped socket must
+                # reach _call: obsws-python never matches a reply to its
+                # request, so OBS's late answer stays queued and every later
+                # request reads the one before it, all session. _call's
+                # reconnect discards it on a fresh socket and retries.
                 try:
                     kinds.extend(self._scene_kinds(src, bool(it.get("isGroup")),
                                                    depth + 1, parents | {src}))
-                except Exception:
+                except (_request_error(), ValueError):
                     kinds.append("unknown")
             else:
                 kinds.append("unknown")
