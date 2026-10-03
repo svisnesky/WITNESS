@@ -32,6 +32,7 @@ MUTED = "#8a90a0"
 LINE = "#2a2a38"
 RED = "#ff4b42"
 GREEN = "#5bd66b"
+AMBER = "#f5a623"
 
 
 # --- failures you can see ---------------------------------------------------
@@ -561,11 +562,19 @@ class ControlPanel:
         tk.Label(wrap, text="P R E S S   S T A R T   T O   B E G I N", bg=BG,
                  fg=MUTED, font=("Consolas", 9)).pack()
         # why the last START failed stays here, in red, until the next START
-        err = getattr(self, "_last_error", "")
-        self.idle_note = tk.Label(wrap, text=err, bg=BG, fg=RED if err else MUTED,
+        text, color = self._idle_note_text()
+        self.idle_note = tk.Label(wrap, text=text, bg=BG, fg=color,
                                   font=("Consolas", 9), wraplength=520,
                                   justify="center")
         self.idle_note.pack(pady=(14, 0))
+
+    def _idle_note_text(self):
+        """(text, color) under 'Ready when you are.': a failed START in red,
+        else how the last session ended if it crashed, in grey."""
+        err = getattr(self, "_last_error", "")
+        if err:
+            return err, RED
+        return getattr(self, "_session_note", ""), MUTED
 
     def _show_live(self):
         self._clear_main()
@@ -693,6 +702,7 @@ class ControlPanel:
         self.recent = []
         self.latest = None
         self._last_error = ""
+        self._session_note = ""
         # Same reload as the web window: an edited config.yaml applies on
         # START. Server keys stay as launched once main.py has bound the port.
         web = getattr(app, "_web_state", None)
@@ -898,10 +908,20 @@ class ControlPanel:
         if not s:
             return
         if s.startswith("ERROR:"):
+            detail = s[len("ERROR:"):].strip()
+            if getattr(self, "_watching", False):
+                # The session had gone live ("Detecting [" seen; 'stopped' is
+                # queued after this line): detection or the recap failed after
+                # a good start. Not a start error, and not red.
+                self._session_note = ("The last session ended with an error: "
+                                      + detail)
+                self._set_status(f"{self.DOT}  SESSION ENDED WITH AN ERROR",
+                                 AMBER, detail[:140])
+                return
             # a failed START: red, and kept on the idle screen after "stopped";
             # a failed config reload goes first, it is usually the cause
             s = "ERROR: " + with_reload_error(getattr(self, "_cfg_err", ""),
-                                              s[len("ERROR:"):].strip())
+                                              detail)
             self._last_error = s
             self._set_status(f"{self.DOT}  COULD NOT START", RED, s[:140])
             return

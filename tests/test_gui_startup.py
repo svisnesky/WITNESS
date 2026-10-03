@@ -332,6 +332,31 @@ def test_no_reload_notice_when_the_reload_worked(monkeypatch):
     assert st.notices == []
 
 
+def test_tk_crash_after_going_live_is_not_a_start_error():
+    """F01 risk (b): a crash in detection or the recap after a good night must
+    not put a red COULD NOT START on the idle screen. The ERROR line is
+    queued before 'stopped', so _watching is still True when it arrives."""
+    panel = gui.ControlPanel.__new__(gui.ControlPanel)
+    panel._last_error = ""
+    shown = []
+    panel._set_status = lambda text, color, sub=None: shown.append((text, color, sub))
+    panel._drain_line("Detecting [popup] at 5 fps via obs. Region=None. LIVE. "
+                      "Ctrl-C to stop.")
+    panel._drain_line("ERROR: RuntimeError: recap build blew up "
+                      "(details: logs/session_x.log)")
+    assert panel._last_error == ""
+    assert "COULD NOT START" not in shown[-1][0]
+    assert "SESSION ENDED WITH AN ERROR" in shown[-1][0]
+    assert shown[-1][1] != gui.RED
+    text, color = panel._idle_note_text()
+    assert "recap build blew up" in text and color != gui.RED
+    # a START that never went live is still a start error, in red
+    panel._watching = False
+    panel._drain_line("ERROR: Can't reach OBS. (details: logs/session_y.log)")
+    assert "COULD NOT START" in shown[-1][0] and shown[-1][1] == gui.RED
+    assert panel._idle_note_text() == (panel._last_error, gui.RED)
+
+
 def test_tk_start_failure_keeps_the_reload_error_first():
     panel = gui.ControlPanel.__new__(gui.ControlPanel)
     panel._last_error = ""
