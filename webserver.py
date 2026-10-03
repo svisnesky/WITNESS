@@ -2272,7 +2272,7 @@ PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
     <h3>Settings</h3>
     <p>Every toggle applies to the running session immediately &mdash; no restart, no config file editing.</p>
     <h3>Where files go</h3>
-    <p class="m">Clips land in your OBS output folder under <code>Marathon Sessions/&lt;date&gt;/</code> &mdash; reels in <code>reels/</code>, vertical Shorts in <code>shorts/</code>, plus a screenshot of each exfil screen. A session recap, match card, and montage are built when you stop.</p>
+    <p class="m">Clips land in your OBS output folder under <code>Marathon Sessions/&lt;date&gt;/</code> &mdash; reels in <code>reels/</code>, plus a screenshot of each exfil screen. The session reel and recap are built when you stop; the match card and stats page go to the app folder&rsquo;s <code>stats/</code>. Vertical Shorts (<code>shorts/</code>) and the session montage are off until you turn them on in Settings.</p>
   </div>
   <div style="height:14px"></div>
   <button class="close" onclick="closeHelp()">CLOSE</button>

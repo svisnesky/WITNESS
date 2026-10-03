@@ -88,9 +88,11 @@ forever. The app checks for updates every time it opens and updates itself.
    address in the browser on a phone or iPad on the same Wi-Fi: live kill feed,
    instant replays, match highlight reels, and a **+1** button for anything
    the detector misses.
-5. **Press STOP** when you're done. Clips, highlight reels, vertical Shorts,
-   and a session recap are waiting in your OBS recording folder under
-   `Marathon Sessions/`.
+5. **Press STOP** when you're done. Clips, the session reel, match highlight
+   reels and the WITNESS Report are waiting in your OBS recording folder under
+   `Marathon Sessions/`. The match card and the stats page are in the app
+   folder's `stats/`. Vertical Shorts and the session montage are off until
+   you turn them on in Settings.
 
 ## Worried about performance?
 

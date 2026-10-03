@@ -117,10 +117,10 @@ screen -> OCR -> detector -> OBS replay save -> clips, reels, shorts, dashboard
 - **Exfil stat capture**: the summary screen is OCR'd and logged to
   `stats/match_stats.csv`, with an audit line comparing the game's kill count
   to what was detected. The screen itself is saved as a PNG.
-- **Vertical Shorts**: each clip also renders as a 1080x1920 short (blurred
+- **Vertical Shorts** (opt-in): each clip also renders as a 1080x1920 short (blurred
   background, centered gameplay, a label with the event tag such as
   "DOWN + FINISHER" and the game name), upload-ready.
-- **Session recap**: montage, shareable match-card PNG, Play of the Night
+- **Session recap**: montage (opt-in), shareable match-card PNG, Play of the Night
   (the single best clip of the session, cut into its own reel), and an HTML
   recap at session end. Closed the app mid-build? It finishes at next launch.
 - **Clip viewer**: the **Clips** page lists a session's clips; pick some and

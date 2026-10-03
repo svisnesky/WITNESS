@@ -12,8 +12,8 @@ The first version meant for people other than its author.
 **What WITNESS does**
 - Reads kill popups in Marathon off the screen with OCR and saves an OBS
   Replay Buffer clip of each one.
-- Builds match highlight reels, a session reel, vertical Shorts and a spoken
-  WITNESS Report when you press STOP.
+- Builds match highlight reels, a session reel and a spoken WITNESS Report
+  when you press STOP. Vertical Shorts and a session montage are opt-in.
 - Serves a live dashboard to a phone or iPad on the same Wi-Fi: kill feed,
   instant replays, reels and a +1 button for missed kills.
 - Optional YouTube auto-upload (all off by default), teachable game profiles,
