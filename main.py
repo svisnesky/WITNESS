@@ -3593,8 +3593,15 @@ def run_tray(cfg: dict, dry_run: bool):
 
 
 def _resolve_session_dir(cfg, which: str) -> str:
-    """Session folder for --rebuild: a full path, a folder name, or 'latest'."""
-    if which and which != "latest" and os.path.isdir(which):
+    """Session folder for --rebuild: a full path, a folder name, or 'latest'.
+
+    A full path is the CLI's ('Rebuild Last Session.bat' passes its arguments
+    through) and must be absolute. A name must be a folder INSIDE 'Marathon
+    Sessions': '..', '../x' and names that resolve elsewhere are refused.
+    Before, any existing directory was accepted, including one relative to
+    the current folder, and the dashboard routes fed request data in here
+    (they now validate first; this check stands on its own)."""
+    if which and which != "latest" and os.path.isabs(which) and os.path.isdir(which):
         return which
     root = ""
     # The cached folder first: rebuilding is an offline job on files already on
@@ -3606,23 +3613,36 @@ def _resolve_session_dir(cfg, which: str) -> str:
     if not os.path.isdir(root):
         try:
             from obs_client import OBSClient      # imported lazily, like elsewhere
-            obs = OBSClient(cfg)
+            obs_cfg = (cfg or {}).get("obs", {}) or {}
+            obs = OBSClient(host=obs_cfg.get("host", "localhost"),
+                            port=obs_cfg.get("port", 4455),
+                            password=_obs_password(obs_cfg),
+                            # a lookup, not a session: don't start OBS's buffer
+                            auto_start_replay_buffer=False)
             obs.connect()
             rec = obs.get_record_directory()
-            obs.close()
+            close = getattr(obs, "close", None)   # newer obs_client only
+            if callable(close):
+                close()
             if rec:
                 root = os.path.join(rec, "Marathon Sessions")
                 cache_record_dir(rec)
         except Exception as e:
             print(f"(couldn't ask OBS for the clip folder: {e})")
     if not root or not os.path.isdir(root):
+        example = (os.path.join(rec, "Marathon Sessions", "<session folder>") if rec
+                   else "<your OBS recording folder>/Marathon Sessions/<session folder>")
         print("Couldn't find the 'Marathon Sessions' folder. Pass the full path:"
-              "\n  python main.py --rebuild \"Z:/OBS Clips/Marathon/Marathon "
-              "Sessions/2026-07-29_20-00-15\"")
+              f"\n  python main.py --rebuild \"{example}\"")
         return ""
     if which and which != "latest":
+        if which in (".", "..") or os.path.isabs(which):
+            print(f"No session folder named {which!r} in {root}")
+            return ""
         cand = os.path.join(root, which)
-        if os.path.isdir(cand):
+        real_root = os.path.realpath(root)
+        if (os.path.realpath(cand).startswith(real_root + os.sep)
+                and os.path.isdir(cand)):
             return cand
         print(f"No session folder named {which!r} in {root}")
         return ""
