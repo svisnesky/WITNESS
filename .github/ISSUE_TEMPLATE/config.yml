@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security problem
+    url: https://github.com/svisnesky/WITNESS/blob/main/SECURITY.md#reporting-a-vulnerability
+    about: Please don't file security problems publicly. SECURITY.md says how to report one privately.
+  - name: Setup help
+    url: https://github.com/svisnesky/WITNESS/blob/main/QUICKSTART.md#if-somethings-off
+    about: The fixes for the most common setup problems (OBS password, black capture, phone can't connect).
