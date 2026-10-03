@@ -12,10 +12,12 @@ Voice quality tiers, tried in order:
   2. Windows System.Speech via PowerShell (offline, robotic — the fallback)
   3. macOS `say` (development testing)
 
-The switch: configure(cfg) sets it from a loaded config; a process that never
-calls configure() reads it from config.yaml / settings_override.yaml beside
-this file on the first render; online=True/False on synth_to_wav /
-ensure_callout / ensure_medal_sounds overrides it per call.
+The switch is read from config.yaml / settings_override.yaml beside this file
+and re-read whenever either file changes, so editing config.yaml and pressing
+START (or exporting from the dashboard) takes effect in a process that has
+been running for days. configure(cfg) pins a session's loaded value until
+either file changes; online=True/False on synth_to_wav / ensure_callout /
+ensure_medal_sounds overrides it per call.
 It gates edge-tts only: ElevenLabs is already opt-in by key.
 
 Pick the voice with announcer_voice in config.yaml (e.g. "en-US-GuyNeural",
@@ -33,15 +35,22 @@ DEFAULT_VOICE = "en-US-ChristopherNeural"
 DEFAULT_PITCH = "-18Hz"          # deep broadcast voice — Stan-approved
 
 # tts_online: may the Microsoft neural voice (edge-tts) be used?
-#   None  = not decided yet. The first render reads it from config.yaml beside
-#           this file (settings_override.yaml wins), so the switch works even
-#           for a caller that never calls configure().
-#   bool  = decided: by configure(cfg) from the session's loaded config, or by
-#           that first read.
-# A missing key, a missing file or an unreadable one all mean True: installs
-# whose config.yaml predates the key (updates never overwrite it) keep the
-# voice they have.
-_ONLINE = None
+# A missing key, a missing file or a file that never parsed all mean True:
+# installs whose config.yaml predates the key (updates never overwrite it) keep
+# the voice they have.
+#
+# The files are the source of truth and are re-read when they change. The
+# first version read them once per process and latched the answer, so in the
+# window app (one process, START pressed many times) turning tts_online off
+# and pressing START kept sending text to Microsoft until a restart, and
+# turning it back on was ignored too.
+_ONLINE = None           # configure(cfg)'s value; None = never called
+_CONFIGURED_AT = None    # the files' stat key when configure() ran
+_CONFIG_DIR = ""         # "" = beside this file (tests point it elsewhere)
+_SWITCH_FILES = ("config.yaml", "settings_override.yaml")   # later file wins
+_NEVER_READ = object()
+_disk = (_NEVER_READ, True)    # (stat key, tts_online) of the last disk read
+_UNREADABLE = object()
 _told_offline = False
 
 _FALSY = {"false", "no", "off", "0", ""}
@@ -59,17 +68,39 @@ def tts_online(cfg) -> bool:
     return bool(v) if v is not None else True
 
 
+def _config_dir() -> str:
+    return _CONFIG_DIR or os.path.dirname(os.path.abspath(__file__))
+
+
+def _stat_key(base: str) -> tuple:
+    """(mtime_ns, size) of each switch file, None for a missing one. Two
+    stat() calls per render: every caller renders on a background thread
+    (main's speak()/work() threads, export_reel), never the detection loop."""
+    key = [base]
+    for name in _SWITCH_FILES:
+        try:
+            st = os.stat(os.path.join(base, name))
+            key.append((st.st_mtime_ns, st.st_size))
+        except OSError:
+            key.append(None)
+    return tuple(key)
+
+
 def configure(cfg) -> bool:
-    """Apply config's tts_online to every render in this process (call once
-    per session, after load_config). Returns the value now in force."""
-    global _ONLINE
+    """Pin a loaded config's tts_online for this process (call per session,
+    after load_config). It holds until config.yaml or settings_override.yaml
+    changes on disk; from then on an edit can turn the voice off but not back
+    on, until the next configure() (the next START). Returns the value."""
+    global _ONLINE, _CONFIGURED_AT
+    _CONFIGURED_AT = _stat_key(_config_dir())
     _ONLINE = tts_online(cfg)
     return _ONLINE
 
 
 def _load_yaml(path):
-    """A YAML file as data, or None if it is missing or unreadable. UTF-8
-    first; an ANSI save (Notepad, cp1252) falls back to the locale encoding."""
+    """A YAML file as data, or _UNREADABLE if it cannot be read or parsed.
+    UTF-8 first; an ANSI save (Notepad, cp1252) falls back to the locale
+    encoding."""
     try:
         import yaml
         with open(path, "rb") as f:
@@ -82,28 +113,61 @@ def _load_yaml(path):
                               errors="replace")
         return yaml.safe_load(text)
     except Exception:
-        return None
+        return _UNREADABLE
 
 
-def _switch_from_disk(base_dir: str = "") -> bool:
-    """tts_online as load_config would see it: config.yaml, then
-    settings_override.yaml (which wins). For a process that never called
-    configure(). Missing or unreadable files leave the code default, True."""
-    base = base_dir or os.path.dirname(os.path.abspath(__file__))
+def _read_switch(base: str):
+    """tts_online from the files as load_config would merge them, or None
+    when one exists but will not read or parse."""
     seen = {}
-    for name in ("config.yaml", "settings_override.yaml"):
-        data = _load_yaml(os.path.join(base, name))
+    for name in _SWITCH_FILES:
+        path = os.path.join(base, name)
+        if not os.path.exists(path):
+            continue
+        data = _load_yaml(path)
+        if data is _UNREADABLE:
+            return None
         if isinstance(data, dict) and "tts_online" in data:
             seen["tts_online"] = data["tts_online"]
     return tts_online(seen)
 
 
+def _switch_from_disk(base_dir: str = "") -> bool:
+    """tts_online as load_config would see it: config.yaml, then
+    settings_override.yaml (which wins). Missing or unreadable files leave the
+    code default, True."""
+    value = _read_switch(base_dir or _config_dir())
+    return True if value is None else value
+
+
+def _disk_online(base: str, key: tuple) -> bool:
+    """_switch_from_disk(), parsed again only when `key` (the files' mtime and
+    size) changed since the last read. A file that stops parsing mid-edit
+    keeps the last value read instead of falling back to on: re-reading must
+    not let a typo elsewhere in config.yaml undo the user's false."""
+    global _disk
+    cached_key, cached = _disk
+    if key != cached_key:
+        value = _read_switch(base)
+        _disk = (key, cached if value is None else value)
+    return _disk[1]
+
+
 def _session_online() -> bool:
-    """The switch in force: configure()'s value, else read once from disk."""
-    global _ONLINE
-    if _ONLINE is None:
-        _ONLINE = _switch_from_disk()
-    return _ONLINE
+    """The switch in force for a render that did not pass online=.
+    No configure(): the files decide, re-read whenever they change.
+    configure(cfg): its value while the files are unchanged since; after an
+    edit, off if either says off (an edit can't re-enable a session's false;
+    the next START's configure() does)."""
+    base = _config_dir()
+    key = _stat_key(base)
+    configured = _ONLINE
+    if configured is not None and key == _CONFIGURED_AT:
+        return configured
+    on_disk = _disk_online(base, key)
+    if configured is None:
+        return on_disk
+    return configured and on_disk
 
 
 def _online_ok(online=None) -> bool:
@@ -209,8 +273,8 @@ def synth_to_wav(text: str, out_wav: str, voice: str = DEFAULT_VOICE,
     (mp3 for the neural voice, wav for fallbacks) or None.
     pitch: e.g. "-18Hz" to deepen any voice (neural only).
     eleven_voice: ElevenLabs voice ID override (used when a key is set).
-    online: False skips the Microsoft neural voice; None = the session's
-    tts_online (configure(), else config.yaml; on unless config turns it off)."""
+    online: False skips the Microsoft neural voice; None = tts_online as
+    config.yaml says now (or configure()'s; on unless config turns it off)."""
     os.makedirs(os.path.dirname(out_wav), exist_ok=True)
 
     path = _elevenlabs(text, os.path.splitext(out_wav)[0] + ".mp3",
