@@ -1119,9 +1119,37 @@ def _setup_session(cfg, dry_run):
             s["canary"] = canary.DetectionCanary()
         except Exception:
             s["canary"] = None
+    # ffmpeg preflight. Without it clips still save, but every kill printed a
+    # cryptic '[replay] error: [WinError 2]' while replays, reels, Shorts and
+    # voiced call-outs silently never appeared.
+    if not _ffmpeg_available(os.path.dirname(os.path.abspath(__file__)), cfg):
+        s["no_ffmpeg"] = True
+        print("ffmpeg not found: clips still save, but instant replays, reels, "
+              "Shorts and voiced call-outs are OFF. Put ffmpeg.exe in this "
+              "folder or set ffmpeg_path in config.yaml.")
+        if web is not None:
+            try:
+                web.notice("ffmpeg missing: no replays/reels/voice")
+            except Exception:
+                pass
     if cfg.get("announcer_medals", True) and not dry_run:
         _prepare_medals_async(cfg, s)
     return s
+
+
+def _ffmpeg_available(base, cfg) -> bool:
+    """Does the ffmpeg that montage.find_ffmpeg picks actually exist?
+
+    find_ffmpeg falls back to the bare name 'ffmpeg' (PATH), so that one is
+    checked with shutil.which, never os.path.exists: a PATH install is not a
+    file in the current folder, and testing it that way would switch off
+    replays for everyone who has ffmpeg on PATH. True when it can't tell."""
+    try:
+        import montage
+        ff = montage.find_ffmpeg(base, cfg)
+    except Exception:
+        return True
+    return bool(ff) and (os.path.isfile(ff) or shutil.which(ff) is not None)
 
 
 def _replay_buffer_ok(obs) -> bool:
@@ -1161,6 +1189,8 @@ def _clip_not_saved(s, what: str) -> None:
 def _prepare_medals_async(cfg, s):
     """Render the medal call-outs in the background so the first DOUBLE KILL
     plays instantly (cached per voice; offline after the first render)."""
+    if s.get("no_ffmpeg"):
+        return            # every render needs ffmpeg; the preflight said so
     def work():
         try:
             import announcer
@@ -1203,7 +1233,7 @@ def _clip_ready_callback(s, tag, count, kills=1, kill_epochs=None,
 def _register_replay_async(s, clip_path, tag, count):
     """Remux the organized .mkv to .mp4 (stream copy, ~instant) so Safari can
     play it, and add it to the dashboard's Instant Replays list."""
-    if s["web"] is None:
+    if s["web"] is None or s.get("no_ffmpeg"):
         return
     def work():
         try:
@@ -1658,7 +1688,7 @@ def _clutch_celebrate(cfg, s, kills):
     show_text_overlay(cfg, "CLUTCH", size=84, position="custom:0.5,0.36",
                       color=_theme_color(cfg, "accent", "#9c58da"),
                       duration_ms=2600)
-    if cfg.get("announcer_medals", True):
+    if cfg.get("announcer_medals", True) and not s.get("no_ffmpeg"):
         phrase = str(cfg.get("clutch_callout") or "HOLY SHIT!")
         def speak():
             try:
@@ -1769,7 +1799,8 @@ def _fire_heat(cfg, s, ev, delay: float = 0.0):
     if cfg.get("heat_overlays", True) and cfg.get("show_overlays", True):
         show_text_overlay(cfg, ev.label, size=68, position="custom:0.5,0.30",
                           color=ev.color, duration_ms=1900)
-    if cfg.get("heat_callouts", True) and cfg.get("announcer_medals", True) and ev.callout:
+    if (cfg.get("heat_callouts", True) and cfg.get("announcer_medals", True)
+            and ev.callout and not s.get("no_ffmpeg")):
         callout = ev.callout
 
         def speak():
@@ -1854,7 +1885,7 @@ def _streamer_alert(cfg, s, direction, watch):
         except Exception:
             pass
 
-    if cfg.get("announcer_medals", True) and not quiet:
+    if cfg.get("announcer_medals", True) and not quiet and not s.get("no_ffmpeg"):
         phrase = (f"You just killed {watch}!" if killed
                   else f"{watch} just downed you.")
         def speak():
@@ -2153,6 +2184,10 @@ def _build_match_reel_async(cfg, s, session_dir, stats_d):
     """Build this match's highlight reel in the background and pop it onto the
     iPad dashboard. Waits before building so a final kill that's still in the
     coalesce window / being organized makes it into the reel."""
+    if s.get("no_ffmpeg"):
+        s["match_clips"] = []      # this match's clips stay on disk as clips
+        print("  [reel] skipped: ffmpeg not found")
+        return
     s["match_num"] += 1
     match_num = s["match_num"]
 
