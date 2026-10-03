@@ -166,3 +166,18 @@ def test_wrapped_best_play_reads_clips_and_counts_a_plus_one(tmp_path):
     assert bp is not None, "tidied sessions must still have a best play"
     # two downs plus a hand-credited +1: three, not two ('manual' read as 0)
     assert bp == (3, "down+down+manual_kill", "2026-09-02_20-00-00")
+
+
+def test_wrapped_ranks_a_plus_one_with_kills_not_below_an_assist(tmp_path):
+    """Equal kill counts are broken by tag. A +1 KILL is a kill: it used to be
+    misread as 'manual' and, once parsed correctly, matched no rank at all."""
+    import wrapped
+    root = tmp_path / "Marathon Sessions"
+    a = root / "2026-09-03_20-00-00" / "clips"
+    a.mkdir(parents=True)
+    (a / "001_assist_20-01-00.mkv").write_bytes(b"x")
+    b = root / "2026-09-04_20-00-00" / "clips"
+    b.mkdir(parents=True)
+    (b / "002_manual_kill_20-05-00.mkv").write_bytes(b"x")
+    assert wrapped.best_play(str(tmp_path)) == (1, "manual_kill",
+                                                "2026-09-04_20-00-00")

@@ -19,7 +19,12 @@ import clip_index
 import tidy
 from matchcard import _font, _text_w, BG, PANEL, LINE, TEXT, MUTED, ACCENT
 
-TAG_PRIORITY = ("finisher", "precision", "down", "kill", "assist", "manual")
+# Tie-break order for the best play. "manual_kill" is a +1 KILL press: a kill,
+# ranked with "kill" (match_reel._tag_rank already ranks it there). Before the
+# shared parser it was misread as "manual", a moment saved by hand; once it
+# parsed correctly it matched nothing here and fell below an assist.
+TAG_PRIORITY = ("finisher", "precision", "down", "kill", "manual_kill",
+                "assist", "manual")
 
 
 def _num(v):
@@ -49,7 +54,7 @@ def week_rows(base_dir: str, days: int = 7) -> list[dict]:
 
 def best_play(record_dir: str, days: int = 7):
     """Highest-kill clip of the week from clip filenames
-    (NNN_tag_HH-MM-SS.ext; kills = number of down/precision parts in the tag).
+    (NNN_tag_HH-MM-SS.ext; kills = number of down/precision/+1 parts in the tag).
     Returns (kills, tag, session) or None."""
     root = os.path.join(record_dir, "Marathon Sessions")
     if not os.path.isdir(root):
