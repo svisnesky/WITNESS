@@ -214,3 +214,101 @@ def test_setup_names_a_missing_obs_instead_of_waiting(monkeypatch):
         main._setup_session({"web_dashboard": False}, dry_run=False)
     assert str(ex.value).startswith("OBS is not running and obs64.exe was not found")
     assert "obs.exe_path" in str(ex.value)
+
+
+# --- Replay Buffer off ------------------------------------------------------------
+# Disabled in OBS settings: kills count, no clip saves, and the only trace was
+# one WARNING line from obs_client in a console the window app doesn't have.
+
+class _Client:
+    def __init__(self, rb=True, saves=True):
+        self.rb, self.saves = rb, saves
+
+    def connect(self):
+        pass
+
+    def set_counter(self, n):
+        pass
+
+    def replay_buffer_active(self):
+        return self.rb
+
+    def save_replay(self):
+        return self.saves
+
+    def get_record_directory(self):
+        return ""
+
+    def get_scene_screenshot(self, width=480):
+        return b""                       # inconclusive black check: no alarm
+
+
+class _Web:
+    def __init__(self):
+        self.notices, self.record_dir = [], ""
+
+    def reset(self):
+        self.notices.clear()
+
+    def bind_config(self, cfg, cb):
+        pass
+
+    def set_running(self, running):
+        pass
+
+    def notice(self, text, tag="alert"):
+        assert len(text) <= 60, "LiveState.notice cuts at 60 chars"
+        self.notices.append(text)
+
+
+def _setup_with(monkeypatch, client, web):
+    import obs_client
+    monkeypatch.setattr(obs_client, "OBSClient", lambda **kw: client)
+    monkeypatch.setattr(main, "_ensure_obs_running", lambda cfg: "up")
+    monkeypatch.setattr(main, "_web_server", object())    # don't bind a port
+    monkeypatch.setattr(main, "_web_state", web)
+    cfg = {"announcer_medals": False, "heat_streaks": False,
+           "detection_canary": False}
+    return main._setup_session(cfg, dry_run=False)
+
+
+def test_a_replay_buffer_that_is_off_is_reported_at_start(monkeypatch, capsys):
+    web = _Web()
+    _setup_with(monkeypatch, _Client(rb=None), web)
+    assert "Replay Buffer OFF in OBS - clips will NOT save" in web.notices
+    out = capsys.readouterr().out
+    assert "Settings > Output > Replay Buffer" in out
+
+
+def test_a_running_replay_buffer_says_nothing(monkeypatch):
+    web = _Web()
+    _setup_with(monkeypatch, _Client(rb=True), web)
+    assert not any("Replay Buffer" in n for n in web.notices)
+
+
+def test_a_failed_clip_save_is_reported_once_a_minute(monkeypatch, capsys):
+    web = _Web()
+    s = {"obs": _Client(saves=False), "web": web, "organize": False,
+         "cfg": {"announcer_medals": False}, "medal_sounds": {}, "last_save": 0.0}
+    for n in (1, 2):
+        s["_coalesce_pending"] = [{"tag": "down", "count": n}]
+        main._flush_coalesce(s)
+    assert web.notices == ["CLIP NOT SAVED - check OBS Replay Buffer"]
+    assert capsys.readouterr().out.count("OBS did not save a replay") == 2
+    s["_clip_fail_notice_at"] -= 61                    # a minute later
+    s["_coalesce_pending"] = [{"tag": "down", "count": 3}]
+    main._flush_coalesce(s)
+    assert len(web.notices) == 2
+
+
+def test_manual_and_watchlist_saves_report_a_failure_too(monkeypatch):
+    web = _Web()
+    web.pop_clip_request = lambda: True
+    s = {"obs": _Client(saves=False), "web": web, "organize": False,
+         "cfg": {}, "count": 0, "last_save": 0.0, "min_save": 0.0, "clutch": False}
+    main._check_manual_clip(s)
+    assert web.notices == ["CLIP NOT SAVED - check OBS Replay Buffer"]
+    s["_clip_fail_notice_at"] = -1e9
+    monkeypatch.setattr(main, "show_text_overlay", lambda *a, **k: None)
+    main._streamer_alert({"announcer_medals": False}, s, "killed_by", "SOMESTREAMER")
+    assert web.notices.count("CLIP NOT SAVED - check OBS Replay Buffer") == 2

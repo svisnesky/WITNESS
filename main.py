@@ -1029,6 +1029,13 @@ def _setup_session(cfg, dry_run):
         )
     _connect_obs(obs, status, raw_password=obs_cfg.get("password", ""))
     obs.set_counter(0)
+    # Replay Buffer disabled in OBS settings = kills count, NO clip saves, and
+    # nothing said so beyond one console line from obs_client.
+    rb_ok = _replay_buffer_ok(obs)
+    if not rb_ok:
+        print("WARNING: OBS's Replay Buffer is not running - kills will count but "
+              "clips will NOT save. In OBS: Settings > Output > Replay Buffer > "
+              "Enable Replay Buffer, then Start Replay Buffer.")
 
     web = None
     if cfg.get("web_dashboard", True):
@@ -1059,6 +1066,8 @@ def _setup_session(cfg, dry_run):
             web = _web_state
             web.reset()
             web.bind_config(cfg, save_setting_overrides)
+            if not rb_ok:
+                web.notice("Replay Buffer OFF in OBS - clips will NOT save", "alert")
             try:
                 rd = obs.get_record_directory() or ""
                 web.record_dir = rd
@@ -1113,6 +1122,40 @@ def _setup_session(cfg, dry_run):
     if cfg.get("announcer_medals", True) and not dry_run:
         _prepare_medals_async(cfg, s)
     return s
+
+
+def _replay_buffer_ok(obs) -> bool:
+    """True only when OBS says its Replay Buffer is running. An unreadable
+    status (None) is a disabled buffer in practice: every status request fails
+    when it's switched off in Settings > Output. A client without the request
+    at all (a test fake) is assumed fine rather than cried wolf about."""
+    fn = getattr(obs, "replay_buffer_active", None)
+    if not callable(fn):
+        return True
+    try:
+        return fn() is True
+    except Exception:
+        return False
+
+
+CLIP_FAIL_NOTICE_EVERY = 60.0
+
+
+def _clip_not_saved(s, what: str) -> None:
+    """OBS refused a replay save. Say so on the console every time and on the
+    dashboard at most once a minute, so a buffer that stays off can't flood
+    the feed (and a kill that counted without a clip isn't silent)."""
+    print(f"  [clip] {what}: OBS did not save a replay - is the Replay Buffer "
+          "running? (OBS: Settings > Output > Replay Buffer)")
+    now = time.monotonic()
+    if now - s.get("_clip_fail_notice_at", -1e9) < CLIP_FAIL_NOTICE_EVERY:
+        return
+    s["_clip_fail_notice_at"] = now
+    if s.get("web") is not None:
+        try:
+            s["web"].notice("CLIP NOT SAVED - check OBS Replay Buffer", "alert")
+        except Exception:
+            pass
 
 
 def _prepare_medals_async(cfg, s):
@@ -1380,6 +1423,8 @@ def _flush_coalesce(s):
                                   victim=(s.pop("_last_victim", "")
                                           if any(p["tag"] == "down"
                                                  for p in pending) else "")))
+    else:
+        _clip_not_saved(s, f"kill(s) #{label}")
     s["_coalesce_pending"] = []
     s["_coalesce_deadline"] = 0.0
 
@@ -1832,7 +1877,12 @@ def _streamer_alert(cfg, s, direction, watch):
     # Your kills are already being clipped; a death normally isn't. This one is.
     if not killed and cfg.get("watchlist_clip_deaths", True):
         now = time.monotonic()
-        if now - s["last_save"] >= s["min_save"] and s["obs"].save_replay():
+        saved = False
+        if now - s["last_save"] >= s["min_save"]:
+            saved = s["obs"].save_replay()
+            if not saved:
+                _clip_not_saved(s, f"downed by {watch}")
+        if saved:
             s["last_save"] = now
             def on_done(dest):
                 _register_replay_async(s, dest, f"downed by {watch}", s["count"])
@@ -2237,6 +2287,7 @@ def _check_manual_clip(s):
             else:
                 print("  [manual clip: replay save FAILED — is OBS's Replay "
                       "Buffer running?]")
+                _clip_not_saved(s, "manual clip")
         else:
             print("  [manual clip: too soon after last save]")
 
