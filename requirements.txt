@@ -7,10 +7,15 @@ mss>=9.0
 numpy>=1.24
 opencv-python>=4.8
 
-# OCR — pick ONE engine (see config.yaml: ocr_engine)
-#   easyocr uses your NVIDIA GPU via torch (heavier install, more robust)
+# OCR (see config.yaml: ocr_engine). Both install; easyocr is the default.
+#   easyocr uses your NVIDIA GPU via torch.
+#   torch/torchvision are deliberately NOT listed: on an NVIDIA PC _env.bat
+#   installs the CUDA build first, and a torch line here could replace that
+#   working GPU build with the CPU-only Windows one from PyPI. Without an
+#   NVIDIA card, easyocr pulls the regular build by itself.
 easyocr>=1.7
-#   tesseract is lighter but needs the Tesseract binary installed separately
+#   tesseract is the experimental alternative. It is not a smaller install,
+#   and it needs the Tesseract program installed separately
 #   (Windows: https://github.com/UB-Mannheim/tesseract/wiki)
 pytesseract>=0.3.10
 
@@ -19,6 +24,11 @@ obsws-python>=1.6
 
 # Match cards, reel title/POTG cards, shorts labels
 Pillow>=10.0
+
+# Fallback ffmpeg (about 30 MB) for instant replays, reels, Shorts and voiced
+# call-outs. Used ONLY when there is no ffmpeg_path in config.yaml, no
+# ffmpeg.exe in this folder and no ffmpeg on PATH - your own ffmpeg wins.
+imageio-ffmpeg>=0.5
 
 # Human-sounding announcer voice for reels (Microsoft neural TTS; needs
 # internet at reel-build time — falls back to the offline voice without it)
