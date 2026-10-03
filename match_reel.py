@@ -36,12 +36,14 @@ def _render_flags():
 _ENCODER_CACHE = {}
 
 # What ffmpeg prints when there is NO NVIDIA encoder on this PC at all: no
-# NVIDIA card or driver, or a card without NVENC. Only these may switch a
-# session to CPU. Every other NVENC failure — a driver hiccup, all encoder
-# sessions held by OBS, a timeout while the game loads the GPU — is TRANSIENT,
-# and caching it would silently move Stan's reels onto libx264 for the rest of
-# the night: the exact CPU contention that NVENC was turned on to remove (his
-# in-match frame drops).
+# NVIDIA driver, or a CUDA card without NVENC (GT 1030, MX-series, 930M; see
+# _NVENC_NOT_SUPPORTED). Only these may switch a session to CPU. A PC with the
+# NVIDIA driver installed but no NVIDIA card (CUDA_ERROR_NO_DEVICE) is
+# deliberately NOT one of them: see _NVENC_GPU_PRESENT. Every other NVENC
+# failure — a driver hiccup, all encoder sessions held by OBS, a timeout while
+# the game loads the GPU — is TRANSIENT, and caching it would silently move
+# Stan's reels onto libx264 for the rest of the night: the exact CPU contention
+# that NVENC was turned on to remove (his in-match frame drops).
 #
 # The driver libraries failed to load: "Cannot load nvcuda.dll",
 # "Cannot load nvEncodeAPI64.dll" (libcuda.so / libnvidia-encode.so elsewhere).
@@ -62,8 +64,23 @@ _NVENC_NO_DEVICE = ("no capable devices", "no nvenc capable devices",
 # failed -> CUDA_ERROR_OUT_OF_MEMORY"). Getting as far as a CUDA call or an
 # encode session proves there IS an NVIDIA GPU, so any of these vetoes the
 # missing-hardware verdict.
+# That includes CUDA_ERROR_NO_DEVICE: on a PC with the driver but no NVIDIA card
+# it is permanent, but a driver reset (TDR) after a game crash can report it for
+# a moment on Stan's card too, and the cost of guessing wrong is lopsided.
 _NVENC_GPU_PRESENT = ("openencodesessionex", "cuda_error_", "out of memory",
                       "incompatible client key")
+# ...except when the encode session was refused because this GPU has no encoder.
+# A CUDA card without NVENC (GT 1030, MX150/MX250, 930M) passes ffmpeg's
+# compute-capability check, gets a CUDA context, and only then does the DRIVER
+# answer OpenEncodeSessionEx with NV_ENC_ERR_UNSUPPORTED_DEVICE ("unsupported
+# device (2)") or NV_ENC_ERR_NO_ENCODE_DEVICE ("no encode device (1)"). Those are
+# capability answers, not a session limit or full VRAM, so that line is exempt
+# from the veto above. ffmpeg's own "does not support NVENC" line is
+# AV_LOG_VERBOSE, so the probe's -loglevel error never shows it. The number is
+# part of the match: it is NVENC's status code, which pins the line to nvenc.c's
+# error table. Any OTHER veto line in the same log still wins (a second GPU that
+# has NVENC but whose sessions OBS holds is transient).
+_NVENC_NOT_SUPPORTED = ("unsupported device (2)", "no encode device (1)")
 
 
 def _nvenc_hardware_missing(r) -> bool:
@@ -71,14 +88,18 @@ def _nvenc_hardware_missing(r) -> bool:
     When in doubt, False: a wrong False costs one more failed attempt on a PC
     without NVIDIA, a wrong True costs Stan a night of CPU renders."""
     err = (getattr(r, "stderr", "") or "").lower()
-    if any(s in err for s in _NVENC_GPU_PRESENT):
-        return False
+    missing = False
     for line in err.splitlines():
+        if any(s in line for s in _NVENC_NOT_SUPPORTED):
+            missing = True
+            continue
+        if any(s in line for s in _NVENC_GPU_PRESENT):
+            return False
         if "cannot load" in line and any(lib in line for lib in _NVENC_LIBS):
-            return True
-        if any(s in line for s in _NVENC_NO_DEVICE):
-            return True
-    return False
+            missing = True
+        elif any(s in line for s in _NVENC_NO_DEVICE):
+            missing = True
+    return missing
 
 
 def _nvenc_probe_says_missing(ffmpeg: str) -> bool:

@@ -28,6 +28,33 @@ import match_reel as mr  # noqa: E402
 LISTED = " V....D h264_nvenc           NVIDIA NVENC H.264 encoder (codec h264)\n"
 NO_DRIVER = "[h264_nvenc @ 0x1] Cannot load nvcuda.dll\nError while opening encoder\n"
 NO_DEVICE = "[h264_nvenc @ 0x1] No NVENC capable devices found\n"
+# What a CUDA card WITHOUT NVENC really prints (GT 1030, MX150/MX250, 930M): the
+# device passes the compute-capability check, so ffmpeg creates a CUDA context
+# and asks for an encode session; the DRIVER answers "unsupported device (2)",
+# and the device loop then says no capable devices. The "does not support
+# NVENC" line is AV_LOG_VERBOSE, so -loglevel error never shows it. Reported in
+# both wordings: the ffmpeg-user thread "nvenc on GT1030" and the OBS forum
+# thread "OpenEncodeSessionEx failed: unsupported device (2)".
+NO_NVENC_CARD = ("[h264_nvenc @ 0000020c5d4c0b40] OpenEncodeSessionEx failed:"
+                 " unsupported device (2): (no details)\n"
+                 "[h264_nvenc @ 0000020c5d4c0b40] No capable devices found\n"
+                 "Error initializing output stream 0:0 -- Error while opening"
+                 " encoder for output stream #0:0 - maybe incorrect parameters"
+                 " such as bit_rate, rate, width or height\n")
+NO_NVENC_CARD_OLD = ("[h264_nvenc @ 0x1] OpenEncodeSessionEx failed: unsupported"
+                     " device (2): (no details)\n"
+                     "[h264_nvenc @ 0x1] No NVENC capable devices found\n")
+# NV_ENC_ERR_NO_ENCODE_DEVICE, the driver's other "this GPU cannot encode" answer.
+NO_ENCODE_DEVICE = ("[h264_nvenc @ 0x1] OpenEncodeSessionEx failed: no encode"
+                    " device (1): (no details)\n"
+                    "[h264_nvenc @ 0x1] No capable devices found\n")
+# The NVIDIA driver is installed but there is no NVIDIA GPU. Deliberately NOT
+# read as missing: a driver reset (TDR) after a game crash can say the same thing
+# for a second or two on Stan's RTX 5080, and caching it would cost him a night
+# of CPU renders. The price is the old three-line fallback on these rare PCs.
+CUDA_NO_DEVICE = ("[h264_nvenc @ 0x1] cuInit(0) failed -> CUDA_ERROR_NO_DEVICE:"
+                  " no CUDA-capable device is detected\n"
+                  "Error while opening encoder for output stream #0:0\n")
 # What ffmpeg REALLY prints when OBS holds every NVENC session: the open fails,
 # and the device loop then says "No capable devices found" as well. The second
 # line is the trap — on its own it reads like "no NVIDIA card".
@@ -75,9 +102,17 @@ def test_listed_but_no_nvidia_driver_renders_on_cpu(monkeypatch):
         "-c:v", "libx264"]
 
 
-def test_a_card_without_nvenc_renders_on_cpu(monkeypatch):
-    _fake_ffmpeg(monkeypatch, probe=(1, NO_DEVICE))
+@pytest.mark.parametrize("err", [NO_NVENC_CARD, NO_NVENC_CARD_OLD, NO_ENCODE_DEVICE],
+                         ids=["gt1030", "gt1030-older-ffmpeg", "no-encode-device"])
+def test_a_card_without_nvenc_renders_on_cpu(monkeypatch, capsys, err):
+    """The REAL output of a CUDA card with no NVENC. It mentions
+    OpenEncodeSessionEx, which used to veto the verdict: these PCs kept NVENC
+    and failed twice on every reel."""
+    _fake_ffmpeg(monkeypatch, probe=(1, err))
     assert mr.has_nvenc("FF") is False
+    assert "no NVIDIA encoder on this PC" in capsys.readouterr().out
+    assert mr.video_encoder_args({"render_encoder": "auto"}, "FF")[:2] == [
+        "-c:v", "libx264"]
 
 
 def test_an_unrelated_probe_error_keeps_nvenc(monkeypatch):
@@ -103,8 +138,17 @@ def test_no_capable_devices_after_a_failed_open_keeps_nvenc(monkeypatch, err):
     ("[h264_nvenc @ 0x1] Cannot load nvEncodeAPI64.dll\n", True),
     ("[h264_nvenc @ 0x1] Cannot load libcuda.so.1\n", True),
     (NO_DEVICE, True),
-    ("[h264_nvenc @ 0x1] No capable devices found\n", True),  # card w/o NVENC
+    ("[h264_nvenc @ 0x1] No capable devices found\n", True),
+    (NO_NVENC_CARD, True),                  # GT 1030 / MX-series / 930M
+    (NO_NVENC_CARD_OLD, True),
+    (NO_ENCODE_DEVICE, True),
+    (FONTCONFIG + NO_NVENC_CARD, True),
     (FONTCONFIG + NO_DRIVER, True),
+    # Two GPUs: one without NVENC, one with NVENC whose sessions OBS holds. The
+    # busy one makes it transient; the capability answer must not outvote it.
+    (NO_NVENC_CARD.splitlines(True)[0] + SESSIONS_FULL, False),
+    (SESSIONS_FULL + NO_NVENC_CARD, False),
+    (CUDA_NO_DEVICE, False),                # see CUDA_NO_DEVICE above
     (BUSY, False),
     (SESSIONS_FULL, False),
     (VRAM_FULL, False),
@@ -194,10 +238,13 @@ def _ladder(monkeypatch, nvenc_err, legacy_err):
     return runs
 
 
-def test_no_nvidia_hardware_says_so_once_and_remembers(tmp_path, monkeypatch, capsys):
+@pytest.mark.parametrize("err", [NO_DRIVER, FONTCONFIG + NO_NVENC_CARD],
+                         ids=["no-driver", "card-without-nvenc"])
+def test_no_nvidia_hardware_says_so_once_and_remembers(tmp_path, monkeypatch, capsys,
+                                                       err):
     _stub_reel(monkeypatch)
     mr._ENCODER_CACHE["FF"] = True              # listed; probe was inconclusive
-    runs = _ladder(monkeypatch, NO_DRIVER, NO_DRIVER)
+    runs = _ladder(monkeypatch, err, err)
     out = str(tmp_path / "reels" / "match_1.mp4")
     assert mr.build_match_reel(_two_clips(tmp_path), out, "FF", "T", 2, [])
     printed = capsys.readouterr().out
@@ -366,7 +413,8 @@ def test_potg_off_keeps_the_given_order(tmp_path, monkeypatch):
 
 # ---- Shorts share the verdict ----------------------------------------------
 
-@pytest.mark.parametrize("err,cached", [(NO_DRIVER, False), (SESSIONS_FULL, True),
+@pytest.mark.parametrize("err,cached", [(NO_DRIVER, False), (NO_NVENC_CARD, False),
+                                        (SESSIONS_FULL, True),
                                         (FONTCONFIG + BUSY, True)])
 def test_a_short_caches_only_missing_hardware(tmp_path, monkeypatch, err, cached):
     import shorts
