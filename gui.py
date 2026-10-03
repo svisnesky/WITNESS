@@ -210,6 +210,21 @@ def reload_config_into(cfg: dict, load, lock=None, keep=()) -> str:
     return ""
 
 
+# Feed line (LiveState.notice keeps 60 chars) for a START whose reload failed.
+_RELOAD_NOTICE = "config.yaml unreadable - using launch settings"
+
+
+def with_reload_error(reload_err: str, msg: str) -> str:
+    """A START error with the failed config reload in front of it. The reload
+    is usually the real cause: the user fixes obs.password but leaves a YAML
+    typo, the old password is kept, and OBS rejects it. Alone, the OBS
+    message would send them back to redo the edit that never loaded. One
+    line: yaml's errors span several, and the tk panel splits on newlines."""
+    if not reload_err:
+        return msg
+    return " ".join(str(reload_err).split()) + " / " + msg
+
+
 # --- one copy at a time ---------------------------------------------------------
 
 def _read_yaml(path: str) -> dict:
@@ -684,6 +699,7 @@ class ControlPanel:
         cfg_err = reload_config_into(
             self.cfg, app.load_config, lock=getattr(web, "_lock", None),
             keep=_BOUND_AT_LAUNCH if getattr(app, "_web_server", None) else ())
+        self._cfg_err = cfg_err
         self.session_start = time.monotonic()
         self.stop_event = threading.Event()
         self._orig_out = sys.stdout
@@ -816,8 +832,16 @@ class ControlPanel:
         if self.running and self.session_start and hasattr(self, "status_sub"):
             secs = int(time.monotonic() - self.session_start)
             if getattr(self, "_watching", False):
-                self.status_sub.config(text=f"SESSION  {secs // 60}:{secs % 60:02d}")
+                self.status_sub.config(text=self._session_sub(secs))
         self.root.after(1000, self._tick)
+
+    def _session_sub(self, secs):
+        """The line under WATCHING. A START whose config reload failed says so
+        for the whole session: the edit in config.yaml was not applied."""
+        text = f"SESSION  {secs // 60}:{secs % 60:02d}"
+        if getattr(self, "_cfg_err", ""):
+            text += "   " + _RELOAD_NOTICE
+        return text
 
     def _show_phone_address(self, url):
         """This panel has no log pane, so the address main.py prints for the
@@ -874,7 +898,10 @@ class ControlPanel:
         if not s:
             return
         if s.startswith("ERROR:"):
-            # a failed START: red, and kept on the idle screen after "stopped"
+            # a failed START: red, and kept on the idle screen after "stopped";
+            # a failed config reload goes first, it is usually the cause
+            s = "ERROR: " + with_reload_error(getattr(self, "_cfg_err", ""),
+                                              s[len("ERROR:"):].strip())
             self._last_error = s
             self._set_status(f"{self.DOT}  COULD NOT START", RED, s[:140])
             return
@@ -884,7 +911,7 @@ class ControlPanel:
         if "Detecting [" in s:
             self._watching = True
             self._set_status(f"{self.DOT}  WATCHING", GREEN,
-                             "SESSION  0:00")
+                             self._session_sub(0))
         if ((("KILL #" in s or "(not a kill:" in s) and "[" in s)
                 or "[reconcile]" in s or "[exfil] match stats" in s):
             self._parse_kill(s)
@@ -1559,6 +1586,22 @@ def _boot():
         _run_tk_fallback(state)
 
 
+_LIVE_POLL = 0.25    # s between looks for the session going live
+
+
+def _notice_when_live(st, mono0, over, text) -> None:
+    """Post a feed notice once the session goes live (set_running(True)
+    restamps _mono, after main.py's reset() cleared the feed). Gives up when
+    the attempt is over without going live: run() then shows the error."""
+    while not over.wait(_LIVE_POLL):
+        if getattr(st, "_mono", None) != mono0:
+            try:
+                st.notice(text, "alert")
+            except Exception:
+                pass
+            return
+
+
 class _WebSession:
     """Bridges the web START/STOP buttons to the detection session.
 
@@ -1572,6 +1615,7 @@ class _WebSession:
         self.state = state
         self.thread = None
         self.stop_event = None
+        self._reload_err = ""      # why the last START's config reload failed
         # Held from the is_alive check until the thread is started: the PC
         # window and the iPad each POST /start on their own server thread,
         # and the config reload in between takes tens of ms.
@@ -1589,11 +1633,12 @@ class _WebSession:
         err = reload_config_into(self.cfg, app.load_config,
                                  lock=getattr(st, "_lock", None),
                                  keep=_BOUND_AT_LAUNCH)
+        self._reload_err = err
         if err:
             _note(err)
             _set_attr(st, "last_error", err)
             try:
-                st.notice("config.yaml unreadable - using launch settings", "alert")
+                st.notice(_RELOAD_NOTICE, "alert")
             except Exception:
                 pass
         _set_attr(st, "starting", True)
@@ -1605,6 +1650,16 @@ class _WebSession:
         st = self.state
         # set_running(True) stamps _mono; a change means the session went live
         mono0 = getattr(st, "_mono", None)
+        reload_err = getattr(self, "_reload_err", "")
+        over = threading.Event()
+        if reload_err:
+            # Going live resets the feed (main.py: web.reset(), then
+            # set_running), which wipes the notice start() posted. Post it
+            # again once live, so a session that starts fine still says the
+            # config.yaml edit was not applied.
+            threading.Thread(target=_notice_when_live,
+                             args=(st, mono0, over, _RELOAD_NOTICE),
+                             daemon=True).start()
         try:
             app.run_live(self.cfg, False, self.stop_event)
         except Exception as e:
@@ -1617,13 +1672,15 @@ class _WebSession:
                     # line, not a red banner over the START button.
                     st.notice("Session crashed - see logs/", "alert")
                 else:
-                    _set_attr(st, "last_error", friendly_start_error(
-                        e, getattr(app, "_log_path", None)))
+                    _set_attr(st, "last_error", with_reload_error(
+                        reload_err, friendly_start_error(
+                            e, getattr(app, "_log_path", None))))
                 # STOP / Update / Export refuse while `running` is stuck True
                 st.set_running(False)
             except Exception:
                 pass
         finally:
+            over.set()
             _set_attr(st, "starting", False)
 
     def stop(self):

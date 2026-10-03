@@ -268,6 +268,87 @@ def test_a_failed_start_sets_last_error_not_a_notice(monkeypatch):
     assert st.running_calls == [False] and st.starting is False
 
 
+_YAML_TYPO = ("while scanning a simple key\n  in \"config.yaml\", line 41, column 1\n"
+              "could not find expected ':'")
+
+
+def test_a_failed_reload_stays_in_front_of_the_start_error(monkeypatch):
+    """F29's own scenario: obs.password fixed, a YAML typo left behind. The
+    reload fails, the old password is kept, OBS rejects it. The banner must
+    lead with the unreadable file, not tell the user to redo the edit."""
+    def broken():
+        raise ValueError(_YAML_TYPO)
+
+    def run_live(cfg, dry, ev):
+        raise _OBSSDKError("failed to identify client with the server")
+    _fake_app(monkeypatch, run_live, broken)
+    st = _FakeState()
+    sess = gui._WebSession({"obs": {"password": "old"}}, st)
+    sess.start()
+    sess.thread.join(5)
+    assert st.last_error.startswith("config.yaml could not be read - using "
+                                    "launch settings: while scanning")
+    assert "line 41" in st.last_error and "\n" not in st.last_error
+    assert " / OBS rejected the password" in st.last_error
+    assert st.last_error.endswith("(details: logs/session_2026-10-02_20-00-00.log)")
+
+
+def test_a_failed_reload_is_said_again_once_the_session_is_live(monkeypatch):
+    monkeypatch.setattr(gui, "_LIVE_POLL", 0.01)
+    st = _FakeState()
+    seen = threading.Event()
+
+    def broken():
+        raise ValueError(_YAML_TYPO)
+
+    def run_live(cfg, dry, ev):
+        st.notices.clear()          # main.py: web.reset() wipes the feed
+        st.set_running(True)
+        for _ in range(300):
+            if st.notices:
+                break
+            time.sleep(0.01)
+        seen.set()
+    _fake_app(monkeypatch, run_live, broken)
+    sess = gui._WebSession({}, st)
+    sess.start()
+    sess.thread.join(5)
+    assert seen.is_set()
+    assert st.notices == [(gui._RELOAD_NOTICE, "alert")]
+    assert len(gui._RELOAD_NOTICE) <= 60
+
+
+def test_no_reload_notice_when_the_reload_worked(monkeypatch):
+    monkeypatch.setattr(gui, "_LIVE_POLL", 0.01)
+    st = _FakeState()
+
+    def run_live(cfg, dry, ev):
+        st.set_running(True)
+        time.sleep(0.1)
+    _fake_app(monkeypatch, run_live, lambda: {})
+    sess = gui._WebSession({}, st)
+    sess.start()
+    sess.thread.join(5)
+    assert st.notices == []
+
+
+def test_tk_start_failure_keeps_the_reload_error_first():
+    panel = gui.ControlPanel.__new__(gui.ControlPanel)
+    panel._last_error = ""
+    panel._cfg_err = "config.yaml could not be read - using launch settings: " + _YAML_TYPO
+    shown = []
+    panel._set_status = lambda text, color, sub=None: shown.append((text, color, sub))
+    panel._drain_line("ERROR: OBS rejected the password - copy it into "
+                      "obs.password in config.yaml. (details: logs/session_x.log)")
+    assert panel._last_error.startswith("ERROR: config.yaml could not be read")
+    assert " / OBS rejected the password" in panel._last_error
+    assert "\n" not in panel._last_error
+    assert shown[0][1] == gui.RED
+    assert panel._session_sub(75) == "SESSION  1:15   " + gui._RELOAD_NOTICE
+    panel._cfg_err = ""
+    assert panel._session_sub(75) == "SESSION  1:15"
+
+
 def test_a_crash_after_going_live_is_a_notice_not_a_start_error(monkeypatch):
     st = _FakeState()
 
