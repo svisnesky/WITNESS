@@ -1581,7 +1581,7 @@ def check_obs_not_black(cfg, obs, web=None, state=None, label="") -> bool:
         # status 'error', which the Live page never draws, and which clobbered
         # a resume build's 'building' status.)
         try:
-            web.notice("OBS scene has no capture source - add one" if no_source
+            web.notice(OBS_NO_SOURCE_NOTICE if no_source
                        else "OBS IS BLACK - re-pick the display in OBS", "alert")
         except Exception:
             pass
@@ -1639,8 +1639,12 @@ def check_obs_not_black(cfg, obs, web=None, state=None, label="") -> bool:
     return False
 
 
-OBS_NO_SOURCE = ("OBS scene has no capture source - add Display Capture or Game "
-                 "Capture (Sources > +)")
+# blackcheck reads only VISIBLE sources (obs_client.get_scene_input_kinds), so
+# 'no_capture' also covers a capture source whose eye icon is off. Adding a
+# second source is the wrong fix for that, so the text names both.
+OBS_NO_SOURCE = ("OBS scene has no visible capture source - turn on its eye icon "
+                 "in Sources, or add Display Capture or Game Capture (Sources > +)")
+OBS_NO_SOURCE_NOTICE = "No visible capture source in OBS - unhide or add one"
 _HOOK_KINDS = ("game_capture", "window_capture")
 
 

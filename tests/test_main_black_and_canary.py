@@ -84,8 +84,11 @@ def test_an_empty_scene_says_add_a_capture_source(monkeypatch, capsys):
     shown = _spy_overlay(monkeypatch)
     web = _Web()
     main.check_obs_not_black(QUIET, _Obs(kinds=[]), web=web, label="startup")
-    assert web.notices == ["OBS scene has no capture source - add one"]
+    assert web.notices == ["No visible capture source in OBS - unhide or add one"]
     assert "add Display Capture or Game Capture" in web.alerts["black_capture"]
+    # blackcheck leaves hidden sources out, so the same verdict means "its eye
+    # icon is off": the text must not only say "add one"
+    assert "eye icon" in web.alerts["black_capture"]
     assert shown == ["OBS IS BLACK - NOT RECORDING"]       # still loud
     assert "Sources > +" in capsys.readouterr().out
 
