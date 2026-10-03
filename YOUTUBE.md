@@ -11,9 +11,9 @@ are given.
 
 ## 1. The upload libraries
 
-Already installed by setup (they're in `requirements.txt`). Only if WITNESS or
-`Check YouTube.bat` says **"upload libraries not installed"**, run this in the
-app folder:
+Already installed by setup (they're in `requirements.txt`). Only if WITNESS
+says **"upload libraries not installed"**, or `Check YouTube.bat` says
+**"upload libraries missing"**, run this in the app folder:
 
 ```
 .venv\Scripts\python -m pip install -r requirements.txt

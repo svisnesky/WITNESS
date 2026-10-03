@@ -40,3 +40,40 @@ def test_contributing_describes_ci_as_it_runs():
         assert re.search(r"push:\s*\n\s*branches:\s*\[\s*main\s*\]", y), \
             "workflow push trigger changed; update CONTRIBUTING.md"
         assert "pull_request" in y
+
+
+def _section(doc, heading):
+    start = doc.index(heading)
+    end = doc.find("\n## ", start + 1)
+    return doc[start:] if end < 0 else doc[start:end]
+
+
+def _bold_quotes(text):
+    return re.findall(r'\*\*"([^"]+)"\*\*', text)
+
+
+def test_youtube_doc_quotes_the_library_messages_both_scripts_print():
+    """YOUTUBE.md step 1 told users to watch for "upload libraries not
+    installed" from WITNESS *or* Check YouTube.bat. Only youtube_upload.py
+    prints that; youtube_check.py (what the .bat runs) prints "upload
+    libraries missing". Every quote in that step must be text one of them
+    really prints, and each script's message must be quoted."""
+    step = _flat(_section(_read("YOUTUBE.md"), "## 1."))
+    srcs = {}
+    for name in ("youtube_check.py", "youtube_upload.py"):
+        path = os.path.join(BASE, name)
+        if os.path.exists(path):
+            srcs[name] = _read(name)
+    if not srcs:
+        return
+    for q in _bold_quotes(step):
+        assert any(q in s for s in srcs.values()), \
+            f'YOUTUBE.md quotes "{q}", which no YouTube script prints'
+    for name, src in srcs.items():
+        for m in re.finditer(r'"(?:\s*\[youtube\]\s*)?(upload libraries [a-z ]+)',
+                             src):
+            msg = m.group(1).strip()
+            if msg == "upload libraries installed":    # youtube_check's OK line
+                continue
+            assert f'"{msg}"' in step, \
+                f'{name} prints "{msg}" but YOUTUBE.md step 1 doesn\'t quote it'
