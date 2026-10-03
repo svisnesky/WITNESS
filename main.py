@@ -1038,6 +1038,7 @@ def _setup_session(cfg, dry_run):
               "Enable Replay Buffer, then Start Replay Buffer.")
 
     web = None
+    black_checked_at = None
     if cfg.get("web_dashboard", True):
         try:
             import webserver
@@ -1081,6 +1082,7 @@ def _setup_session(cfg, dry_run):
             web.set_running(True)
             # Preflight: catch a black capture BEFORE he plays for three hours.
             check_obs_not_black(cfg, obs, web=web, label="startup")
+            black_checked_at = time.monotonic()
             print(f"Live view: http://{webserver.local_ip()}:{port}  "
                   f"(open in your iPad/phone browser on the same Wi-Fi)")
         except Exception as e:
@@ -1106,6 +1108,10 @@ def _setup_session(cfg, dry_run):
         "cfg": cfg,
         "medal_sounds": {},
     }
+    if black_checked_at is not None:
+        # The startup check just ran: the periodic one waits its full period
+        # instead of firing a second alarm on the first frame.
+        s["_black_check_at"] = black_checked_at
     if cfg.get("heat_streaks", True):
         try:
             import heat
@@ -1305,7 +1311,21 @@ def check_obs_not_black(cfg, obs, web=None, state=None, label="") -> bool:
             except Exception:
                 pass
         return True
+    # WHY is it black? The scene's source types tell a broken Display Capture
+    # from an empty scene and from a Game Capture that simply hasn't hooked the
+    # game yet (START pressed before launching Marathon).
+    scene = _black_scene(res, obs)
+    if scene == "hook_only" and label == "startup":
+        # Expected until the game runs: a soft note, no overlay, no voice, no
+        # alert. The periodic re-check (black_check_minutes) stays loud.
+        print("  [capture] OBS's picture is black, but your scene captures with "
+              "Game/Window Capture, which stays black until Marathon is running. "
+              "WITNESS checks again in a few minutes.")
+        return False
     print(blackcheck.warning_text(res))
+    no_source = scene == "no_capture"
+    if no_source:
+        print(f"  {OBS_NO_SOURCE}")
     # A first-class alert for the iOS app (and any future client), raised before
     # the clutch check below so the iPad hears about it even when the on-screen
     # overlay is being held back.
@@ -1313,8 +1333,18 @@ def check_obs_not_black(cfg, obs, web=None, state=None, label="") -> bool:
         try:
             web.set_alert("black_capture", "critical",
                           "OBS is recording a black screen",
+                          OBS_NO_SOURCE + "." if no_source else
                           "Your clips will be empty. In OBS, open your Display "
                           "Capture source and re-pick the display.")
+        except Exception:
+            pass
+        # ...and a line in the dashboard feed, which the desktop window and
+        # the iPad browser both show. (This used to go into the recap state as
+        # status 'error', which the Live page never draws, and which clobbered
+        # a resume build's 'building' status.)
+        try:
+            web.notice("OBS scene has no capture source - add one" if no_source
+                       else "OBS IS BLACK - re-pick the display in OBS", "alert")
         except Exception:
             pass
     # SWEAT MODE. I first held this back during a clutch, reasoning he couldn't
@@ -1328,13 +1358,6 @@ def check_obs_not_black(cfg, obs, web=None, state=None, label="") -> bool:
             and not cfg.get("black_overlay_in_clutch", True)):
         state["black_pending"] = True
         print("  [capture] holding the on-screen warning — you're clutching")
-        if web is not None:
-            try:
-                web.set_recap(status="error",
-                              note="OBS is recording a BLACK SCREEN — re-pick "
-                                   "the display in OBS")
-            except Exception:
-                pass
         return False
     if cfg.get("black_overlay", True):
         try:
@@ -1373,16 +1396,45 @@ def check_obs_not_black(cfg, obs, web=None, state=None, label="") -> bool:
             threading.Thread(target=speak, daemon=True).start()
         except Exception:
             pass
-    if web is not None:
-        try:
-            web.set_recap(status="error",
-                          note="OBS is recording a BLACK SCREEN — re-pick the "
-                               "display in OBS")
-        except Exception:
-            pass
     if state is not None:
         state["black_warned"] = time.time()
     return False
+
+
+OBS_NO_SOURCE = ("OBS scene has no capture source - add Display Capture or Game "
+                 "Capture (Sources > +)")
+_HOOK_KINDS = ("game_capture", "window_capture")
+
+
+def _black_scene(res, obs) -> str:
+    """Why OBS's picture is black, from the program scene's source types:
+      'no_capture'  nothing in the scene captures anything
+      'hook_only'   only Game/Window Capture: black until the game runs
+      'other'       Display Capture etc.: today's warning
+      'unknown'     couldn't ask (old OBS client, test fakes): today's warning
+    blackcheck works this out itself when it can (res['scene']); otherwise
+    OBSClient.get_scene_input_kinds is asked here, if the client has it."""
+    scene = res.get("scene")
+    if scene in ("no_capture", "hook_only", "other", "unknown"):
+        return scene
+    if "scene_kinds" in res:
+        kinds = res["scene_kinds"]
+    else:
+        try:
+            kinds = getattr(obs, "get_scene_input_kinds", lambda: None)()
+        except Exception:
+            kinds = None
+    if kinds is None:
+        return "unknown"
+    try:
+        kinds = [str(k) for k in kinds]
+    except TypeError:
+        return "unknown"
+    if not kinds:
+        return "no_capture"
+    if all(k in _HOOK_KINDS for k in kinds):
+        return "hook_only"
+    return "other"
 
 
 def _kill_counts(tags) -> tuple:
@@ -2727,6 +2779,7 @@ def _finish_session(cfg, s, dry_run) -> None:
     step("saving the last clip", lambda: _flush_coalesce(s))
     if s.get("web") is not None:
         step("dashboard", lambda: s["web"].set_running(False))
+    health = step("canary verdict", lambda: _canary_health(s)) or ""
     acc_line = step("accuracy", lambda: exfil_stats_accuracy(s))
     if acc_line:
         print(acc_line)
@@ -2735,7 +2788,34 @@ def _finish_session(cfg, s, dry_run) -> None:
         print(can_line)
     step("recap", lambda: _end_session(
         cfg, s["session_tags"], s["session_start"], s["session_start_wall"],
-        dry_run, s["obs"], s["session_id"], kills=s["count"], web=s["web"]))
+        dry_run, s["obs"], s["session_id"], kills=s["count"], web=s["web"],
+        health_note=health))
+
+
+def _canary_health(s) -> str:
+    """The detection canary's verdict for the dashboard: a feed notice now and
+    the full message for the final recap note. '' when it's 'ok'. It used to
+    be printed only, and the window app has no console."""
+    c = s.get("canary")
+    if c is None:
+        return ""
+    level, msg = c.verdict()
+    if level in ("broken", "blind"):
+        notice, note = ("DETECTION LOOKS BROKEN - see recap",
+                        f"DETECTION LOOKS BROKEN - {msg}")
+    elif level == "quiet":
+        # Quieter on purpose: the canary itself calls this normal on a rough
+        # night, and a false 'broken' teaches people to ignore the real one.
+        notice, note = ("No kill popup matched all session - see recap",
+                        f"Detection check: {msg}")
+    else:
+        return ""
+    if s.get("web") is not None:
+        try:
+            s["web"].notice(notice, "alert")
+        except Exception:
+            pass
+    return note
 
 
 def exfil_stats_accuracy(s) -> str:
