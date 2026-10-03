@@ -123,13 +123,18 @@ def build_montage(session_dir, ffmpeg):
     if not fulls:
         print("  [montage] no clips in the session folder to stitch")
         return None
-    # Drop clips whose Replay-Buffer footage is contained in the next save —
-    # back-to-back saves are mostly the same 30s and play as duplicates.
+    # Back-to-back saves overlap (each is the last ~30s). CHAIN them: keep every
+    # clip and start each later one where the clip before it ended, via the
+    # concat demuxer's inpoint. This used to DROP the earlier clip, which threw
+    # away the start of every fight. lead=0: a stream-copy concat has no
+    # crossfade, and inpoint already lands on the keyframe at or before it.
+    inpoints = {}
     try:
-        from match_reel import drop_overlapping
-        deduped = drop_overlapping(
-            [{"path": f, "kills": 1, "tag": ""} for f in fulls], ffmpeg)
-        fulls = [c["path"] for c in deduped]
+        from match_reel import chain_overlapping
+        chained = chain_overlapping(
+            [{"path": f, "kills": 1, "tag": ""} for f in fulls], ffmpeg, lead=0.0)
+        fulls = [c["path"] for c in chained]
+        inpoints = {c["path"]: c["ss_min"] for c in chained if c.get("ss_min")}
     except Exception:
         pass
     # Paths RELATIVE to the session folder, forward slashes ("clips/001_...").
@@ -137,6 +142,7 @@ def build_montage(session_dir, ffmpeg):
     # is session_dir. A bare basename would point at the top level, where a
     # tidied clip no longer is.
     clips = [rel_of[f] for f in fulls]
+    clip_inpoint = {rel_of[f]: inpoints[f] for f in fulls if f in inpoints}
 
     ext = os.path.splitext(os.path.basename(clips[0]))[1]
     list_path = os.path.join(session_dir, "_montage_list.txt")
@@ -152,6 +158,8 @@ def build_montage(session_dir, ffmpeg):
             for c in clips:
                 # ffmpeg concat: escape single quotes in filenames
                 f.write("file '%s'\n" % c.replace("'", "'\\''"))
+                if c in clip_inpoint:
+                    f.write("inpoint %.3f\n" % clip_inpoint[c])
         try:
             r = subprocess.run(cmd, cwd=session_dir, capture_output=True,
                                text=True, creationflags=_render_flags())

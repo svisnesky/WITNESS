@@ -205,6 +205,10 @@ perf_release_gpu: false     # force-release CUDA cache every ~60s. OFF by defaul
 min_save_interval_seconds: 2.0  # floor between OBS replay saves (avoid clip spam)
 kill_coalesce_seconds: 8.0  # after a kill, wait this long for more kills before
                             # saving one clip (groups down+finisher into one clip)
+kill_coalesce_max_seconds: 20.0  # ...but never wait longer than this after the
+                            # FIRST kill, or a long fight saves too late and its
+                            # opening kills have already left OBS's ~30s buffer.
+                            # Keep it under your Replay Buffer length minus ~5s.
 
 # --- OCR ---
 # engine: "easyocr" (GPU, robust; the tested default) or "tesseract".

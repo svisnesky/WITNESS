@@ -485,6 +485,84 @@ def drop_overlapping(clips, ffmpeg) -> list[dict]:
     return out
 
 
+def chain_overlapping(clips, ffmpeg, lead: float = 0.5,
+                      min_new: float = 1.0) -> list[dict]:
+    """Keep EVERY clip, but start each one where the clip before it ends.
+
+    drop_overlapping's premise was wrong for reels. Each clip is the LAST ~30s
+    before its save, so a later save does not contain the earlier one: it covers
+    [save2-30, save2], and everything in [save1-30, save2-30) exists only in the
+    earlier clip. Dropping the earlier clip threw that footage away, and with it
+    the first kills of every fight. On 2026-08-08 four saves of one fight
+    (22:07:07, :27, :40, :51) chained into a single clip covering 22:07:21-:51;
+    the kills in the first two saves were nowhere in the reel. Stan: "i know its
+    missing a good amount of kills".
+
+    Here the later clip gets ss_min = (its length - gap) - lead: the second at
+    which its footage passes the earlier save, minus `lead` so the 0.5s video
+    crossfade blends the same moment instead of skipping it. The fight plays
+    straight through with no repeat. A later clip that would add under `min_new`
+    seconds is dropped and its kills credited to the clip before it (that clip
+    already shows nearly all of its footage).
+
+    Clips in one fight share a "_chain" id so Play of the Game can treat the
+    fight as one play. Clips without a parseable save time are kept as-is."""
+    clips = [dict(c) for c in clips]
+    for c in clips:
+        c.pop("ss_min", None)              # idempotent: recompute from scratch
+        c.pop("_chain", None)
+    out = []
+    chain = 0
+    for c in clips:
+        prev = out[-1] if out else None
+        t_prev = _save_time(prev.get("path", "")) if prev else None
+        t_cur = _save_time(c.get("path", ""))
+        if prev is not None and t_prev is not None and t_cur is not None:
+            gap = t_cur - t_prev
+            dur = probe_duration(c["path"], ffmpeg) or 30.0
+            if 0 <= gap < dur - 3:
+                start = max(0.0, dur - gap - lead)
+                prev.setdefault("_chain", chain)
+                c["_chain"] = prev["_chain"]
+                if dur - start < min_new:
+                    print(f"  [reel] overlap: {os.path.basename(c['path'])} adds "
+                          f"<{min_new:.0f}s new footage — credited to "
+                          f"{os.path.basename(prev['path'])}")
+                    prev["kills"] = int(prev.get("kills", 1)) + int(c.get("kills", 1))
+                    tags = [t for t in (prev.get("tag", ""), c.get("tag", "")) if t]
+                    prev["tag"] = "+".join(dict.fromkeys("+".join(tags).split("+")))
+                    prev["_folded_paths"] = (prev.get("_folded_paths", [])
+                                             + [c["path"]])
+                    continue
+                c["ss_min"] = round(start, 2)
+                print(f"  [reel] overlap: {os.path.basename(c['path'])} continues "
+                      f"{os.path.basename(prev['path'])} (gap {gap:.0f}s) — "
+                      f"starts at {start:.1f}s")
+            else:
+                chain += 1
+        else:
+            chain += 1
+        out.append(c)
+    return out
+
+
+def _chain_view(clips: list[dict], c: dict) -> dict:
+    """A clip as Play of the Game should see it: the whole fight when it is part
+    of a chain (kills, downs and tags summed across the chain's clips)."""
+    cid = c.get("_chain")
+    members = [m for m in clips if cid is not None and m.get("_chain") == cid]
+    if len(members) < 2:
+        return c
+    tags = "+".join(m.get("tag", "") for m in members if m.get("tag"))
+    view = dict(c)
+    view["tag"] = "+".join(dict.fromkeys(t for t in tags.split("+") if t))
+    view["kills"] = sum(int(m.get("kills", 1) or 0) for m in members)
+    view["downs"] = sum(int(m["downs"]) if m.get("downs") is not None
+                        else sum(1 for t in str(m.get("tag", "")).split("+") if t == "down")
+                        for m in members)
+    return view
+
+
 def _normalize_clips(clips) -> list[dict]:
     """Accept plain paths or {path, kills, tag, ...} dicts.
 
@@ -565,11 +643,31 @@ def potg_score(clip: dict) -> tuple:
 
 
 def pick_potg(clips: list[dict]):
-    """The best clip of the set, or None if there's nothing to choose between."""
+    """The best clip of the set, or None if there's nothing to choose between.
+
+    A fight split across chained clips (chain_overlapping) is scored as one
+    play, and the FIRST clip of the winning chain is returned so the fight
+    plays from its start."""
     if len(clips) < 2:
         return None
-    return max(enumerate(clips),
-               key=lambda ic: potg_score(ic[1]) + (ic[0],))[1]
+    best = max(enumerate(clips),
+               key=lambda ic: potg_score(_chain_view(clips, ic[1])) + (ic[0],))[1]
+    cid = best.get("_chain")
+    if cid is not None:
+        for c in clips:
+            if c.get("_chain") == cid:
+                return c
+    return best
+
+
+def potg_members(clips: list[dict], potg) -> list[dict]:
+    """The clips that make up the Play of the Game: its whole chain, in order."""
+    if potg is None:
+        return []
+    cid = potg.get("_chain")
+    if cid is None:
+        return [potg]
+    return [c for c in clips if c.get("_chain") == cid]
 
 
 def find_music(music_dir: str) -> str:
@@ -684,12 +782,13 @@ def build_match_reel(clips, out_path: str, ffmpeg: str,
     # let a tie pick a different "best" clip on retry and renumbered the kills.
     clips_in = list(clips)
     clips = _normalize_clips(clips_in)
-    # dedupe=False for a hand-picked export: overlap-merging would silently DROP
-    # a clip the user deliberately chose. Automatic reels still merge, because
-    # there nobody picked anything and back-to-back buffer saves play as
-    # duplicates.
+    # dedupe=False for a hand-picked export: the person chose every clip and
+    # its trim. Automatic reels CHAIN overlapping saves (each later clip starts
+    # where the one before it ends) rather than dropping any: back-to-back
+    # buffer saves would otherwise play the same seconds twice, and dropping
+    # the earlier save lost the start of every fight.
     if dedupe:
-        clips = drop_overlapping(clips, ffmpeg)
+        clips = chain_overlapping(clips, ffmpeg)
     if not clips:
         print("  [reel] no clips on disk to build a reel from")
         return False
@@ -699,7 +798,10 @@ def build_match_reel(clips, out_path: str, ffmpeg: str,
         c["n"] = i + 1                   # assigned before the POTG reorder
     potg = pick_potg(clips) if potg_enabled else None
     if potg is not None:
-        clips = [potg] + [c for c in clips if c is not potg]
+        # The whole fight leads the reel, not just one slice of it.
+        lead = potg_members(clips, potg)
+        clips = lead + [c for c in clips if not any(c is m for m in lead)]
+        potg_card = _chain_view(lead, potg) if len(lead) > 1 else potg
 
     stem = os.path.splitext(out_path)[0]
     cards = []  # (png_path, ok)
@@ -716,9 +818,9 @@ def build_match_reel(clips, out_path: str, ffmpeg: str,
             cards.append(title_png)
         have_potg_card = False
         if potg is not None:
-            tag_txt = potg["tag"].replace("+", " + ").replace("_", " ").upper()
-            if _build_card(potg_png, "PLAY OF THE GAME", potg["kills"],
-                           "KILL" + ("S" if potg["kills"] != 1 else ""),
+            tag_txt = potg_card["tag"].replace("+", " + ").replace("_", " ").upper()
+            if _build_card(potg_png, "PLAY OF THE GAME", potg_card["kills"],
+                           "KILL" + ("S" if potg_card["kills"] != 1 else ""),
                            [tag_txt], wordmark_path, theme=theme):
                 have_potg_card = True
 
@@ -768,6 +870,10 @@ def build_match_reel(clips, out_path: str, ffmpeg: str,
                 ss = (clip_trim_start(c, dur, ffmpeg, preroll, manual_preroll,
                                       context_preroll)
                       if tight_cuts else 0.0)
+                # A chained clip starts no earlier than where the clip before
+                # it ended (chain_overlapping), even with tight cuts off.
+                if c.get("ss_min") and dur:
+                    ss = min(max(ss, float(c["ss_min"])), max(0.0, dur - 1.0))
             if ss and dur and "ss" not in c and "to" not in c:
                 print(f"  [reel] tight cut: {os.path.basename(c['path'])} "
                       f"starts at {ss:.0f}s (was {dur:.0f}s long)")

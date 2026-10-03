@@ -1902,15 +1902,24 @@ def _queue_coalesce(cfg, s, tag, count, now, raw_line: str = "") -> None:
     Split out of _handle_kill so the assist path can reach it directly: an
     assist earns a recording and nothing else."""
     coalesce_secs = cfg.get("kill_coalesce_seconds", 8.0)
+    # Every event re-arms the deadline, so a fight whose popups (teammates'
+    # assists included) keep landing under 8s apart never saved until it ended,
+    # and the Replay Buffer only holds the last ~30s: the fight's first kills
+    # were already gone. Cap how long one clip may wait after its FIRST event,
+    # so that event is still inside the buffer when the save happens.
+    max_wait = float(cfg.get("kill_coalesce_max_seconds", 20.0))
     if "_coalesce_pending" not in s:
         s["_coalesce_pending"] = []
         s["_coalesce_deadline"] = 0.0
+    if not s["_coalesce_pending"]:
+        s["_coalesce_first"] = now
     s["_coalesce_pending"].append({
         "tag": tag, "count": count,
         "epoch": time.time(),                          # when the kill landed
         "manual": raw_line.startswith("MANUAL"),       # +1 presses lag the kill
     })
-    s["_coalesce_deadline"] = now + coalesce_secs
+    s["_coalesce_deadline"] = min(now + coalesce_secs,
+                                  s.get("_coalesce_first", now) + max_wait)
 
 
 def _check_clutch(cfg, engine, s, now):
@@ -2572,10 +2581,12 @@ def _build_match_reel_async(cfg, s, session_dir, stats_d):
             base = os.path.dirname(os.path.abspath(__file__))
             ffmpeg = montage.find_ffmpeg(base, cfg)
             out = os.path.join(session_dir, "reels", f"match_{match_num}.mp4")
-            # Dedupe overlapping buffer saves HERE so the kill headline, the
-            # announcer's POTG pick, and the reel itself all agree on the
-            # same clip list. (build_match_reel dedupes again — no-op then.)
-            clips = match_reel.drop_overlapping(
+            # Chain overlapping buffer saves HERE so the kill headline, the
+            # announcer's POTG pick, and the reel itself all agree on the same
+            # clip list. Chaining keeps every clip (it used to DROP the earlier
+            # save, and with it the start of the fight); build_match_reel
+            # recomputes the same chain, so doing it twice is harmless.
+            clips = match_reel.chain_overlapping(
                 match_reel._normalize_clips(clips), ffmpeg)
             total_kills = sum(c.get("kills", 1) for c in clips)
             sub = []
