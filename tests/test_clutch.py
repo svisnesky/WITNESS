@@ -20,11 +20,11 @@ def test_count_downed_from_panel_lines():
 
 def test_count_all_out_of_fight_states_from_stans_frames():
     # dead teammates (clip frame 1): ELIMINATED tags
-    assert clutch.count_downed(["ELIMINATED", "A1 LILCROISSANT#5807",
-                                "ELIMINATED", "C3 DBIDS#4403"]) == 2
+    assert clutch.count_downed(["ELIMINATED", "A1 RUNNERONE#1111",
+                                "ELIMINATED", "C3 TAUCETITAXI#2222"]) == 2
     # one self-reviving + one dead (clip frame 2)
-    assert clutch.count_downed(["REVIVING... A1 TROY#8442",
-                                "ELIMINATED C3 TYR#7407"]) == 2
+    assert clutch.count_downed(["REVIVING... A1 SOMEDUDE#3333",
+                                "ELIMINATED C3 LOOTGOBLIN#4444"]) == 2
     # mixed with a healthy teammate row
     assert clutch.count_downed(["DOWNED B2 SUPREMEPLAYS",
                                 "C3 LOOTGOBLIN"]) == 1
