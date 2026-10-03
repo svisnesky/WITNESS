@@ -192,3 +192,28 @@ def test_bonjour_announcement_stays_disclosed():
         return
     net = _network_section()
     assert "_witness._tcp" in net and "bonjour_discovery: false" in net
+
+
+def _other_peoples_data_section():
+    doc = _security_doc()
+    start = doc.index("## Other people's data")
+    end = doc.find("\n## ", start + 1)
+    return doc[start:] if end < 0 else doc[start:end]
+
+
+def test_watchlist_callout_traffic_is_disclosed():
+    """main.py's streamer alert voices "You just killed <name>!" through
+    announcer.ensure_callout, which goes to edge-tts like the Report does.
+    The doc once said only the WITNESS Report sent other players' names to
+    Microsoft, so both the network table and the privacy paragraph must name
+    the watchlist call-out while the code has one."""
+    src = _app_source().get("main.py", "")
+    if "streamer_watchlist" not in src or "You just killed" not in src:
+        return
+    net = _network_section()
+    row = [ln for ln in net.splitlines() if "speech.platform.bing.com" in ln]
+    assert row and "streamer_watchlist" in row[0], \
+        "speech.platform.bing.com row doesn't say watchlist names are sent"
+    other = _other_peoples_data_section()
+    assert "streamer_watchlist" in other and "WITNESS Report" in other
+    assert "tts_online: false" in other

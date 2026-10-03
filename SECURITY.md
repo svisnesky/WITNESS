@@ -34,7 +34,7 @@ hand, and `tests/test_security_claims.py` checks that it stays listed.
 | Destination | When | Sends |
 |---|---|---|
 | `api.github.com` / `raw.githubusercontent.com` | Every launch if `auto_update: true`, the dashboard's **Check for update** button, and `Update WITNESS.bat` | Nothing about you — an anonymous public read |
-| `speech.platform.bing.com` (Microsoft's neural voice, via the `edge-tts` package) | **On by default**, whenever a voiced reel or report is built: the announcer on match reels, the WITNESS Report and the session-reel voiceover, and voiced call-outs if you turn `announcer_medals` on. `tts_online: false` in `config.yaml` turns it off and uses the offline Windows voice instead | The narration text. It includes your `announcer_player_name` and, in the WITNESS Report, the gamertags of opponents read off the kill feed (with `track_names: true`) |
+| `speech.platform.bing.com` (Microsoft's neural voice, via the `edge-tts` package) | **On by default**, whenever a voiced reel or report is built: the announcer on match reels, the WITNESS Report and the session-reel voiceover, and voiced call-outs if you turn `announcer_medals` on. `tts_online: false` in `config.yaml` turns it off and uses the offline Windows voice instead | The narration text. It includes your `announcer_player_name`; in the WITNESS Report, the gamertags of opponents read off the kill feed (with `track_names: true`); and, with `announcer_medals` on, the name of a `streamer_watchlist` player in that call-out ("You just killed ...!") |
 | `api.elevenlabs.io` | Only if you add your own ElevenLabs key (`elevenlabs_key.txt`, or the `ELEVENLABS_API_KEY` environment variable). `tts_online` does not affect it | The same narration text, to synthesise |
 | `github.com` | The first time the OCR engine starts (and again if its model files are deleted): EasyOCR downloads its model files | Nothing about you — a file download |
 | `www.googleapis.com` / `oauth2.googleapis.com` / `accounts.google.com` (YouTube) | Only if you set up OAuth **and** turn on an upload toggle, or run `Check YouTube.bat` | The video you chose to upload |
@@ -167,10 +167,13 @@ anything.
 
 Name tracking (`track_names: true`) reads gamertags off the kill feed and writes
 them to `stats/encounters.csv` **on your machine**. That file is never uploaded.
-One thing does leave the PC: the spoken WITNESS Report can name an opponent or
-two ("One name keeps coming up — ..."), and with the neural voice on (the
-default) that narration text is sent to Microsoft's speech service to be voiced.
-Set `tts_online: false` to keep it, and your own announcer name, on this PC.
+Two things do leave the PC, both as text to be spoken. The WITNESS Report can
+name an opponent or two ("One name keeps coming up — ..."), and with
+`announcer_medals` on, killing or being downed by a player on your
+`streamer_watchlist` voices a call-out with their name in it ("You just killed
+...!"). With the neural voice on (the default), that narration text is sent to
+Microsoft's speech service to be voiced. Set `tts_online: false` to keep both,
+and your own announcer name, on this PC.
 
 If you enable YouTube uploads, other players' names may appear in the footage as
 they would in any clip you'd post manually.
