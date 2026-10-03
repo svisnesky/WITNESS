@@ -339,3 +339,62 @@ def test_the_gamertag_rule_is_key_absent_not_falsy():
     assert webserver._gamertag({"gamertag": ""}) == ""
     assert webserver._gamertag({"gamertag": " X "}) == "X"
     assert webserver._gamertag(None) is None
+
+
+def test_bonjour_gets_a_build_id_that_survives_the_txt_cap(tmp_path, monkeypatch):
+    """The iPad's PC picker shows the Bonjour TXT 'v' next to the address, and
+    discovery.advertise keeps only 12 characters of it. The full label,
+    '0.1.0 (1a2b3c4)', is 15, so the picker read '0.1.0 (1a2b3'. start_web
+    also publishes the bare sha as state.build_sha for main.py to advertise;
+    the guarded getattr below is that call, and it must also hold before
+    main.py passes it (an older main.py simply keeps sending state.version)."""
+    import zeroconf
+    import discovery
+    _fake_version(monkeypatch, "0.1.0")
+    (tmp_path / ".app_version").write_text("1a2b3c4d5e6f\n", encoding="utf-8")
+    st = _state()
+    srv = webserver.start_web(st, 0, str(tmp_path), "127.0.0.1")
+    try:
+        assert st.version == "0.1.0 (1a2b3c4)"      # page + /api/info: unchanged
+        assert st.build_sha == "1a2b3c4"
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+    props = {}
+
+    class FakeZC:
+        def register_service(self, info, ttl=None, allow_name_change=False):
+            props.update(info.properties)
+
+        def unregister_service(self, info):
+            pass
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(zeroconf, "Zeroconf", FakeZC)
+    adv = discovery.advertise(
+        8000, "192.168.1.50",
+        version=getattr(st, "build_sha", "") or getattr(st, "version", ""),
+        api=webserver.API_VERSION)
+    assert adv is not None
+    try:
+        assert props[b"v"] == b"1a2b3c4"
+    finally:
+        adv.stop()
+
+
+def test_build_sha_is_blank_without_an_app_version(tmp_path, monkeypatch):
+    """No sha yet: build_sha is '' so the guarded call falls back to the label
+    ('0.1.0 (dev)', which fits the TXT cap)."""
+    _fake_version(monkeypatch, "0.1.0")
+    st = _state()
+    assert st.build_sha == ""
+    srv = webserver.start_web(st, 0, str(tmp_path), "127.0.0.1")
+    try:
+        assert st.build_sha == ""
+        assert (getattr(st, "build_sha", "") or st.version) == "0.1.0 (dev)"
+    finally:
+        srv.shutdown()
+        srv.server_close()

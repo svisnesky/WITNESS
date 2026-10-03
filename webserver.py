@@ -186,7 +186,8 @@ class LiveState:
         self._replay_seq = 0
         self.tag_counts = {}  # kill-type breakdown for the dashboard tiles
         self.update_msg = ""  # auto-updater status, shown in the dashboard
-        self.version = ""     # current build (short sha), shown bottom-right
+        self.version = ""     # build label '0.1.0 (1a2b3c4)', bottom-right + /api/info
+        self.build_sha = ""   # bare short sha, for the Bonjour TXT (see read_build_sha)
         self.detect = {}      # live detection health (fps/device/vram), from perf monitor
         self.recap = {}       # end-of-session build status ({status, note, report})
         self.heat = {}        # live killstreak ({streak, label, color})
@@ -1332,6 +1333,7 @@ def start_web(state, port, base_dir, host="0.0.0.0"):
     imgs = {"/skull.png": "witness_logo.png",
             "/wordmark.png": "witness_wordmark.png"}
     state.version = build_label(base_dir)   # bottom-right corner + /api/info
+    state.build_sha = read_build_sha(base_dir)   # what main.py should advertise
 
     class Handler(BaseHTTPRequestHandler):
         # HTTP/1.1 with keep-alive: iOS Safari's video player streams via
@@ -1680,14 +1682,26 @@ def build_label(base_dir: str) -> str:
         ver = str(VERSION or "").strip()
     except Exception:            # version.py not there yet, or broken
         ver = ""
-    try:
-        with open(os.path.join(base_dir, ".app_version"), encoding="utf-8") as f:
-            sha = f.read().strip()[:7]
-    except Exception:
-        sha = ""
+    sha = read_build_sha(base_dir)
     if sha:
         return f"{ver} ({sha})" if ver else sha
     return f"{ver} (dev)" if ver else ""
+
+
+def read_build_sha(base_dir: str) -> str:
+    """The 7-character sha the updater writes to .app_version, or '' before
+    the first update.
+
+    start_web publishes it as state.build_sha for the Bonjour TXT 'v' that the
+    iPad's PC picker shows. discovery.advertise keeps only 12 characters there,
+    and the full label ('0.1.0 (1a2b3c4)') is 15, so advertising state.version
+    showed '0.1.0 (1a2b3'. main.py should pass
+    getattr(state, "build_sha", "") or state.version."""
+    try:
+        with open(os.path.join(base_dir, ".app_version"), encoding="utf-8") as f:
+            return f.read().strip()[:7]
+    except Exception:
+        return ""
 
 
 def _fill_lan_urls(state, port):
