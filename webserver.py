@@ -195,6 +195,8 @@ class LiveState:
         # First-class state rather than text inside the recap banner, so the iOS
         # app can raise a real alert (and clear it) instead of parsing a sentence.
         self.alerts = {}
+        # Archive 'Upload to YouTube' jobs: {'<session>/<rel>': {state, url, error}}
+        self.uploads = {}
         # Why the last START failed ('' = it didn't), and whether a START is in
         # progress. The desktop launcher (gui._WebSession) sets both as plain
         # attributes. Before these, an OBS mistake on START left the button on
@@ -814,6 +816,112 @@ def _archive_video_path(record_dir: str, sess: str, rel: str):
     return path
 
 
+YT_RECORD = "youtube_uploads.json"     # per session: {rel: watch url}
+
+
+def _yt_uploaded(sdir: str) -> dict:
+    """{rel: url} of this session's media already on YouTube."""
+    try:
+        with open(os.path.join(sdir, YT_RECORD), encoding="utf-8") as f:
+            d = json.load(f)
+        return d if isinstance(d, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _yt_remember(sdir: str, rel: str, url: str) -> None:
+    d = _yt_uploaded(sdir)
+    d[rel] = url
+    tmp = os.path.join(sdir, YT_RECORD + ".tmp")
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(d, f, indent=1)
+    os.replace(tmp, os.path.join(sdir, YT_RECORD))
+
+
+def _yt_kind(rel: str) -> str:
+    """What to call this video in its YouTube title ({kind} in the template)."""
+    base = os.path.basename(rel).lower()
+    if base == "session_reel.mp4":
+        return "Session reel"
+    if base.startswith("highlights"):
+        return "Session montage"
+    if "play_of_the_night" in base:
+        return "Play of the night"
+    if rel.startswith("shorts/"):
+        return "Short"
+    if base.startswith("match_"):
+        return "Match " + base.split("_", 1)[1].split(".")[0].split("_")[0]
+    return "Highlight"
+
+
+def _yt_status(state, sid: str, sdir: str) -> dict:
+    """{rel: {state, url, error}} for one session: finished uploads from the
+    session's record, plus anything uploading or failed this run."""
+    out = {rel: {"state": "done", "url": url, "error": ""}
+           for rel, url in _yt_uploaded(sdir).items()}
+    with state._lock:
+        for key, job in state.uploads.items():
+            js, _, rel = key.partition("/")
+            if js == sid and out.get(rel, {}).get("state") != "done":
+                out[rel] = dict(job)
+    return out
+
+
+def start_youtube_upload(state, base_dir: str, sid: str, rel: str) -> dict:
+    """Upload one Archive video to YouTube in the background.
+
+    A button, not automatic: Stan asked for it on 2026-10-03 ("could we add an
+    upload to youtube button?") so a night worth sharing can go up on demand,
+    for any session, not just via the end-of-session upload flags. Uses the
+    same OAuth setup, privacy setting and title template as those flags. A
+    finished upload is recorded in the session folder (youtube_uploads.json)
+    and the button turns into a link, so nothing is uploaded twice by
+    accident."""
+    rec = _record_dir(state)
+    path = _archive_video_path(rec, sid, rel)
+    if not path or path.lower().endswith((".png", ".mp3", ".wav")):
+        return {"ok": False, "error": "that video isn't in this session"}
+    sdir = os.path.dirname(path) if "/" not in rel else os.path.dirname(os.path.dirname(path))
+    done = _yt_uploaded(sdir).get(rel)
+    if done:
+        return {"ok": True, "state": "done", "url": done}
+    key = f"{sid}/{rel}"
+    with state._lock:
+        job = state.uploads.get(key)
+        if job and job.get("state") == "uploading":
+            return {"ok": True, "state": "uploading"}
+        state.uploads[key] = {"state": "uploading", "url": "", "error": ""}
+    cfg = dict(state._cfg or {})
+
+    def work():
+        why, url = [], None
+        try:
+            import main
+            import youtube_upload
+            try:
+                import datetime
+                day = datetime.datetime.strptime(sid[:10], "%Y-%m-%d").strftime("%b %d, %Y")
+            except ValueError:
+                day = None
+            title = main._yt_title(cfg, _yt_kind(rel), date=day)
+            desc = ("Recorded automatically with WITNESS, a free Marathon kill "
+                    "recorder: github.com/svisnesky/WITNESS")
+            url = youtube_upload.upload(path, title, desc, base_dir,
+                                        privacy=cfg.get("youtube_privacy", "unlisted"),
+                                        why=why)
+            if url:
+                _yt_remember(sdir, rel, url)
+        except Exception as e:
+            why.append(f"{type(e).__name__}: {e}")
+        with state._lock:
+            state.uploads[key] = ({"state": "done", "url": url, "error": ""} if url else
+                                  {"state": "failed", "url": "",
+                                   "error": (why[-1] if why else "upload failed")[:300]})
+
+    threading.Thread(target=work, daemon=True, name="youtube-upload").start()
+    return {"ok": True, "state": "uploading"}
+
+
 def _session_recaps(base_dir: str):
     """Per-match recap lines for every session, from squad_stats.csv (your
     rows) -> {session_id: [line, ...]}."""
@@ -953,11 +1061,22 @@ def _archive_page(base_dir: str, record_dir: str) -> str:
         rec_html = "".join(f'<div class="rc">{_esc(l)}</div>' for l in s["recaps"]) \
             or '<div class="rc none">no exfil stats recorded</div>'
         rows = ""
+        on_yt = _yt_uploaded(os.path.join(record_dir, "Marathon Sessions", s["id"])) \
+            if record_dir else {}
         for label, rel in s["media"]:
             u = f"/avideo?s={_uparse.quote(s['id'])}&f={_uparse.quote(rel)}"
+            if rel.lower().endswith((".mp3", ".wav")):
+                yt = ""                          # the spoken report isn't a video
+            elif on_yt.get(rel):
+                yt = (f'<a class="dl yt done" href="{_esc(on_yt[rel])}" '
+                      f'target="_blank" rel="noopener">on YouTube &#8599;</a>')
+            else:
+                yt = (f'<button class="mini yt" data-s="{_esc(s["id"])}" '
+                      f'data-f="{_esc(rel)}" onclick="ytUpload(this)">'
+                      f'Upload to YouTube</button>')
             rows += (f'<div class="mrow"><span class="play">&#9658;</span>'
                      f'<a class="ml" href="{u}" target="_blank">{_esc(label)}</a>'
-                     f'<a class="dl" href="{u}&dl=1">save</a></div>')
+                     f'<a class="dl" href="{u}&dl=1">save</a>{yt}</div>')
         if not rows:
             rows = '<div class="rc none">no reels/replays kept for this session</div>'
         report_html = (f'<h4>WITNESS Report</h4><pre class="report">{_esc(s["report"])}</pre>'
@@ -1510,6 +1629,15 @@ def start_web(state, port, base_dir, host="0.0.0.0"):
                 elif path == "/api/sessions":
                     self._send(json.dumps(_api_sessions(state)).encode(),
                                "application/json", cache=False)
+                elif path == "/api/uploads":
+                    q = _uparse.parse_qs(self.path.partition("?")[2])
+                    sid = (q.get("s") or [""])[0]
+                    sdir = (os.path.join(_record_dir(state), "Marathon Sessions", sid)
+                            if _SAFE_PART.match(sid or "") else "")
+                    out = (_yt_status(state, sid, sdir)
+                           if sdir and os.path.isdir(sdir) else {})
+                    self._send(json.dumps(out).encode(), "application/json",
+                               cache=False)
                 elif path == "/api/session":
                     q = _uparse.parse_qs(self.path.split("?", 1)[1]
                                          if "?" in self.path else "")
@@ -1538,7 +1666,10 @@ def start_web(state, port, base_dir, host="0.0.0.0"):
                         self.send_error(404)
                 elif path == "/archive":
                     self._send(apply_theme(
-                        _archive_page(base_dir, getattr(state, "record_dir", "")),
+                        # _record_dir, like every other route: before the first
+                        # START of this run state.record_dir is empty, and the
+                        # Archive showed "No sessions found yet".
+                        _archive_page(base_dir, _record_dir(state)),
                         state._cfg).encode("utf-8"),
                                "text/html; charset=utf-8", cache=False)
                 elif path == "/avideo":
@@ -1643,6 +1774,18 @@ def start_web(state, port, base_dir, host="0.0.0.0"):
                         result = benchmark.run_benchmark(state._cfg or {})
                     except Exception as e:
                         result = {"error": f"{type(e).__name__}: {e}"}
+                    self._send(json.dumps(result).encode(),
+                               "application/json", cache=False)
+                elif path == "/youtube":
+                    try:
+                        body = json.loads(self._body or b"{}")
+                    except ValueError:
+                        body = {}
+                    if not isinstance(body, dict):
+                        body = {}
+                    result = start_youtube_upload(state, base_dir,
+                                                  str(body.get("s") or ""),
+                                                  str(body.get("f") or ""))
                     self._send(json.dumps(result).encode(),
                                "application/json", cache=False)
                 elif path == "/export":
@@ -1819,6 +1962,9 @@ ARCHIVE_PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
     color:var(--text); background:var(--surface); border:1px solid var(--sborder);
     border-radius:8px; padding:7px 12px; cursor:pointer; }
   .mini:hover { border-color:var(--accent); color:var(--accent-light); }
+  .mini.yt { margin-left:auto; padding:5px 10px; }
+  .dl.yt.done { margin-left:auto; color:#ff8a7a; }
+  .yterr { color:var(--warn,#f5a623); max-width:40ch; }
   .mini:disabled { opacity:.65; cursor:default; border-color:var(--sborder);
     color:var(--muted); text-transform:none; letter-spacing:.02em; }
   .rb { margin-right:10px; }
@@ -1837,6 +1983,50 @@ ARCHIVE_PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
   // Stan asked "how would you refresh?" about this page once already — a build
   // that finishes silently and leaves stale content on screen is the same trap,
   // so this polls /status and reloads itself.
+  // Upload one video to YouTube. The upload runs on the PC in the background
+  // (a reel can take minutes); this polls its state and turns the button into a
+  // link when it's up, or shows why it failed.
+  function ytUpload(btn){
+    if (btn.disabled) return;
+    var s = btn.getAttribute('data-s'), f = btn.getAttribute('data-f');
+    btn.disabled = true; btn.textContent = 'Uploading…';
+    function show(st){
+      if (!st) return false;
+      if (st.state === 'done' && st.url){
+        var a = document.createElement('a');
+        a.className = 'dl yt done'; a.href = st.url; a.target = '_blank';
+        a.rel = 'noopener'; a.textContent = 'on YouTube ↗';
+        btn.replaceWith(a); return true;
+      }
+      if (st.state === 'failed'){
+        btn.disabled = false; btn.textContent = 'Retry upload';
+        btn.title = st.error || 'upload failed';
+        var why = btn.nextElementSibling;
+        if (!why || !why.classList.contains('yterr')){
+          why = document.createElement('span'); why.className = 'meta yterr';
+          btn.after(why);
+        }
+        why.textContent = st.error || 'upload failed';
+        return true;
+      }
+      return false;
+    }
+    fetch('/youtube', {method:'POST', headers:{'Content-Type':'application/json'},
+                       body: JSON.stringify({s: s, f: f})})
+      .then(function(r){ return r.json(); })
+      .then(function(j){
+        if (!j.ok){ show({state:'failed', error: j.error}); return; }
+        if (show(j)) return;
+        var poll = setInterval(function(){
+          fetch('/api/uploads?s=' + encodeURIComponent(s), {cache:'no-store'})
+            .then(function(r){ return r.json(); })
+            .then(function(all){ if (show(all[f])) clearInterval(poll); })
+            .catch(function(){});
+        }, 3000);
+      })
+      .catch(function(e){ show({state:'failed', error: String(e)}); });
+  }
+
   function rebuild(sess, btn){
     if (btn.disabled) return;
     var label = btn.textContent;

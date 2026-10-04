@@ -59,17 +59,25 @@ def _explain(err) -> str:
     return text
 
 
-def _get_credentials(base_dir: str):
+def _say(msg: str, why=None) -> None:
+    """Print a [youtube] line and, when the caller passed a list, record it.
+    The Archive's Upload button shows the reason; the console still gets it."""
+    print(f"  [youtube] {msg}")
+    if why is not None:
+        why.append(msg)
+
+
+def _get_credentials(base_dir: str, why=None):
     """Load cached creds or run the one-time browser consent. Returns creds
-    or None (with a printed reason)."""
+    or None (with a printed reason, also appended to `why` if given)."""
     try:
         from google.auth.transport.requests import Request
         from google.oauth2.credentials import Credentials
         from google_auth_oauthlib.flow import InstalledAppFlow
     except ImportError:
-        print("  [youtube] upload libraries not installed. Run: "
-              ".venv\\Scripts\\python -m pip install "
-              "google-api-python-client google-auth-oauthlib google-auth-httplib2")
+        _say("upload libraries not installed. Run: "
+             ".venv\\Scripts\\python -m pip install "
+             "google-api-python-client google-auth-oauthlib google-auth-httplib2", why)
         return None
 
     token_path = os.path.join(base_dir, TOKEN_FILE)
@@ -104,8 +112,8 @@ def _get_credentials(base_dir: str):
                       " warning you click past.)")
 
     if not os.path.exists(secret_path):
-        print(f"  [youtube] {CLIENT_SECRET} not found in the app folder — "
-              "skipping upload. See README 'YouTube auto-upload' to set it up.")
+        _say(f"{CLIENT_SECRET} not found in the app folder — YouTube isn't set "
+             "up yet. See YOUTUBE.md.", why)
         return None
     try:
         flow = InstalledAppFlow.from_client_secrets_file(secret_path, SCOPES)
@@ -114,17 +122,18 @@ def _get_credentials(base_dir: str):
             f.write(creds.to_json())
         return creds
     except Exception as e:
-        print(f"  [youtube] authorization failed: {e}")
+        _say(f"authorization failed: {e}", why)
         return None
 
 
 def upload(video_path: str, title: str, description: str, base_dir: str,
-           privacy: str = "unlisted") -> str | None:
-    """Upload video_path unlisted. Returns the watch URL or None."""
+           privacy: str = "unlisted", why=None) -> str | None:
+    """Upload video_path. Returns the watch URL or None. Pass a list as `why`
+    to get the reason for a None back (the Archive's Upload button does)."""
     if not os.path.exists(video_path):
-        print(f"  [youtube] video not found: {video_path}")
+        _say(f"video not found: {video_path}", why)
         return None
-    creds = _get_credentials(base_dir)
+    creds = _get_credentials(base_dir, why)
     if creds is None:
         return None
     try:
@@ -150,8 +159,8 @@ def upload(video_path: str, title: str, description: str, base_dir: str,
             url = f"https://youtu.be/{vid}"
             print(f"  [youtube] uploaded -> {url}")
             return url
-        print(f"  [youtube] upload returned no video id: {resp}")
+        _say(f"upload returned no video id: {resp}", why)
         return None
     except Exception as e:
-        print(f"  [youtube] upload failed: {_explain(e)}")
+        _say(f"upload failed: {_explain(e)}", why)
         return None
