@@ -1750,6 +1750,57 @@ def _advertise_for_ipad(cfg, host, port, st, webserver):
     threading.Thread(target=work, daemon=True).start()
 
 
+# --- the X button --------------------------------------------------------------
+# Stan, 2026-10-09: "can we make it so that if you hit X in witness it doesnt
+# actually close? i lose a whole nights worth of content because i mustve
+# accidentally closed it". Closing the window ends the process, and with it the
+# detection loop and any reel build in progress. So while something is at stake
+# the X asks first, with "No" (keep running) as the default button; when
+# nothing is running it closes like any window.
+
+_CLOSE_TEXT = {
+    "recording": ("WITNESS is recording a session.\n\n"
+                  "Closing now stops it: kills after this won't be clipped, and "
+                  "tonight's reels won't build until you open WITNESS again.\n\n"
+                  "Close WITNESS anyway?"),
+    "building": ("WITNESS is still building your reels.\n\n"
+                 "Closing now pauses that; it picks up again the next time you "
+                 "open WITNESS.\n\nClose WITNESS anyway?"),
+}
+
+
+def _busy_reason(running: bool, worker_alive: bool, recap_status: str = "") -> str:
+    """What closing the window would interrupt: 'recording', 'building' or ''."""
+    if running:
+        return "recording"
+    if worker_alive or recap_status == "building":
+        return "building"
+    return ""
+
+
+def _ask_close(reason: str, parent=None) -> bool:
+    """True = close. Asks only when `reason` says something is at stake, and
+    defaults to keeping WITNESS open, so a stray Enter can't cost a night."""
+    if not reason:
+        return True
+    text = _CLOSE_TEXT.get(reason, _CLOSE_TEXT["recording"])
+    if sys.platform == "win32":
+        try:
+            import ctypes
+            MB_YESNO, MB_ICONWARNING, MB_DEFBUTTON2 = 0x4, 0x30, 0x100
+            MB_TOPMOST, MB_SETFOREGROUND = 0x40000, 0x10000
+            flags = MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2 | MB_TOPMOST | MB_SETFOREGROUND
+            return ctypes.windll.user32.MessageBoxW(0, text, "Close WITNESS?", flags) == 6
+        except Exception:
+            pass
+    try:
+        from tkinter import messagebox
+        return bool(messagebox.askyesno("Close WITNESS?", text, icon="warning",
+                                        default="no", parent=parent))
+    except Exception:
+        return False                  # can't ask: keep running, never lose a night
+
+
 def _run_webview(boot=None):
     """Serve the dashboard and show it in a native window. run_live reuses the
     already-running server, so START/STOP inside the HTML drive the session.
@@ -1822,9 +1873,20 @@ def _run_webview(boot=None):
         # rendering), finish it now in the background — banner shows progress.
         threading.Thread(target=lambda: app.resume_unfinished_recap(st),
                          daemon=True).start()
-        webview.create_window("WITNESS", f"http://localhost:{port}",
-                              width=960, height=660, min_size=(820, 560),
-                              background_color="#0e0e16")
+        win = webview.create_window("WITNESS", f"http://localhost:{port}",
+                                    width=960, height=660, min_size=(820, 560),
+                                    background_color="#0e0e16")
+
+        def _on_closing():
+            # pywebview cancels the close when a closing handler returns False.
+            reason = _busy_reason(bool(getattr(st, "running", False)),
+                                  bool(sess.thread and sess.thread.is_alive()),
+                                  (getattr(st, "recap", None) or {}).get("status", ""))
+            return _ask_close(reason)
+        try:
+            win.events.closing += _on_closing
+        except Exception as e:        # very old pywebview: no closing event
+            _note(f"(close guard unavailable: {e})")
         ico = os.path.join(BASE, "witness.ico")
         try:
             webview.start(icon=ico)   # window / taskbar icon
@@ -1840,7 +1902,14 @@ def _run_tk_fallback(boot=None):
     r = tk.Tk()
     _claim_app_identity()
     r.report_callback_exception = _panel_callback_error(r)
-    ControlPanel(r, boot)
+    panel = ControlPanel(r, boot)
+
+    def _on_close():
+        reason = _busy_reason(bool(panel.running),
+                              bool(panel.worker and panel.worker.is_alive()))
+        if _ask_close(reason, parent=r):
+            r.destroy()
+    r.protocol("WM_DELETE_WINDOW", _on_close)
     r.mainloop()
 
 
